@@ -53,10 +53,10 @@ pub fn init(log_config: &LoggingConfig) -> Result<(), String> {
             .with_writer(non_blocking);
 
         tracing::subscriber::set_global_default(subscriber.with(layer))
-            .map_err(|e| format!("Failed to set global default subscriber: {}", e))?;
+            .map_err(|e| format!("Failed to set global default subscriber: {e}"))?;
     } else {
         tracing::subscriber::set_global_default(subscriber.with(fmt_layer))
-            .map_err(|e| format!("Failed to set global default subscriber: {}", e))?;
+            .map_err(|e| format!("Failed to set global default subscriber: {e}"))?;
     }
 
     Ok(())

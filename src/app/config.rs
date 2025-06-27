@@ -50,7 +50,7 @@ impl ConfigManager {
         let manager = CONFIG_MANAGER.get_or_init(|| match Self::new(Some(&config_path)) {
             Ok(manager) => manager,
             Err(e) => {
-                panic!("Failed to initialize configuration: {}", e);
+                panic!("Failed to initialize configuration: {e}");
             }
         });
 
@@ -95,8 +95,7 @@ impl ConfigManager {
                 if !parent.exists() {
                     fs::create_dir_all(parent).map_err(|e| {
                         ConfigError::WriteError(format!(
-                            "Failed to create configuration directory: {}",
-                            e
+                            "Failed to create configuration directory: {e}"
                         ))
                     })?;
                 }
@@ -107,7 +106,7 @@ impl ConfigManager {
                 .map_err(|e| ConfigError::ParseError(e.to_string()))?;
 
             fs::write(config_path, toml_str).map_err(|e| {
-                ConfigError::WriteError(format!("Failed to write configuration file: {}", e))
+                ConfigError::WriteError(format!("Failed to write configuration file: {e}"))
             })?;
         }
 

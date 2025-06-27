@@ -48,10 +48,9 @@ impl AyiouError {
                 tracing::error!("Serde JSON error: {}", err);
                 (StatusCode::BAD_REQUEST, "Invalid JSON format".to_string())
             }
-            Self::ValidationError(err) => (
-                StatusCode::BAD_REQUEST,
-                format!("Validation error: {}", err),
-            ),
+            Self::ValidationError(err) => {
+                (StatusCode::BAD_REQUEST, format!("Validation error: {err}"))
+            }
             Self::JwtError(err) => {
                 tracing::error!("JWT error: {}", err);
                 (
@@ -96,15 +95,15 @@ impl ConfigError {
         match self {
             Self::LoadError(err) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to load configuration: {}", err),
+                format!("Failed to load configuration: {err}"),
             ),
             Self::ParseError(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to parse configuration: {}", msg),
+                format!("Failed to parse configuration: {msg}"),
             ),
             Self::WriteError(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to write configuration: {}", msg),
+                format!("Failed to write configuration: {msg}"),
             ),
             Self::NotInitialized => (
                 StatusCode::INTERNAL_SERVER_ERROR,

@@ -1,14 +1,16 @@
-use std::{env, path::PathBuf, sync::Arc};
+use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use axum::{Extension, Router, http::HeaderName, middleware};
-use ayiou::{Context, app::config::ConfigManager};
+use ayiou::{
+    Context, app::config::ConfigManager, middleware::logger::logger,
+    utils::graceful_shutdown::shutdown_signal,
+};
 use tokio::net::TcpListener;
 use tower_http::{
     compression::CompressionLayer,
     cors::CorsLayer,
     propagate_header::PropagateHeaderLayer,
     request_id::{MakeRequestUuid, SetRequestIdLayer},
-    services::ServeDir,
 };
 
 #[tokio::main]
@@ -26,7 +28,7 @@ async fn main() -> Result<(), anyhow::Error> {
             // db: conn,
             config: config_manager.clone(),
         })))
-        .layer(middleware::from_fn(middleware_logger))
+        .layer(middleware::from_fn(logger))
         .layer(CompressionLayer::new())
         .layer(PropagateHeaderLayer::new(HeaderName::from_static(
             "x-request-id",
@@ -38,10 +40,16 @@ async fn main() -> Result<(), anyhow::Error> {
         .layer(CorsLayer::permissive());
 
     // Parse host:port string into SocketAddr
+    // let address = config_manager.socket_addr()?;
+    let addr = format!(
+        "{}:{}",
+        config_manager.read().server.host,
+        config_manager.read().server.port
+    )
+    .parse::<SocketAddr>()
+    .expect("Invalid server address configuration");
 
-    let address = config_manager.socket_addr()?;
-
-    let listener = TcpListener::bind(address).await?;
+    let listener = TcpListener::bind(addr).await?;
 
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(shutdown_signal())

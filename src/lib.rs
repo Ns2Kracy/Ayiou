@@ -4,6 +4,7 @@ use crate::app::config::ConfigManager;
 
 pub mod app;
 pub mod error;
+pub mod middleware;
 pub mod utils;
 
 #[derive(Clone)]
