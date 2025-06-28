@@ -67,8 +67,7 @@ impl IntoResponse for AyiouError {
     fn into_response(self) -> Response {
         let (status_code, message) = self.code();
         let body = Json(json!({
-            "code": status_code.as_u16(),
-            "message": message,
+            "error": message,
         }));
 
         (status_code, body).into_response()

@@ -7,6 +7,10 @@ pub mod config;
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
+    pub jwt: JwtConfig,
+    pub cache: CacheConfig,
+    pub app: ApplicationConfig,
+    pub logging: LoggingConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +61,55 @@ impl DatabaseConfig {
             "postgresql://{}:{}@{}:{}/{}",
             self.user, self.password, self.host, self.port, self.database
         )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JwtConfig {
+    pub secret: String,
+    pub expires_in_hours: u64,
+}
+
+impl Default for JwtConfig {
+    fn default() -> Self {
+        Self {
+            secret: "your-secret-key-change-in-production".to_string(),
+            expires_in_hours: 24,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheConfig {
+    pub ttl_seconds: u64,
+    pub max_entries: u64,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            ttl_seconds: 3600,
+            max_entries: 10000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplicationConfig {
+    pub default_domain: String,
+    pub short_code_length: usize,
+    pub max_custom_length: usize,
+    pub rate_limit_per_minute: u32,
+}
+
+impl Default for ApplicationConfig {
+    fn default() -> Self {
+        Self {
+            default_domain: "https://ayiou.link".to_string(),
+            short_code_length: 6,
+            max_custom_length: 20,
+            rate_limit_per_minute: 100,
+        }
     }
 }
 
