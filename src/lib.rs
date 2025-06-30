@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(unused)]
 
 use std::sync::Arc;
 

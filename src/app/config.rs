@@ -10,12 +10,12 @@ use tracing::info;
 use crate::{app::AppConfig, error::ConfigError};
 
 // Default configuration path
-const DEFAULT_CONFIG_PATH: &str = "ayiah.toml";
-const ENVIRONMENT_PREFIX: &str = "AYIAH";
+const DEFAULT_CONFIG_PATH: &str = "ayiou.toml";
+const ENVIRONMENT_PREFIX: &str = "AYIOU";
 
 // Global configuration instance with automatic initialization
 pub static CONFIG: Lazy<AppConfig> = Lazy::new(|| {
-    let config_path = env::var("AYIAH_CONFIG_PATH")
+    let config_path = env::var("AYIOU_CONFIG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_CONFIG_PATH));
 

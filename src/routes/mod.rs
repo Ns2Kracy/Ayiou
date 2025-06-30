@@ -33,5 +33,5 @@ fn analytics_routes() -> Router<Ctx> {
 }
 
 fn redirect_routes() -> Router<Ctx> {
-    Router::new().nest("/", Router::new())
+    Router::new()
 }
