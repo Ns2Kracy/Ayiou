@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use axum::Json;
+use mimalloc::MiMalloc;
 use moka::future::Cache;
 use sqlx::PgPool;
 
@@ -16,6 +17,9 @@ pub mod models;
 pub mod routes;
 pub mod services;
 pub mod utils;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 pub type ApiResult<T> = Result<Json<T>, AyiouError>;
 

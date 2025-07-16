@@ -57,6 +57,13 @@ regex = "1.10.0"
 base64 = "0.22.0"
 rand = "0.8.5"
 url = "2.5.0"
+mimalloc = "0.1.47"
+redis = { version = "0.26.1", features = ["tokio-comp", "connection-manager"] }
+deadpool-redis = "0.17.0"
+
+[[example]]
+name = "shortener_demo"
+path = "examples/shortener_demo.rs"
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
