@@ -1,4 +1,4 @@
-use rand::{Rng, random, thread_rng};
+use rand::{Rng, random};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -34,8 +34,8 @@ impl ShortCodeGenerator {
         let sequence = self.counter.fetch_add(1, Ordering::Relaxed) & 0x7FFF; // 15 bits counter
 
         // Generate 8 bits of randomness for better uniqueness
-        let mut rng = thread_rng();
-        let random_bits = rng.r#gen::<u8>() as u64; // 8 bits random
+        let mut rng = rand::rng();
+        let random_bits = rng.random::<u8>() as u64; // 8 bits random
 
         // Mix with stored random seed for additional entropy
         let mixed_random = (random_bits ^ (self.random_seed & 0xFF)) & 0xFF;
@@ -52,8 +52,8 @@ impl ShortCodeGenerator {
 
         // If generated code is too short, add some random characters
         while code.len() < target_length {
-            let mut rng = thread_rng();
-            let idx = rng.gen_range(0..BASE62_LEN);
+            let mut rng = rand::rng();
+            let idx = rng.random_range(0..BASE62_LEN);
             let random_char = BASE62_CHARS[idx] as char;
             code.push(random_char);
         }

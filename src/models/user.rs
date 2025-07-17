@@ -6,7 +6,6 @@ use once_cell::sync::Lazy;
 use regex;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use uuid::Uuid;
 use validator::Validate;
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -18,9 +17,6 @@ pub struct User {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub bio: Option<String>,
-    pub is_verified: bool,
-    pub is_premium: bool,
-    pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -34,7 +30,6 @@ pub struct UserLink {
     pub url: String,
     pub icon: Option<String>,
     pub position: i32,
-    pub is_active: bool,
     pub click_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -81,13 +76,10 @@ pub struct CreateUserLinkPayload {
 pub struct UpdateUserLinkPayload {
     #[validate(length(min = 1, max = 100, message = "Title must be 1-100 characters"))]
     pub title: Option<String>,
-
     #[validate(url(message = "Invalid URL format"))]
     pub url: Option<String>,
-
     pub icon: Option<String>,
     pub position: Option<i32>,
-    pub is_active: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,8 +90,6 @@ pub struct UserResponse {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub bio: Option<String>,
-    pub is_verified: bool,
-    pub is_premium: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -135,7 +125,6 @@ pub struct UserPageInfo {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub bio: Option<String>,
-    pub is_verified: bool,
 }
 
 // Validation regex constants

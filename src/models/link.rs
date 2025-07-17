@@ -13,7 +13,6 @@ pub struct Link {
     pub original_url: String,
     pub title: Option<String>,
     pub description: Option<String>,
-    pub is_active: bool,
     pub expires_at: Option<DateTime<Utc>>,
     pub click_count: i64,
     pub created_at: DateTime<Utc>,
@@ -49,7 +48,6 @@ pub struct UpdateLinkPayload {
     #[validate(length(max = 500, message = "Description too long"))]
     pub description: Option<String>,
 
-    pub is_active: Option<bool>,
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -61,7 +59,6 @@ pub struct LinkResponse {
     pub title: Option<String>,
     pub description: Option<String>,
     pub short_url: String,
-    pub is_active: bool,
     pub expires_at: Option<DateTime<Utc>>,
     pub click_count: i64,
     pub created_at: DateTime<Utc>,

@@ -71,13 +71,11 @@ impl LinkService {
 
     // Get link by short code
     pub async fn get_by_short_code(&self, short_code: &str) -> AppResult<Option<Link>> {
-        let link = sqlx::query_as::<_, Link>(
-            "SELECT * FROM links WHERE short_code = $1 AND is_active = true",
-        )
-        .bind(short_code)
-        .fetch_optional(&self.db)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to query short link: {}", e))?;
+        let link = sqlx::query_as::<_, Link>("SELECT * FROM links WHERE short_code = $1")
+            .bind(short_code)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to query short link: {}", e))?;
 
         // Check if expired
         if let Some(ref link) = link {
@@ -156,7 +154,7 @@ impl LinkService {
     // Delete link
     pub async fn delete_link(&self, link_id: Uuid, user_id: Option<Uuid>) -> AppResult<()> {
         let result = sqlx::query(
-            "UPDATE links SET is_active = false, updated_at = NOW() WHERE id = $1 AND ($2::uuid IS NULL OR user_id = $2)"
+            "UPDATE links SET updated_at = NOW() WHERE id = $1 AND ($2::uuid IS NULL OR user_id = $2)"
         )
         .bind(link_id)
         .bind(user_id)
@@ -189,7 +187,6 @@ impl LinkService {
             "click_count": link.click_count,
             "created_at": link.created_at,
             "last_updated": link.updated_at,
-            "is_active": link.is_active,
             "expires_at": link.expires_at
         }))
     }
@@ -277,7 +274,7 @@ impl LinkService {
     // Find existing link by URL
     async fn find_by_url(&self, url: &str, user_id: Option<Uuid>) -> AppResult<Option<Link>> {
         let link = sqlx::query_as::<_, Link>(
-            "SELECT * FROM links WHERE original_url = $1 AND ($2::uuid IS NULL OR user_id = $2) AND is_active = true LIMIT 1"
+            "SELECT * FROM links WHERE original_url = $1 AND ($2::uuid IS NULL OR user_id = $2) LIMIT 1"
         )
         .bind(url)
         .bind(user_id)
@@ -318,8 +315,7 @@ impl LinkService {
                 original_url = COALESCE($2, original_url),
                 title = COALESCE($3, title),
                 description = COALESCE($4, description),
-                is_active = COALESCE($5, is_active),
-                expires_at = COALESCE($6, expires_at),
+                expires_at = COALESCE($5, expires_at),
                 updated_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -329,7 +325,6 @@ impl LinkService {
         .bind(payload.original_url.as_deref())
         .bind(payload.title.as_deref())
         .bind(payload.description.as_deref())
-        .bind(payload.is_active)
         .bind(payload.expires_at)
         .fetch_one(&self.db)
         .await
@@ -351,7 +346,6 @@ impl LinkService {
                 self.base_url.trim_end_matches('/'),
                 link.short_code
             ),
-            is_active: link.is_active,
             expires_at: link.expires_at,
             click_count: link.click_count,
             created_at: link.created_at,
@@ -365,7 +359,7 @@ impl LinkService {
     // Get popular links
     pub async fn get_popular_links(&self, limit: i64) -> AppResult<Vec<LinkResponse>> {
         let links = sqlx::query_as::<_, Link>(
-            "SELECT * FROM links WHERE is_active = true ORDER BY click_count DESC LIMIT $1",
+            "SELECT * FROM links ORDER BY click_count DESC LIMIT $1",
         )
         .bind(limit)
         .fetch_all(&self.db)
@@ -381,7 +375,7 @@ impl LinkService {
     // Clean up expired links
     pub async fn cleanup_expired_links(&self) -> AppResult<u64> {
         let result = sqlx::query(
-            "UPDATE links SET is_active = false WHERE expires_at IS NOT NULL AND expires_at < NOW() AND is_active = true"
+            "UPDATE links SET expires_at = NOW() WHERE expires_at IS NOT NULL AND expires_at < NOW()"
         )
         .execute(&self.db)
         .await
@@ -393,13 +387,13 @@ impl LinkService {
     // Get system statistics
     pub async fn get_system_stats(&self) -> AppResult<serde_json::Value> {
         let total_links =
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM links WHERE is_active = true")
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM links")
                 .fetch_one(&self.db)
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to query total links count: {}", e))?;
 
         let total_clicks = sqlx::query_scalar::<_, i64>(
-            "SELECT COALESCE(SUM(click_count), 0) FROM links WHERE is_active = true",
+            "SELECT COALESCE(SUM(click_count), 0) FROM links",
         )
         .fetch_one(&self.db)
         .await

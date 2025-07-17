@@ -7,9 +7,6 @@ CREATE TABLE users (
     display_name VARCHAR(100),
     avatar_url TEXT,
     bio TEXT,
-    is_verified BOOLEAN DEFAULT FALSE,
-    is_premium BOOLEAN DEFAULT FALSE,
-    is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -22,7 +19,6 @@ CREATE TABLE user_links (
     url TEXT NOT NULL,
     icon VARCHAR(50),
     position INTEGER DEFAULT 0,
-    is_active BOOLEAN DEFAULT TRUE,
     click_count BIGINT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -36,7 +32,6 @@ CREATE TABLE links (
     original_url TEXT NOT NULL,
     title VARCHAR(200),
     description TEXT,
-    is_active BOOLEAN DEFAULT TRUE,
     expires_at TIMESTAMP WITH TIME ZONE,
     click_count BIGINT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

@@ -11,6 +11,9 @@ pub enum AyiouError {
     ConfigError(#[from] ConfigError),
 
     #[error("{0}")]
+    AuthError(#[from] AuthError),
+
+    #[error("{0}")]
     DbError(#[from] sqlx::Error),
 
     #[error("{0}")]
@@ -33,6 +36,7 @@ impl AyiouError {
     fn code(&self) -> (StatusCode, String) {
         match self {
             Self::ConfigError(err) => err.code(),
+            Self::AuthError(err) => err.code(),
             Self::DbError(err) => {
                 tracing::error!("Database error: {}", err);
                 (
@@ -119,5 +123,55 @@ impl ConfigError {
                 "Configuration not initialized".to_string(),
             ),
         }
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum AuthError {
+    #[error("Invalid token")]
+    InvalidToken,
+
+    #[error("Token creation failed")]
+    TokenCreation,
+
+    #[error("Missing authentication")]
+    MissingAuth,
+}
+
+impl AuthError {
+    fn code(&self) -> (StatusCode, String) {
+        match self {
+            Self::InvalidToken => (
+                StatusCode::UNAUTHORIZED,
+                "Invalid authentication token".to_string(),
+            ),
+            Self::TokenCreation => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create authentication token".to_string(),
+            ),
+            Self::MissingAuth => (
+                StatusCode::UNAUTHORIZED,
+                "Authentication required".to_string(),
+            ),
+        }
+    }
+}
+
+// Helper methods for creating common error types
+impl AyiouError {
+    pub fn conflict(msg: impl Into<String>) -> Self {
+        Self::AnyhowError(anyhow::anyhow!(msg.into()))
+    }
+
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self::AuthError(AuthError::InvalidToken)
+    }
+
+    pub fn internal(msg: impl Into<String>) -> Self {
+        Self::AnyhowError(anyhow::anyhow!(msg.into()))
+    }
+
+    pub fn bad_request(msg: impl Into<String>) -> Self {
+        Self::AnyhowError(anyhow::anyhow!(msg.into()))
     }
 }

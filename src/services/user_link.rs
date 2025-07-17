@@ -48,7 +48,7 @@ impl UserLinkService {
         let links = sqlx::query_as::<_, UserLink>(
             r#"
             SELECT * FROM user_links
-            WHERE user_id = $1 AND is_active = true
+            WHERE user_id = $1
             ORDER BY position ASC, created_at ASC
             "#,
         )
@@ -76,7 +76,6 @@ impl UserLinkService {
                 url = COALESCE($4, url),
                 icon = COALESCE($5, icon),
                 position = COALESCE($6, position),
-                is_active = COALESCE($7, is_active),
                 updated_at = NOW()
             WHERE id = $1 AND user_id = $2
             RETURNING *
@@ -88,7 +87,6 @@ impl UserLinkService {
         .bind(&payload.url)
         .bind(&payload.icon)
         .bind(payload.position)
-        .bind(payload.is_active)
         .fetch_one(&self.db)
         .await?;
 
@@ -123,7 +121,7 @@ impl UserLinkService {
             r#"
             SELECT username, display_name, avatar_url, bio, is_verified
             FROM users
-            WHERE username = $1 AND is_active = true
+            WHERE username = $1
             "#,
         )
         .bind(username)

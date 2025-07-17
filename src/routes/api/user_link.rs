@@ -15,7 +15,7 @@ use crate::{
     services::user_link::UserLinkService,
 };
 
-pub fn routes() -> Router<Ctx> {
+pub fn mount() -> Router<Ctx> {
     Router::new()
         .route("/", post(create_user_link).get(get_user_links))
         .route(
@@ -23,10 +23,6 @@ pub fn routes() -> Router<Ctx> {
             patch(update_user_link).delete(delete_user_link),
         )
         .route("/{link_id}/click", post(track_link_click))
-}
-
-pub fn public_routes() -> Router<Ctx> {
-    Router::new()
         .route("/{username}", get(get_user_page))
         .route(
             "/{username}/link/{link_id}/click",
