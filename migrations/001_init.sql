@@ -1,8 +1,6 @@
 -- User table
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id BIGSERIAL PRIMARY KEY,
     username VARCHAR(30) UNIQUE NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
@@ -16,10 +14,10 @@ CREATE TABLE users (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Simplified user link table - removed complex categorization and configuration
+-- Simplified user link table
 CREATE TABLE user_links (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     title VARCHAR(100) NOT NULL,
     url TEXT NOT NULL,
     icon VARCHAR(50),
@@ -32,8 +30,8 @@ CREATE TABLE user_links (
 
 -- Short link table (keeps original short link functionality)
 CREATE TABLE links (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
     short_code VARCHAR(20) UNIQUE NOT NULL,
     original_url TEXT NOT NULL,
     title VARCHAR(200),
@@ -47,8 +45,8 @@ CREATE TABLE links (
 
 -- Simplified click analytics table
 CREATE TABLE link_clicks (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    link_id UUID REFERENCES links(id) ON DELETE CASCADE,
+    id BIGSERIAL PRIMARY KEY,
+    link_id BIGINT REFERENCES links(id) ON DELETE CASCADE,
     ip_address INET,
     user_agent TEXT,
     clicked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -56,8 +54,8 @@ CREATE TABLE link_clicks (
 
 -- User link click records
 CREATE TABLE user_link_clicks (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    link_id UUID NOT NULL REFERENCES user_links(id) ON DELETE CASCADE,
+    id BIGSERIAL PRIMARY KEY,
+    link_id BIGINT NOT NULL REFERENCES user_links(id) ON DELETE CASCADE,
     ip_address INET,
     user_agent TEXT,
     clicked_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()

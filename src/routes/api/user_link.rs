@@ -5,7 +5,6 @@ use axum::{
     response::Json,
     routing::{delete, get, patch, post},
 };
-use uuid::Uuid;
 
 use crate::{
     ApiResult, Ctx,
@@ -18,10 +17,11 @@ use crate::{
 
 pub fn routes() -> Router<Ctx> {
     Router::new()
-        .route("/", post(create_user_link))
-        .route("/", get(get_user_links))
-        .route("/{link_id}", patch(update_user_link))
-        .route("/{link_id}", delete(delete_user_link))
+        .route("/", post(create_user_link).get(get_user_links))
+        .route(
+            "/{link_id}",
+            patch(update_user_link).delete(delete_user_link),
+        )
         .route("/{link_id}/click", post(track_link_click))
 }
 
@@ -41,7 +41,7 @@ async fn create_user_link(
     Json(payload): Json<CreateUserLinkPayload>,
 ) -> ApiResult<UserLinkResponse> {
     // Temporarily hardcoded user ID, should actually be extracted from JWT
-    let user_id = Uuid::new_v4();
+    let user_id = 1;
 
     let service = UserLinkService::new(ctx.db.clone());
     let link = service.create_user_link(user_id, payload).await?;
@@ -52,7 +52,7 @@ async fn create_user_link(
 // Get all user links
 async fn get_user_links(State(ctx): State<Ctx>) -> ApiResult<Vec<UserLinkResponse>> {
     // Temporarily hardcoded user ID
-    let user_id = Uuid::new_v4();
+    let user_id = 1;
 
     let service = UserLinkService::new(ctx.db.clone());
     let links = service.get_user_links(user_id).await?;
@@ -63,11 +63,11 @@ async fn get_user_links(State(ctx): State<Ctx>) -> ApiResult<Vec<UserLinkRespons
 // Update user link
 async fn update_user_link(
     State(ctx): State<Ctx>,
-    Path(link_id): Path<Uuid>,
+    Path(link_id): Path<i64>,
     Json(payload): Json<UpdateUserLinkPayload>,
 ) -> ApiResult<UserLinkResponse> {
     // Temporarily hardcoded user ID
-    let user_id = Uuid::new_v4();
+    let user_id = 1;
 
     let service = UserLinkService::new(ctx.db.clone());
     let link = service.update_user_link(user_id, link_id, payload).await?;
@@ -78,10 +78,10 @@ async fn update_user_link(
 // Delete user link
 async fn delete_user_link(
     State(ctx): State<Ctx>,
-    Path(link_id): Path<Uuid>,
+    Path(link_id): Path<i64>,
 ) -> Result<StatusCode, AyiouError> {
     // Temporarily hardcoded user ID
-    let user_id = Uuid::new_v4();
+    let user_id = 1;
 
     let service = UserLinkService::new(ctx.db.clone());
     service.delete_user_link(user_id, link_id).await?;
@@ -92,7 +92,7 @@ async fn delete_user_link(
 // Track link clicks (authenticated users)
 async fn track_link_click(
     State(ctx): State<Ctx>,
-    Path(link_id): Path<Uuid>,
+    Path(link_id): Path<i64>,
 ) -> Result<StatusCode, AyiouError> {
     let service = UserLinkService::new(ctx.db.clone());
     service.increment_click(link_id).await?;
@@ -118,7 +118,7 @@ async fn get_user_page(
 // Track public link clicks
 async fn track_public_link_click(
     State(ctx): State<Ctx>,
-    Path((username, link_id)): Path<(String, Uuid)>,
+    Path((username, link_id)): Path<(String, i64)>,
 ) -> Result<StatusCode, AyiouError> {
     let service = UserLinkService::new(ctx.db.clone());
 

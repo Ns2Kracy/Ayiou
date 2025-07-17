@@ -19,7 +19,7 @@ impl UserLinkService {
     // Create user link
     pub async fn create_user_link(
         &self,
-        user_id: Uuid,
+        user_id: i64,
         payload: CreateUserLinkPayload,
     ) -> Result<UserLinkResponse> {
         let next_position = self.get_next_position(user_id).await?;
@@ -44,7 +44,7 @@ impl UserLinkService {
     }
 
     // Get all user links
-    pub async fn get_user_links(&self, user_id: Uuid) -> Result<Vec<UserLinkResponse>> {
+    pub async fn get_user_links(&self, user_id: i64) -> Result<Vec<UserLinkResponse>> {
         let links = sqlx::query_as::<_, UserLink>(
             r#"
             SELECT * FROM user_links
@@ -65,8 +65,8 @@ impl UserLinkService {
     // Update user link
     pub async fn update_user_link(
         &self,
-        user_id: Uuid,
-        link_id: Uuid,
+        user_id: i64,
+        link_id: i64,
         payload: UpdateUserLinkPayload,
     ) -> Result<UserLinkResponse> {
         let link = sqlx::query_as::<_, UserLink>(
@@ -96,7 +96,7 @@ impl UserLinkService {
     }
 
     // Delete user link
-    pub async fn delete_user_link(&self, user_id: Uuid, link_id: Uuid) -> Result<()> {
+    pub async fn delete_user_link(&self, user_id: i64, link_id: i64) -> Result<()> {
         sqlx::query("DELETE FROM user_links WHERE id = $1 AND user_id = $2")
             .bind(link_id)
             .bind(user_id)
@@ -107,7 +107,7 @@ impl UserLinkService {
     }
 
     // Increment click count
-    pub async fn increment_click(&self, link_id: Uuid) -> Result<()> {
+    pub async fn increment_click(&self, link_id: i64) -> Result<()> {
         sqlx::query("UPDATE user_links SET click_count = click_count + 1 WHERE id = $1")
             .bind(link_id)
             .execute(&self.db)
@@ -136,7 +136,7 @@ impl UserLinkService {
         };
 
         // Get user ID for querying links
-        let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
+        let user_id: i64 = sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
             .bind(username)
             .fetch_one(&self.db)
             .await?;
@@ -160,7 +160,7 @@ impl UserLinkService {
     }
 
     // Helper method
-    async fn get_next_position(&self, user_id: Uuid) -> Result<i32> {
+    async fn get_next_position(&self, user_id: i64) -> Result<i32> {
         let max_position: Option<i32> =
             sqlx::query_scalar("SELECT MAX(position) FROM user_links WHERE user_id = $1")
                 .bind(user_id)

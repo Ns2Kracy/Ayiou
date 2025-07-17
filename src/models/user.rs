@@ -11,7 +11,7 @@ use validator::Validate;
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct User {
-    pub id: Uuid,
+    pub id: i64,
     pub username: String,
     pub email: String,
     pub password_hash: String,
@@ -28,8 +28,8 @@ pub struct User {
 // Simplified user link model - removed complex categorization system
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct UserLink {
-    pub id: Uuid,
-    pub user_id: Uuid,
+    pub id: i64,
+    pub user_id: i64,
     pub title: String,
     pub url: String,
     pub icon: Option<String>,
@@ -92,7 +92,7 @@ pub struct UpdateUserLinkPayload {
 
 #[derive(Debug, Serialize)]
 pub struct UserResponse {
-    pub id: Uuid,
+    pub id: i64,
     pub username: String,
     pub email: String,
     pub display_name: Option<String>,
@@ -112,7 +112,7 @@ pub struct AuthResponse {
 // Simplified user link response
 #[derive(Debug, Serialize)]
 pub struct UserLinkResponse {
-    pub id: Uuid,
+    pub id: i64,
     pub title: String,
     pub url: String,
     pub icon: Option<String>,
