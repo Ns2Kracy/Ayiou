@@ -215,17 +215,19 @@ impl LinkService {
     ) -> AppResult<String> {
         // If custom code is provided, validate first
         if let Some(code) = custom_code {
-            let shortener = self.shortener.lock().unwrap();
-            shortener.validate_custom_code(code).map_err(|e| match e {
-                ShortenerError::CodeTooShort => anyhow::anyhow!("Custom code too short"),
-                ShortenerError::CodeTooLong => anyhow::anyhow!("Custom code too long"),
-                ShortenerError::InvalidChar => {
-                    anyhow::anyhow!("Custom code contains invalid characters")
-                }
-                ShortenerError::UnsafeContent => {
-                    anyhow::anyhow!("Custom code contains inappropriate content")
-                }
-            })?;
+            {
+                let shortener = self.shortener.lock().unwrap();
+                shortener.validate_custom_code(code).map_err(|e| match e {
+                    ShortenerError::CodeTooShort => anyhow::anyhow!("Custom code too short"),
+                    ShortenerError::CodeTooLong => anyhow::anyhow!("Custom code too long"),
+                    ShortenerError::InvalidChar => {
+                        anyhow::anyhow!("Custom code contains invalid characters")
+                    }
+                    ShortenerError::UnsafeContent => {
+                        anyhow::anyhow!("Custom code contains inappropriate content")
+                    }
+                })?;
+            }
 
             // Check if already exists in database
             let existing = sqlx::query_scalar::<_, bool>(
@@ -246,9 +248,10 @@ impl LinkService {
         // Generate system code and check uniqueness
         let mut attempts = 0;
         while attempts < 100 {
-            let shortener = self.shortener.lock().unwrap();
-            let code = shortener.generate();
-            drop(shortener); // Release lock
+            let code = {
+                let shortener = self.shortener.lock().unwrap();
+                shortener.generate()
+            };
 
             // Check if already exists in database
             let existing = sqlx::query_scalar::<_, bool>(

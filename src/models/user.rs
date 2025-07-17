@@ -25,17 +25,17 @@ pub struct User {
     pub updated_at: DateTime<Utc>,
 }
 
+// Simplified user link model - removed complex categorization system
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct UserProfile {
+pub struct UserLink {
     pub id: Uuid,
     pub user_id: Uuid,
-    pub custom_domain: Option<String>,
-    pub theme: String,
-    pub background_color: Option<String>,
-    pub text_color: Option<String>,
-    pub accent_color: Option<String>,
-    pub background_image_url: Option<String>,
-    pub is_public: bool,
+    pub title: String,
+    pub url: String,
+    pub icon: Option<String>,
+    pub position: i32,
+    pub is_active: bool,
+    pub click_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -65,6 +65,31 @@ pub struct LoginPayload {
     pub password: String,
 }
 
+// Simplified user link payload
+#[derive(Debug, Validate, Deserialize)]
+pub struct CreateUserLinkPayload {
+    #[validate(length(min = 1, max = 100, message = "Title must be 1-100 characters"))]
+    pub title: String,
+
+    #[validate(url(message = "Invalid URL format"))]
+    pub url: String,
+
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Validate, Deserialize)]
+pub struct UpdateUserLinkPayload {
+    #[validate(length(min = 1, max = 100, message = "Title must be 1-100 characters"))]
+    pub title: Option<String>,
+
+    #[validate(url(message = "Invalid URL format"))]
+    pub url: Option<String>,
+
+    pub icon: Option<String>,
+    pub position: Option<i32>,
+    pub is_active: Option<bool>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct UserResponse {
     pub id: Uuid,
@@ -82,6 +107,35 @@ pub struct UserResponse {
 pub struct AuthResponse {
     pub token: String,
     pub user: UserResponse,
+}
+
+// Simplified user link response
+#[derive(Debug, Serialize)]
+pub struct UserLinkResponse {
+    pub id: Uuid,
+    pub title: String,
+    pub url: String,
+    pub icon: Option<String>,
+    pub position: i32,
+    pub click_count: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+// Simplified user page response
+#[derive(Debug, Serialize)]
+pub struct UserPageResponse {
+    pub user: UserPageInfo,
+    pub links: Vec<UserLinkResponse>,
+    pub total_clicks: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct UserPageInfo {
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub bio: Option<String>,
+    pub is_verified: bool,
 }
 
 // Validation regex constants

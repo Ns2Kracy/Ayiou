@@ -24,6 +24,9 @@ pub enum AyiouError {
 
     #[error("{0}")]
     JwtError(#[from] jsonwebtoken::errors::Error),
+
+    #[error("{0}")]
+    AnyhowError(#[from] anyhow::Error),
 }
 
 impl AyiouError {
@@ -56,6 +59,13 @@ impl AyiouError {
                 (
                     StatusCode::UNAUTHORIZED,
                     "Authentication token error".to_string(),
+                )
+            }
+            Self::AnyhowError(err) => {
+                tracing::error!("Service error: {}", err);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "An internal error occurred".to_string(),
                 )
             }
         }

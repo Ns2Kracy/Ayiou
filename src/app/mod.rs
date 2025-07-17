@@ -105,7 +105,7 @@ pub struct ApplicationConfig {
 impl Default for ApplicationConfig {
     fn default() -> Self {
         Self {
-            default_domain: "https://ayiou.link".to_string(),
+            default_domain: "https://ayiou.com".to_string(),
             short_code_length: 6,
             max_custom_length: 20,
             rate_limit_per_minute: 100,

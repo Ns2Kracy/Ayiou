@@ -216,7 +216,7 @@ static GLOBAL_GENERATOR: OnceLock<ShortCodeGenerator> = OnceLock::new();
 
 /// Get global generator instance
 pub fn global_generator() -> &'static ShortCodeGenerator {
-    GLOBAL_GENERATOR.get_or_init(|| ShortCodeGenerator::new())
+    GLOBAL_GENERATOR.get_or_init(ShortCodeGenerator::new)
 }
 
 #[cfg(test)]
