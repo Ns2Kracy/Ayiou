@@ -20,16 +20,18 @@ pub fn routes() -> Router<Ctx> {
     Router::new()
         .route("/", post(create_user_link))
         .route("/", get(get_user_links))
-        .route("/:link_id", patch(update_user_link))
-        .route("/:link_id", delete(delete_user_link))
-        .route("/:link_id/click", post(track_link_click))
+        .route("/{link_id}", patch(update_user_link))
+        .route("/{link_id}", delete(delete_user_link))
+        .route("/{link_id}/click", post(track_link_click))
 }
 
 pub fn public_routes() -> Router<Ctx> {
-    Router::new().route("/:username", get(get_user_page)).route(
-        "/:username/link/:link_id/click",
-        post(track_public_link_click),
-    )
+    Router::new()
+        .route("/{username}", get(get_user_page))
+        .route(
+            "/{username}/link/{link_id}/click",
+            post(track_public_link_click),
+        )
 }
 
 // Create user link
