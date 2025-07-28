@@ -1,80 +1,53 @@
+[workspace]
+
 [package]
 name = "ayiou"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+publish = false
+default-run = "ayiou-cli"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[workspace.dependencies]
+loco-rs = { version = "0.16" }
 
 [dependencies]
-tokio = { version = "1.46.1", features = ["full"] }
-axum = { version = "0.8.4", features = ["multipart"] }
-axum-extra = { version = "0.10.1", features = [
-    "cookie",
-    "multipart",
-    "typed-header",
-    "typed-routing",
+loco-rs = { workspace = true  }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+tokio = { version = "1.45", default-features = false, features = [
+  "rt-multi-thread",
 ] }
-hyper = "1.6.0"
-tower = { version = "0.5.2", features = ["full"] }
-tower-http = { version = "0.6.6", features = ["full"] }
-tracing = "0.1.41"
-tracing-appender = "0.2.3"
-tracing-subscriber = { version = "0.3.19", features = [
-    "env-filter",
-    "json",
-    "chrono",
+async-trait = { version = "0.1" }
+axum = { version = "0.8" }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+regex = { version = "1.11" }
+migration = { path = "migration" }
+sea-orm = { version = "1.1", features = [
+  "sqlx-sqlite",
+  "sqlx-postgres",
+  "runtime-tokio-rustls",
+  "macros",
 ] }
-rust-embed = "8.7.2"
-anyhow = "1.0.98"
-thiserror = "2.0.12"
-bcrypt = "0.17.0"
-data-encoding = "2.9.0"
-jsonwebtoken = "9.3.1"
-ring = "0.17.14"
-once_cell = "1.21.3"
-moka = { version = "0.12.10", features = ["sync", "future"] }
-chrono = { version = "0.4.41", features = ["serde"] }
-uuid = { version = "1.17.0", features = ["v4", "serde"] }
-sqlx = { version = "0.8.6", features = [
-    "runtime-tokio",
-    "tls-rustls",
-    "postgres",
-    "uuid",
-    "chrono",
-] }
-config = "0.15.13"
-toml = "0.9.2"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-validator = { version = "0.20.0", features = ["derive"] }
-regex = "1.11.1"
-base64 = "0.22.1"
-rand = "0.9.1"
-url = "2.5.4"
+chrono = { version = "0.4" }
+validator = { version = "0.20" }
+uuid = { version = "1.6", features = ["v4"] }
+axum-extra = { version = "0.10", features = ["form"] }
 mimalloc = "0.1.47"
 
-[[example]]
-name = "shortener_demo"
-path = "examples/shortener_demo.rs"
+[[bin]]
+name = "ayiou-cli"
+path = "src/bin/main.rs"
+required-features = []
+[[bin]]
+name = "tool"
+path = "src/bin/tool.rs"
+required-features = []
 
-[profile.dev.package.sqlx-macros]
-opt-level = 3
-
-[profile.dev]
-opt-level = 1
-debug = true
-rpath = false
-lto = false
-debug-assertions = true
-codegen-units = 256
-incremental = true
-panic = "unwind"
-
-[profile.release]
-opt-level = 3
-debug = false
-rpath = false
-lto = "fat"
-codegen-units = 1
-debug-assertions = false
-incremental = false
-panic = "abort"
-strip = true
+[dev-dependencies]
+loco-rs = { workspace = true, features = ["testing"] }
+serial_test = { version = "3.1.1" }
+rstest = { version = "0.25" }
+insta = { version = "1.34", features = ["redactions", "yaml", "filters"] }
