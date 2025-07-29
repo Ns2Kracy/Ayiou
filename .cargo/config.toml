@@ -1,6 +1,5 @@
 [alias]
 loco = "run --"
-loco-tool = "run --bin tool --"
 
 
 # https://github.com/rust-lang/rust/issues/141626
