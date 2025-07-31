@@ -24,7 +24,12 @@ server:
   host: http://localhost
   # Out of the box middleware configuration. to disable middleware you can changed the `enable` field to `false` of comment the middleware block
   middlewares:
-
+    fallback:
+      enable: false
+    compression:
+      enable: true
+    cors:
+      enable: true
 # Initializers Configuration
 # initializers:
 #  oauth2:
@@ -35,17 +40,17 @@ server:
 # Database Configuration
 database:
   # Database connection URI
-  uri: {{ get_env(name="DATABASE_URL", default="postgres://postgres:postgres@127.0.0.1:5432/postgres_dev") }}
+  uri: "postgres://postgres:postgres@127.0.0.1:5432/postgres_dev"
   # When enabled, the sql query will be logged.
   enable_logging: true
   # Set the timeout duration when acquiring a connection.
-  connect_timeout: {{ get_env(name="DB_CONNECT_TIMEOUT", default="500") }}
+  connect_timeout: 500
   # Set the idle duration before closing a connection.
-  idle_timeout: {{ get_env(name="DB_IDLE_TIMEOUT", default="500") }}
+  idle_timeout: 500
   # Minimum number of connections for a pool.
-  min_connections: {{ get_env(name="DB_MIN_CONNECTIONS", default="1") }}
+  min_connections: 1
   # Maximum number of connections for a pool.
-  max_connections: {{ get_env(name="DB_MAX_CONNECTIONS", default="1") }}
+  max_connections: 1
   # Run migration up when application loaded
   auto_migrate: true
   # Truncate database when application loaded. This is a dangerous operation, make sure that you using this flag only on dev environments or test mode

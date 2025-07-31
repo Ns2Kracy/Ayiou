@@ -41,6 +41,10 @@ mimalloc = "0.1.47"
 name = "ayiou-cli"
 path = "src/bin/main.rs"
 required-features = []
+[[bin]]
+name = "tool"
+path = "src/bin/tool.rs"
+required-features = []
 
 [dev-dependencies]
 loco-rs = { workspace = true, features = ["testing"] }
