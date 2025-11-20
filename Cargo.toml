@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["ayiou", "ayiou-macros"]
+members = ["ayiou", "ayiou-adapter", "ayiou-core", "ayiou-driver", "ayiou-macros"]
 
 
 [workspace.dependencies]

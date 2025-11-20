@@ -27,6 +27,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ayiou-adapter"
+version = "0.1.0"
+
+[[package]]
+name = "ayiou-core"
+version = "0.1.0"
+
+[[package]]
+name = "ayiou-driver"
+version = "0.1.0"
+
+[[package]]
 name = "ayiou-macros"
 version = "0.1.0"
 dependencies = [
