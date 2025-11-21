@@ -1,2 +1,2 @@
 pub mod console;
-pub mod onebot;
+pub mod onebot_v11;

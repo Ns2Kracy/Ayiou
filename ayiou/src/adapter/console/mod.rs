@@ -1,12 +1,16 @@
-use crate::core::action::{Bot, TargetType};
-use crate::core::event::{BaseEvent, EventKind};
-use crate::core::{Adapter, Context, Driver, DriverEvent, Event};
-use crate::driver::ConsoleDriver;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
+
+use crate::{
+    core::{
+        Adapter, Bot, Context, Driver, DriverEvent, Event, TargetType,
+        event::{BaseEvent, EventKind},
+    },
+    driver::ConsoleDriver,
+};
 
 #[derive(Debug, Clone)]
 pub struct ConsoleBot {

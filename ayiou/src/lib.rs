@@ -2,6 +2,7 @@
 //!
 //! An extensible, developer-friendly chat bot framework.
 
+#[forbid(unsafe_code)]
 pub mod adapter;
 pub mod app;
 pub mod core;
