@@ -1,11 +1,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use std::fmt::Debug;
 
 /// Represents a Bot instance that can perform actions.
 /// Adapters implement this trait.
 #[async_trait]
-pub trait Bot: Send + Sync + Debug {
+pub trait Bot: Send + Sync {
     /// Get the self ID of the bot.
     fn self_id(&self) -> &str;
 

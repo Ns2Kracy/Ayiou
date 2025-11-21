@@ -1,31 +1,26 @@
-use crate::core::driver::{Driver, DriverEvent};
+use crate::core::{Adapter, Driver};
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::{
-    io::{self, AsyncBufReadExt},
-    sync::mpsc,
-};
+use std::sync::Arc;
+use tokio::io::{self, AsyncBufReadExt};
+use tracing::warn;
 
 #[derive(Debug)]
 pub struct ConsoleDriver;
 
 #[async_trait]
 impl Driver for ConsoleDriver {
-    async fn start(&self, tx: mpsc::Sender<DriverEvent>) -> Result<()> {
+    async fn run(&self, adapter: Arc<dyn Adapter>) -> Result<()> {
         println!("Console Driver Started. Type something...");
         let stdin = io::stdin();
         let mut reader = io::BufReader::new(stdin).lines();
-
-        // In a real driver, we might want to keep a handle to tx or store it in the struct
-        // if we need to send things asynchronously from other places.
-        // But here, we just loop stdin.
 
         while let Ok(Some(line)) = reader.next_line().await {
             if line.trim().is_empty() {
                 continue;
             }
-            if tx.send(DriverEvent::Message(line)).await.is_err() {
-                break;
+            if let Err(e) = adapter.handle(line).await {
+                warn!("Adapter failed to handle event: {}", e);
             }
         }
         Ok(())

@@ -9,6 +9,6 @@ pub mod storage;
 pub use action::{Bot, TargetType};
 pub use adapter::Adapter;
 pub use context::Context;
-pub use driver::{Driver, DriverEvent};
+pub use driver::Driver;
 pub use event::Event;
 pub use plugin::Plugin;

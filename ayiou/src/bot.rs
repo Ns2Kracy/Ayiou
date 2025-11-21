@@ -5,20 +5,20 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-pub struct App {
+pub struct AyiouBot {
     context: Context,
     plugins: Vec<Box<dyn Plugin>>,
     sender: mpsc::Sender<Arc<dyn Event>>,
     receiver: Option<mpsc::Receiver<Arc<dyn Event>>>,
 }
 
-impl Default for App {
+impl Default for AyiouBot {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl App {
+impl AyiouBot {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel(100);
         let context = Context::new();

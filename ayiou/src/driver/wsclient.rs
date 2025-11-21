@@ -1,4 +1,4 @@
-use crate::core::driver::{Driver, DriverEvent};
+use crate::core::{Adapter, Driver};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -31,7 +31,7 @@ impl WSClientDriver {
 
 #[async_trait]
 impl Driver for WSClientDriver {
-    async fn start(&self, event_tx: mpsc::Sender<DriverEvent>) -> Result<()> {
+    async fn run(&self, adapter: Arc<dyn Adapter>) -> Result<()> {
         let url = Url::parse(&self.url).context("Invalid WebSocket URL")?;
 
         // Take the outbound receiver once
@@ -42,19 +42,11 @@ impl Driver for WSClientDriver {
             .take()
             .context("Driver already started")?;
 
-        info!("WSClientDriver started for {}", url);
-
         loop {
             info!("Connecting to WebSocket: {}", url);
             match connect_async(url.as_str()).await {
                 Ok((ws_stream, _)) => {
-                    info!("WebSocket connected");
-                    if let Err(e) = event_tx.send(DriverEvent::Connect).await {
-                        warn!("Failed to report connect event: {}", e);
-                        // If event_tx is closed, the app is probably dead.
-                        break;
-                    }
-
+                    info!("WebSocket connected to {}", &self.url);
                     let (mut write, mut read) = ws_stream.split();
 
                     // Inner loop: Handle traffic
@@ -79,9 +71,10 @@ impl Driver for WSClientDriver {
                             maybe_ws_msg = read.next() => {
                                 match maybe_ws_msg {
                                     Some(Ok(Message::Text(text))) => {
-                                        if event_tx.send(DriverEvent::Message(text.to_string())).await.is_err() {
-                                            warn!("Event receiver closed, stopping driver.");
-                                            return Ok(());
+                                        // Directly call the adapter to handle the raw event
+                                        if let Err(e) = adapter.handle(text.to_string()).await {
+                                            warn!("Adapter failed to handle event: {}", e);
+                                            // We don't stop the driver here, as the adapter might recover.
                                         }
                                     }
                                     Some(Ok(Message::Binary(_))) => {
@@ -105,9 +98,7 @@ impl Driver for WSClientDriver {
                             }
                         }
                     }
-
-                    // Connection lost
-                    let _ = event_tx.send(DriverEvent::Disconnect).await;
+                    info!("WebSocket disconnected from {}", &self.url);
                 }
                 Err(e) => {
                     error!("Failed to connect to {}: {}", url, e);
@@ -118,8 +109,6 @@ impl Driver for WSClientDriver {
             warn!("Reconnecting in 5 seconds...");
             sleep(Duration::from_secs(5)).await;
         }
-
-        Ok(())
     }
 
     async fn send(&self, content: String) -> Result<()> {
