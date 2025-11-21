@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ayiou-macros = { path = "../ayiou-macros" }
+
 anyhow = "1.0.100"
 async-trait = "0.1.89"
-ayiou-macros = { path = "../ayiou-macros" }
 dashmap = "6.1.0"
 futures = "0.3.31"
 futures-util = "0.3.31"
