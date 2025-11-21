@@ -3,14 +3,10 @@ name = "ayiou-macros"
 version = "0.1.0"
 edition = "2024"
 
-
 [lib]
 proc-macro = true
 
-
 [dependencies]
-darling = "0.21.3"
-hex = "0.4.3"
-proc-macro2 = "1.0.103"
-quote = "1.0.42"
-syn = "2.0.110"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+quote = "1.0"
+proc-macro2 = "1.0"
