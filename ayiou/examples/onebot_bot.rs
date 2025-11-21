@@ -23,13 +23,10 @@ async fn ping_handler(ctx: Context, event: Arc<dyn Event>) {
     // Only handle messages
     let Some(msg) = event.message() else { return };
 
+    let user_id = event.user_id().unwrap_or("?");
+
     // Log all messages
-    info!(
-        "[{}] {}: {}",
-        event.platform(),
-        event.user_id().unwrap_or("?"),
-        msg
-    );
+    info!("[{}] {}: {}", event.platform(), user_id, msg);
 
     if msg.trim() == "ping"
         && let Some(bot) = ctx.get_any_bot()
@@ -38,14 +35,14 @@ async fn ping_handler(ctx: Context, event: Arc<dyn Event>) {
         // Note: OneBot requires a target_id (group_id or user_id)
         // For simplicity, we try to reply to where it came from.
 
-        let target_id = event.group_id().or(event.user_id()).unwrap_or("0");
+        let target_id = event.group_id().unwrap_or("0");
         let target_type = if event.group_id().is_some() {
             TargetType::Group
         } else {
             TargetType::Private
         };
 
-        info!("Replying PONG to {}", target_id);
+        info!("Replying PONG to [{}]{}", target_id, user_id);
 
         let _ = bot.send_message(target_id, target_type, "pong").await;
     }
