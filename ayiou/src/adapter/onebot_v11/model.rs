@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(tag = "post_type")]
 pub enum OneBotEvent {
@@ -14,6 +15,7 @@ pub enum OneBotEvent {
     Request(Value),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct MetaEvent {
     pub meta_event_type: String,
@@ -21,6 +23,7 @@ pub struct MetaEvent {
     // ... heartbeat fields
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct MessageEvent {
     pub message_type: String, // private, group

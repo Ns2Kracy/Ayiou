@@ -1,4 +1,4 @@
-use crate::core::{Adapter, Driver};
+use crate::core::{adapter::Adapter, driver::Driver};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -6,12 +6,33 @@ use tokio::io::{self, AsyncBufReadExt};
 use tracing::warn;
 
 #[derive(Debug)]
-pub struct ConsoleDriver;
+pub struct ConsoleDriver {
+    message: String,
+    output_format: String,
+}
+
+impl ConsoleDriver {
+    pub fn new(message: impl Into<String>, output_format: Option<impl Into<String>>) -> Self {
+        Self {
+            message: message.into(),
+            output_format: output_format.map_or_else(
+                || "\x1b[36m[ConsoleDriver Output]\x1b[0m {}".to_string(),
+                |s| s.into(),
+            ),
+        }
+    }
+}
+
+impl Default for ConsoleDriver {
+    fn default() -> Self {
+        Self::new("Console Driver Started. Type something...", None::<String>)
+    }
+}
 
 #[async_trait]
 impl Driver for ConsoleDriver {
     async fn run(&self, adapter: Arc<dyn Adapter>) -> Result<()> {
-        println!("Console Driver Started. Type something...");
+        println!("{}", self.message);
         let stdin = io::stdin();
         let mut reader = io::BufReader::new(stdin).lines();
 
@@ -27,7 +48,7 @@ impl Driver for ConsoleDriver {
     }
 
     async fn send(&self, content: String) -> Result<()> {
-        println!("\x1b[36m[ConsoleDriver Output]\x1b[0m {}", content);
+        println!("{}", self.output_format.replace("{}", &content));
         Ok(())
     }
 }

@@ -1,4 +1,4 @@
-use crate::core::Adapter;
+use crate::core::adapter::Adapter;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;

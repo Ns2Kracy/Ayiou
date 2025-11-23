@@ -1,23 +1,28 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::core::{
-    Adapter, Context, Event,
-    action::TargetType,
+    Context, Event, TargetType,
+    adapter::Adapter,
+    driver::Driver,
     event::{BaseEvent, EventKind},
 };
 
 #[derive(Clone)]
 pub struct ConsoleAdapter {
-    ctx: Option<Context>,
+    ctx: Context,
+    driver: Arc<Mutex<Option<Arc<dyn Driver>>>>,
 }
 
 impl ConsoleAdapter {
     pub fn new(ctx: Context) -> Self {
-        Self { ctx: Some(ctx) }
+        Self {
+            ctx,
+            driver: Arc::new(Mutex::new(None)),
+        }
     }
 }
 
@@ -27,9 +32,14 @@ impl Adapter for ConsoleAdapter {
         "console"
     }
 
+    fn set_driver(&mut self, driver: Arc<dyn Driver>) {
+        let mut d = self.driver.lock().unwrap();
+        *d = Some(driver);
+    }
+
     async fn handle(&self, raw_event: String) -> Result<()> {
-        let ctx = self.ctx.as_ref().expect("Adapter not bound to a context!");
-        let sender = ctx
+        let sender = self
+            .ctx
             .get::<mpsc::Sender<Arc<dyn Event>>>()
             .expect("Event sender not in context!");
 
@@ -56,5 +66,19 @@ impl Adapter for ConsoleAdapter {
     ) -> Result<String> {
         // For the console, we can just format the output nicely.
         Ok(format!("[Reply -> {}]: {}", target_id, content))
+    }
+
+    async fn send_message(
+        &self,
+        target_id: &str,
+        target_type: TargetType,
+        content: &str,
+    ) -> Result<String> {
+        let driver = { self.driver.lock().unwrap().clone() };
+        if let Some(driver) = driver {
+            let content = self.serialize(target_id, target_type, content)?;
+            driver.send(content).await?;
+        }
+        Ok("".to_string())
     }
 }

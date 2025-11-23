@@ -1,4 +1,4 @@
-use crate::core::action::Bot;
+use crate::core::adapter::Adapter;
 use dashmap::DashMap;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
@@ -9,31 +9,31 @@ use std::sync::Arc;
 pub struct Context {
     // Stores arbitrary data by TypeId. Thread-safe.
     pub storage: Arc<DashMap<TypeId, Box<dyn Any + Send + Sync>>>,
-    // Stores active bots by their self_id
-    pub bots: Arc<DashMap<String, Arc<dyn Bot>>>,
+    // Stores active adapters by their name
+    pub adapters: Arc<DashMap<String, Arc<dyn Adapter>>>,
 }
 
 impl Context {
     pub fn new() -> Self {
         Self {
             storage: Arc::new(DashMap::new()),
-            bots: Arc::new(DashMap::new()),
+            adapters: Arc::new(DashMap::new()),
         }
     }
 
-    /// Register a bot instance
-    pub fn register_bot(&self, bot: Arc<dyn Bot>) {
-        self.bots.insert(bot.self_id().to_string(), bot);
+    /// Register a adapter instance
+    pub fn register_adapter(&self, adapter: Arc<dyn Adapter>) {
+        self.adapters.insert(adapter.name().to_string(), adapter);
     }
 
-    /// Get a bot by ID
-    pub fn get_bot(&self, id: &str) -> Option<Arc<dyn Bot>> {
-        self.bots.get(id).map(|r| r.value().clone())
+    /// Get a adapter by ID
+    pub fn get_adapter(&self, name: &str) -> Option<Arc<dyn Adapter>> {
+        self.adapters.get(name).map(|r| r.value().clone())
     }
 
-    /// Get any bot (useful if there's only one)
-    pub fn get_any_bot(&self) -> Option<Arc<dyn Bot>> {
-        self.bots.iter().next().map(|r| r.value().clone())
+    /// Get any adapter (useful if there's only one)
+    pub fn get_any_adapter(&self) -> Option<Arc<dyn Adapter>> {
+        self.adapters.iter().next().map(|r| r.value().clone())
     }
 
     /// Insert a dependency or state into the context.
