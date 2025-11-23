@@ -1,6 +1,7 @@
-use crate::core::context::Context;
+use crate::core::Driver;
 use crate::core::event::Event;
 use crate::core::plugin::Plugin;
+use crate::core::{Adapter, context::Context};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -8,6 +9,8 @@ use tracing::{error, info};
 pub struct AyiouBot {
     context: Context,
     plugins: Vec<Box<dyn Plugin>>,
+    adapter: Vec<Arc<dyn Adapter>>,
+    driver: Vec<Arc<dyn Driver>>,
     sender: mpsc::Sender<Arc<dyn Event>>,
     receiver: Option<mpsc::Receiver<Arc<dyn Event>>>,
 }
@@ -29,9 +32,21 @@ impl AyiouBot {
         Self {
             context,
             plugins: Vec::new(),
+            adapter: Vec::new(),
+            driver: Vec::new(),
             sender: tx,
             receiver: Some(rx),
         }
+    }
+
+    pub fn register_adapter<A: Adapter + 'static>(mut self, adapter: A) -> Self {
+        self.adapter.push(Arc::new(adapter));
+        self
+    }
+
+    pub fn register_driver<D: Driver + 'static>(mut self, driver: D) -> Self {
+        self.driver.push(Arc::new(driver));
+        self
     }
 
     pub fn add_plugin<P: Plugin + 'static>(mut self, plugin: P) -> Self {

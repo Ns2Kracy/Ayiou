@@ -1,6 +1,12 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use ayiou::{adapter::onebot_v11::OneBotAdapter, driver::WSClientDriver, prelude::*};
+use ayiou::{
+    adapter::onebot_v11::OneBotAdapter,
+    bot::AyiouBot,
+    core::{Adapter, Bot, Context, Driver, Event, Plugin, TargetType, event::EventHandler},
+    driver::WSClientDriver,
+};
+use ayiou_macros::handler;
 use std::sync::Arc;
 use tracing::{info, level_filters::LevelFilter};
 
