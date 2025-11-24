@@ -1,7 +1,8 @@
-use crate::core::adapter::Adapter;
 use dashmap::DashMap;
 use std::any::{Any, TypeId};
 use std::sync::Arc;
+
+use crate::core::{adapter::Adapter, event::Event};
 
 /// The global context for the bot.
 /// It acts as a dependency injection container and state manager.
@@ -34,6 +35,16 @@ impl Context {
     /// Get any adapter (useful if there's only one)
     pub fn get_any_adapter(&self) -> Option<Arc<dyn Adapter>> {
         self.adapters.iter().next().map(|r| r.value().clone())
+    }
+
+    /// Get the adapter responsible for the specified platform name.
+    pub fn get_adapter_for_platform(&self, platform: &str) -> Option<Arc<dyn Adapter>> {
+        self.get_adapter(platform)
+    }
+
+    /// Get the adapter that produced the provided event.
+    pub fn get_adapter_for_event(&self, event: &dyn Event) -> Option<Arc<dyn Adapter>> {
+        self.get_adapter_for_platform(event.platform())
     }
 
     /// Insert a dependency or state into the context.

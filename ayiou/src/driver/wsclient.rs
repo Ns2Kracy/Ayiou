@@ -1,21 +1,24 @@
-use crate::core::{adapter::Adapter, driver::Driver};
 use anyhow::{Context as AnyhowContext, Result};
-use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::sync::Mutex;
-use tokio::time::sleep;
+use std::{sync::Arc, time::Duration};
+use tokio::{
+    sync::{Mutex, mpsc},
+    time::sleep,
+};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{error, info, warn};
-use url::Url;
 
-#[derive(Debug)]
+use crate::{
+    core::{adapter::Adapter, context::Context, driver::Driver},
+    driver::{AdapterBuilder, OutboundReceiver},
+};
+
+#[derive(Clone)]
 pub struct WSClientDriver {
     url: String,
     outbound_tx: mpsc::Sender<String>,
-    outbound_rx: Arc<Mutex<Option<mpsc::Receiver<String>>>>,
+    outbound_rx: OutboundReceiver,
+    adapter_builder: Option<AdapterBuilder>,
 }
 
 impl WSClientDriver {
@@ -25,14 +28,28 @@ impl WSClientDriver {
             url: url.to_string(),
             outbound_tx: tx,
             outbound_rx: Arc::new(Mutex::new(Some(rx))),
+            adapter_builder: None,
         }
+    }
+
+    pub fn register_adapter<A, F>(mut self, builder: F) -> Self
+    where
+        A: Adapter + 'static + Clone,
+        F: Fn(Context) -> A + Send + Sync + 'static,
+    {
+        self.adapter_builder = Some(Arc::new(move |ctx| Box::new(builder(ctx))));
+        self
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Driver for WSClientDriver {
+    fn create_adapter(&self, ctx: Context) -> Option<Box<dyn Adapter>> {
+        self.adapter_builder.as_ref().map(|builder| builder(ctx))
+    }
+
     async fn run(&self, adapter: Arc<dyn Adapter>) -> Result<()> {
-        let url = Url::parse(&self.url).context("Invalid WebSocket URL")?;
+        let url = url::Url::parse(&self.url).context("Invalid WebSocket URL")?;
 
         let mut rx = self
             .outbound_rx

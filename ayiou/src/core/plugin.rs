@@ -1,11 +1,10 @@
-use crate::core::Context;
-use crate::core::event::EventHandler;
 use anyhow::Result;
-use async_trait::async_trait;
+
+use crate::core::{Context, event::EventHandler};
 
 /// The Plugin trait.
 /// In a real implementation, macros would generate the implementation of this trait.
-#[async_trait]
+#[async_trait::async_trait]
 pub trait Plugin: Send + Sync {
     fn name(&self) -> &'static str;
 

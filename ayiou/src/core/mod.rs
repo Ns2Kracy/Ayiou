@@ -4,7 +4,12 @@ pub mod driver;
 pub mod error;
 pub mod event;
 pub mod plugin;
-pub mod storage;
+
+pub use adapter::Adapter;
+pub use context::Context;
+pub use driver::Driver;
+pub use event::Event;
+pub use plugin::Plugin;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetType {
@@ -12,8 +17,3 @@ pub enum TargetType {
     Group,
     Channel,
 }
-pub use adapter::Adapter;
-pub use context::Context;
-pub use driver::Driver;
-pub use event::Event;
-pub use plugin::Plugin;

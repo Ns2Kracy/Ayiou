@@ -1,10 +1,9 @@
-use anyhow::Result;
 use async_trait::async_trait;
 use ayiou::{
-    adapter::onebot_v11::OneBotAdapter,
+    adapter::{console::ConsoleAdapter, onebot_v11::OneBotAdapter},
     bot::AyiouBot,
     core::{Context, Event, Plugin, TargetType, event::EventHandler},
-    driver::WSClientDriver,
+    driver::{ConsoleDriver, WSClientDriver},
 };
 use ayiou_macros::handler;
 use std::sync::Arc;
@@ -31,7 +30,7 @@ async fn ping_handler(ctx: Context, event: Arc<dyn Event>) {
 
     if msg.trim() == "ping" {
         info!("Ping received, attempting to reply...");
-        if let Some(adapter) = ctx.get_any_adapter() {
+        if let Some(adapter) = ctx.get_adapter_for_event(event.as_ref()) {
             let target_id = event
                 .group_id()
                 .unwrap_or_else(|| event.user_id().unwrap_or("0"));
@@ -53,7 +52,7 @@ async fn ping_handler(ctx: Context, event: Arc<dyn Event>) {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     info!("Starting OneBot Example...");
     tracing_subscriber::fmt()
         .with_max_level(LevelFilter::INFO)
@@ -61,8 +60,8 @@ async fn main() -> Result<()> {
 
     AyiouBot::new()
         .plugin(PingPlugin)
-        .register_adapter(OneBotAdapter::new)
-        .register_driver(WSClientDriver::new("ws://192.168.31.180:3001"))
+        .driver(ConsoleDriver::default().register_adapter(ConsoleAdapter::new))
+        .driver(WSClientDriver::new("ws://10.126.126.1:3001").register_adapter(OneBotAdapter::new))
         .run()
         .await?;
 

@@ -1,36 +1,58 @@
-use crate::core::{adapter::Adapter, driver::Driver};
 use anyhow::Result;
-use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::io::{self, AsyncBufReadExt};
-use tracing::warn;
+use tracing::{info, warn};
 
-#[derive(Debug)]
+use crate::{
+    core::{adapter::Adapter, context::Context, driver::Driver},
+    driver::AdapterBuilder,
+};
+
+#[derive(Clone)]
 pub struct ConsoleDriver {
     message: String,
     output_format: String,
+    adapter_builder: Option<AdapterBuilder>,
 }
 
 impl ConsoleDriver {
-    pub fn new(message: impl Into<String>, output_format: Option<impl Into<String>>) -> Self {
+    pub fn new(
+        message: Option<impl Into<String>>,
+        output_format: Option<impl Into<String>>,
+    ) -> Self {
         Self {
-            message: message.into(),
+            message: message.map_or_else(|| "".to_string(), |s| s.into()),
             output_format: output_format.map_or_else(
                 || "\x1b[36m[ConsoleDriver Output]\x1b[0m {}".to_string(),
                 |s| s.into(),
             ),
+            adapter_builder: None,
         }
+    }
+
+    pub fn register_adapter<A, F>(mut self, builder: F) -> Self
+    where
+        A: Adapter + 'static + Clone,
+        F: Fn(Context) -> A + Send + Sync + 'static,
+    {
+        self.adapter_builder = Some(Arc::new(move |ctx| Box::new(builder(ctx))));
+        self
     }
 }
 
 impl Default for ConsoleDriver {
     fn default() -> Self {
-        Self::new("Console Driver Started. Type something...", None::<String>)
+        info!("Console Driver Started. Type something...");
+        Self::new(None::<String>, None::<String>)
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Driver for ConsoleDriver {
+    fn create_adapter(&self, ctx: Context) -> Option<Box<dyn Adapter>> {
+        self.adapter_builder.as_ref().map(|builder| builder(ctx))
+    }
+
     async fn run(&self, adapter: Arc<dyn Adapter>) -> Result<()> {
         println!("{}", self.message);
         let stdin = io::stdin();

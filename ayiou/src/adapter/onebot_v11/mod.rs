@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -10,11 +10,11 @@ mod model;
 use crate::{
     adapter::onebot_v11::model::{ApiRequest, OneBotEvent},
     core::{
+        TargetType,
         adapter::Adapter,
         context::Context,
         driver::Driver,
         event::{BaseEvent, Event, EventKind},
-        TargetType,
     },
 };
 
@@ -26,10 +26,7 @@ pub struct OneBotAdapter {
 
 impl OneBotAdapter {
     pub fn new(ctx: Context) -> Self {
-        Self {
-            ctx,
-            driver: None,
-        }
+        Self { ctx, driver: None }
     }
 }
 

@@ -1,7 +1,8 @@
-use crate::core::{driver::Driver, TargetType};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
+
+use crate::core::{TargetType, driver::Driver};
 
 pub trait AdapterClone {
     fn clone_box(&self) -> Box<dyn Adapter>;

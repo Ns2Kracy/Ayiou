@@ -1,8 +1,6 @@
+use std::{any::Any, fmt::Debug, sync::Arc};
+
 use crate::core::Context;
-use async_trait::async_trait;
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 /// Represents a generic event from any platform (OneBot, Discord, Console, etc.)
 pub trait Event: Send + Sync + Debug {
@@ -67,7 +65,7 @@ impl Event for BaseEvent {
 }
 
 /// A handler handles an event.
-#[async_trait]
+#[async_trait::async_trait]
 pub trait EventHandler: Send + Sync {
     /// Check if this handler should run for this event.
     /// In a full framework, this would be handled by a Matcher system.
