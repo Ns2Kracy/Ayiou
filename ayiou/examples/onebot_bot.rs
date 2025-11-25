@@ -1,13 +1,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use ayiou::AyiouBot;
-use ayiou::adapter::console::ConsoleAdapter;
-use ayiou::adapter::onebot_v11::OnebotAdapter;
-use ayiou::core::{Ctx, Event, Plugin, PluginMeta};
-use ayiou::driver::console::ConsoleDriver;
-use ayiou::driver::wsclient::WsClient;
-use tracing::info;
+use ayiou::{
+    core::{Ctx, Event, Plugin, PluginMeta},
+    onebot::model::{Message, MessageEvent},
+    AyiouBot,
+};
 
 struct MyPlugin;
 
@@ -15,30 +13,38 @@ struct MyPlugin;
 impl Plugin for MyPlugin {
     fn meta(&self) -> PluginMeta {
         PluginMeta {
-            name: "ping".to_string(),
-            description: "a simple onebot test bot".to_string(),
+            name: "example".to_string(),
+            description: "An example plugin for Ayiou.".to_string(),
             version: "0.1.0".to_string(),
         }
     }
 
     async fn call(&self, event: Arc<Event>, ctx: Arc<Ctx>) -> anyhow::Result<()> {
-        let Some(msg) = event.message.as_deref() else {
+        let ayiou::onebot::model::OneBotEvent::Message(msg_event) = &event.event else {
             return Ok(());
         };
 
-        if msg.trim() == "ping" {
-            let target = event
-                .group_id
-                .as_deref()
-                .unwrap_or_else(|| event.user_id.as_deref().unwrap_or("0"));
+        let message_content = match &**msg_event {
+            MessageEvent::Private(p) => &p.message,
 
-            // 从哪个平台来的消息，就回复到哪个平台
-            if let Some(adapter) = ctx.adapter(&event.platform) {
-                info!(
-                    "[{}] Ping from {}, replying pong...",
-                    event.platform, target
-                );
-                adapter.send(target, "pong").await?;
+            MessageEvent::Group(g) => &g.message,
+        };
+
+        let Message::String(text) = message_content else {
+            return Ok(());
+        };
+
+        if text.trim() == "ping" {
+            let reply = Message::String("pong".to_string());
+
+            match &**msg_event {
+                MessageEvent::Private(p) => {
+                    ctx.api.send_private_msg(p.user_id, &reply).await?;
+                }
+
+                MessageEvent::Group(g) => {
+                    ctx.api.send_group_msg(g.group_id, &reply).await?;
+                }
             }
         }
 
@@ -50,14 +56,9 @@ impl Plugin for MyPlugin {
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let mut bot = AyiouBot::new();
-
-    bot.plugin(MyPlugin);
-    bot.register(ConsoleDriver::new(), ConsoleAdapter::new());
-    bot.register(
-        WsClient::new("ws://10.126.126.1:3001"),
-        OnebotAdapter::new(),
-    );
-
-    bot.run().await;
+    AyiouBot::new()
+        .plugin(MyPlugin)
+        .connect("ws://192.168.31.180:3001")
+        .run()
+        .await;
 }

@@ -1,30 +1,26 @@
-//! Ayiou Framework
-//!
-//! An extensible, developer-friendly chat bot framework.
+//! Ayiou: A specialized OneBot v11 bot client.
 
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::core::{Adapter, Ctx, Driver, Event, Plugin};
+use crate::{
+    connection::BotConnection,
+    core::{Ctx, Event, Plugin},
+    onebot::{api::Api, model::OneBotEvent},
+};
 
-#[forbid(unsafe_code)]
-pub mod adapter;
+pub mod connection;
 pub mod core;
-pub mod driver;
-
-/// Driver + Adapter 组合
-struct Connection {
-    driver: Arc<dyn Driver>,
-    adapter: Arc<dyn Adapter>,
-}
+pub mod onebot;
 
 pub struct AyiouBot {
     plugins: Vec<Arc<dyn Plugin>>,
-    connections: Vec<Connection>,
-    event_tx: mpsc::Sender<Event>,
-    event_rx: mpsc::Receiver<Event>,
+    connection: Option<BotConnection>,
+    api: Option<Api>,
+    event_tx: mpsc::Sender<OneBotEvent>,
+    event_rx: mpsc::Receiver<OneBotEvent>,
 }
 
 impl Default for AyiouBot {
@@ -38,13 +34,15 @@ impl AyiouBot {
         let (event_tx, event_rx) = mpsc::channel(100);
         Self {
             plugins: vec![],
-            connections: vec![],
+            connection: None,
+            api: None,
             event_tx,
             event_rx,
         }
     }
 
-    pub fn plugin(&mut self, plugin: impl Plugin + 'static) {
+    /// 注册插件
+    pub fn plugin(mut self, plugin: impl Plugin + 'static) -> Self {
         let plugin = Arc::new(plugin);
         info!(
             "Loaded plugin: {}, version: {}",
@@ -52,36 +50,36 @@ impl AyiouBot {
             plugin.meta().version
         );
         self.plugins.push(plugin);
+        self
     }
 
-    /// 注册 Driver 和 Adapter
-    pub fn register(&mut self, driver: impl Driver + 'static, adapter: impl Adapter + 'static) {
-        info!("Registered driver with adapter: {}", adapter.name());
-        self.connections.push(Connection {
-            driver: Arc::new(driver),
-            adapter: Arc::new(adapter),
-        });
+    /// 注册一个 OneBot v11 连接
+    pub fn connect(mut self, url: &str) -> Self {
+        info!("Connecting to bot at {}", url);
+        let (api_tx, api_rx) = mpsc::channel(100);
+        let api = Api::new(api_tx);
+        let conn = BotConnection::new(url.to_string(), self.event_tx.clone(), api_rx);
+        self.connection = Some(conn);
+        self.api = Some(api);
+        self
     }
 
-    pub async fn run(self) {
+    /// 启动 Bot
+    pub async fn run(mut self) {
         let plugins = Arc::new(self.plugins);
-        let mut event_rx = self.event_rx;
-
-        // 构建 Ctx，注册所有 Adapter
-        let mut ctx = Ctx::new();
-        for conn in &self.connections {
-            ctx.register_adapter(conn.adapter.clone());
-        }
-        let ctx = Arc::new(ctx);
+        let Some(api) = self.api else {
+            panic!("Bot is not connected, please call .connect() before .run()");
+        };
+        let ctx = Arc::new(Ctx::new(api));
 
         // 事件分发任务
-        let dispatch_ctx = ctx.clone();
+        let dispatch_plugins = plugins.clone();
         tokio::spawn(async move {
             info!("Event dispatch started!");
-            while let Some(event) = event_rx.recv().await {
-                let plugins = plugins.clone();
-                let ctx = dispatch_ctx.clone();
-                let event = Arc::new(event);
+            while let Some(onebot_event) = self.event_rx.recv().await {
+                let event = Arc::new(Event::new(onebot_event));
+                let plugins = dispatch_plugins.clone();
+                let ctx = ctx.clone();
                 tokio::spawn(async move {
                     for plugin in &*plugins {
                         if let Err(err) = plugin.call(event.clone(), ctx.clone()).await {
@@ -92,40 +90,11 @@ impl AyiouBot {
             }
         });
 
-        // 启动每个连接
-        for conn in self.connections {
-            let event_tx = self.event_tx.clone();
-            let (raw_tx, mut raw_rx) = mpsc::channel::<String>(100);
-            let (send_tx, mut send_rx) = mpsc::channel::<String>(100);
-
-            // 设置 Adapter 的发送通道
-            conn.adapter.set_sender(send_tx);
-
-            // Driver 任务: 接收原始消息 + 发送消息
-            let driver = conn.driver.clone();
-            let driver_send = conn.driver;
+        // 启动连接
+        if let Some(conn) = self.connection {
             tokio::spawn(async move {
-                if let Err(err) = driver.run(raw_tx).await {
-                    error!("Driver error: {}", err);
-                }
-            });
-            tokio::spawn(async move {
-                while let Some(msg) = send_rx.recv().await {
-                    if let Err(err) = driver_send.send(msg).await {
-                        error!("Driver send error: {}", err);
-                    }
-                }
-            });
-
-            // Adapter 解析任务: 转换原始消息为 Event
-            let adapter = conn.adapter;
-            tokio::spawn(async move {
-                while let Some(raw) = raw_rx.recv().await {
-                    if let Some(event) = adapter.parse(&raw)
-                        && let Err(err) = event_tx.send(event).await
-                    {
-                        error!("Failed to send event: {}", err);
-                    }
+                if let Err(err) = conn.run().await {
+                    error!("Connection error: {}", err);
                 }
             });
         }
