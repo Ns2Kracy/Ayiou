@@ -1,48 +1,24 @@
+use crate::core::Event;
 use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
+use tokio::sync::mpsc;
 
-use crate::core::{TargetType, driver::Driver};
-
-pub trait AdapterClone {
-    fn clone_box(&self) -> Box<dyn Adapter>;
-}
-
-impl<T> AdapterClone for T
-where
-    T: 'static + Adapter + Clone,
-{
-    fn clone_box(&self) -> Box<dyn Adapter> {
-        Box::new(self.clone())
-    }
-}
-
-impl Clone for Box<dyn Adapter> {
-    fn clone(&self) -> Box<dyn Adapter> {
-        self.clone_box()
-    }
-}
-
-/// An Adapter bridges the Driver and the Core App, and now also sends messages.
+/// Adapter 负责协议适配层
+/// - 将平台原始数据转换为统一的 Event
+/// - 将统一的 API 调用转换为平台请求
 #[async_trait]
-pub trait Adapter: Send + Sync + AdapterClone {
-    /// Returns the name of the adapter (e.g., "onebot").
+pub trait Adapter: Send + Sync {
+    /// Adapter 名称
     fn name(&self) -> &'static str;
 
-    /// Injects the driver dependency into the adapter instance.
-    fn set_driver(&mut self, driver: Arc<dyn Driver>);
+    /// 将原始消息解析为 Event
+    fn parse(&self, raw: &str) -> Option<Event>;
 
-    /// Handles a raw event string from a driver and translates it into a core event.
-    async fn handle(&self, raw_event: String) -> Result<()>;
+    /// 设置发送通道 (由 Bot 调用)
+    fn set_sender(&self, _tx: mpsc::Sender<String>) {}
 
-    /// Serializes a generic `send_message` action into a platform-specific raw string.
-    fn serialize(&self, target_id: &str, target_type: TargetType, content: &str) -> Result<String>;
-
-    /// Send a text message to a user or group.
-    async fn send_message(
-        &self,
-        target_id: &str,
-        target_type: TargetType,
-        content: &str,
-    ) -> Result<String>;
+    /// 格式化并发送消息
+    async fn send(&self, _target: &str, _message: &str) -> Result<()> {
+        Ok(())
+    }
 }

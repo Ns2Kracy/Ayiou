@@ -1,27 +1,24 @@
+use crate::core::{Adapter, Event};
 use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
+use once_cell::sync::OnceCell;
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::info;
 
-use crate::core::{
-    Context, Event, TargetType,
-    adapter::Adapter,
-    driver::Driver,
-    event::{BaseEvent, EventKind},
-};
-
-#[derive(Clone)]
 pub struct ConsoleAdapter {
-    ctx: Context,
-    driver: Arc<Mutex<Option<Arc<dyn Driver>>>>,
+    tx: OnceCell<mpsc::Sender<String>>,
+}
+
+impl Default for ConsoleAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConsoleAdapter {
-    pub fn new(ctx: Context) -> Self {
+    pub fn new() -> Self {
         Self {
-            ctx,
-            driver: Arc::new(Mutex::new(None)),
+            tx: OnceCell::new(),
         }
     }
 }
@@ -32,53 +29,24 @@ impl Adapter for ConsoleAdapter {
         "console"
     }
 
-    fn set_driver(&mut self, driver: Arc<dyn Driver>) {
-        let mut d = self.driver.lock().unwrap();
-        *d = Some(driver);
+    fn parse(&self, raw: &str) -> Option<Event> {
+        info!("[{}] console_user: {}", self.name(), raw);
+        Some(
+            Event::new("console.message", self.name())
+                .user_id("console_user")
+                .message(raw)
+                .raw(raw),
+        )
     }
 
-    async fn handle(&self, raw_event: String) -> Result<()> {
-        let sender = self
-            .ctx
-            .get::<mpsc::Sender<Arc<dyn Event>>>()
-            .expect("Event sender not in context!");
+    fn set_sender(&self, tx: mpsc::Sender<String>) {
+        let _ = self.tx.set(tx);
+    }
 
-        let event = BaseEvent {
-            platform: "console".to_string(),
-            kind: EventKind::Message,
-            content: raw_event,
-            user_id: "console_user".to_string(),
-            group_id: None,
-        };
-
-        if sender.send(Arc::new(event)).await.is_err() {
-            warn!("Failed to send console event to app, receiver closed.");
+    async fn send(&self, _target: &str, message: &str) -> Result<()> {
+        if let Some(tx) = self.tx.get() {
+            tx.send(message.to_string()).await?;
         }
-
         Ok(())
-    }
-
-    fn serialize(
-        &self,
-        target_id: &str,
-        _target_type: TargetType,
-        content: &str,
-    ) -> Result<String> {
-        // For the console, we can just format the output nicely.
-        Ok(format!("[Reply -> {}]: {}", target_id, content))
-    }
-
-    async fn send_message(
-        &self,
-        target_id: &str,
-        target_type: TargetType,
-        content: &str,
-    ) -> Result<String> {
-        let driver = { self.driver.lock().unwrap().clone() };
-        if let Some(driver) = driver {
-            let content = self.serialize(target_id, target_type, content)?;
-            driver.send(content).await?;
-        }
-        Ok("".to_string())
     }
 }

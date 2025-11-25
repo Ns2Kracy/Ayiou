@@ -1,69 +1,63 @@
-use async_trait::async_trait;
-use ayiou::{
-    adapter::{console::ConsoleAdapter, onebot_v11::OneBotAdapter},
-    bot::AyiouBot,
-    core::{Context, Event, Plugin, TargetType, event::EventHandler},
-    driver::{ConsoleDriver, WSClientDriver},
-};
-use ayiou_macros::handler;
 use std::sync::Arc;
-use tracing::{info, level_filters::LevelFilter};
 
-struct PingPlugin;
+use async_trait::async_trait;
+use ayiou::AyiouBot;
+use ayiou::adapter::console::ConsoleAdapter;
+use ayiou::adapter::onebot_v11::OnebotAdapter;
+use ayiou::core::{Ctx, Event, Plugin, PluginMeta};
+use ayiou::driver::console::ConsoleDriver;
+use ayiou::driver::wsclient::WsClient;
+use tracing::info;
+
+struct MyPlugin;
 
 #[async_trait]
-impl Plugin for PingPlugin {
-    fn name(&self) -> &'static str {
-        "Ping Plugin"
-    }
-
-    fn handlers(&self) -> Vec<Box<dyn EventHandler>> {
-        vec![Box::new(ping_handlerStruct)]
-    }
-}
-
-#[handler]
-async fn ping_handler(ctx: Context, event: Arc<dyn Event>) {
-    let Some(msg) = event.message() else { return };
-    let user_id = event.user_id().unwrap_or("?");
-    info!("[{}] {}: {}", event.platform(), user_id, msg);
-
-    if msg.trim() == "ping" {
-        info!("Ping received, attempting to reply...");
-        if let Some(adapter) = ctx.get_adapter_for_event(event.as_ref()) {
-            let target_id = event
-                .group_id()
-                .unwrap_or_else(|| event.user_id().unwrap_or("0"));
-            let target_type = if event.group_id().is_some() {
-                TargetType::Group
-            } else {
-                TargetType::Private
-            };
-
-            info!("Replying PONG to type={:?} id={}", target_type, target_id);
-
-            if let Err(e) = adapter.send_message(target_id, target_type, "pong").await {
-                tracing::error!("Failed to send message: {}", e);
-            }
-        } else {
-            tracing::warn!("No adapter available in context to send reply.");
+impl Plugin for MyPlugin {
+    fn meta(&self) -> PluginMeta {
+        PluginMeta {
+            name: "ping".to_string(),
+            description: "a simple onebot test bot".to_string(),
+            version: "0.1.0".to_string(),
         }
+    }
+
+    async fn call(&self, event: Arc<Event>, ctx: Arc<Ctx>) -> anyhow::Result<()> {
+        let Some(msg) = event.message.as_deref() else {
+            return Ok(());
+        };
+
+        if msg.trim() == "ping" {
+            let target = event
+                .group_id
+                .as_deref()
+                .unwrap_or_else(|| event.user_id.as_deref().unwrap_or("0"));
+
+            // 从哪个平台来的消息，就回复到哪个平台
+            if let Some(adapter) = ctx.adapter(&event.platform) {
+                info!(
+                    "[{}] Ping from {}, replying pong...",
+                    event.platform, target
+                );
+                adapter.send(target, "pong").await?;
+            }
+        }
+
+        Ok(())
     }
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    info!("Starting OneBot Example...");
-    tracing_subscriber::fmt()
-        .with_max_level(LevelFilter::INFO)
-        .init();
+async fn main() {
+    tracing_subscriber::fmt::init();
 
-    AyiouBot::new()
-        .plugin(PingPlugin)
-        .driver(ConsoleDriver::default().register_adapter(ConsoleAdapter::new))
-        .driver(WSClientDriver::new("ws://10.126.126.1:3001").register_adapter(OneBotAdapter::new))
-        .run()
-        .await?;
+    let mut bot = AyiouBot::new();
 
-    Ok(())
+    bot.plugin(MyPlugin);
+    bot.register(ConsoleDriver::new(), ConsoleAdapter::new());
+    bot.register(
+        WsClient::new("ws://10.126.126.1:3001"),
+        OnebotAdapter::new(),
+    );
+
+    bot.run().await;
 }

@@ -1,64 +1,25 @@
-use dashmap::DashMap;
-use std::any::{Any, TypeId};
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use crate::core::{adapter::Adapter, event::Event};
+use crate::core::Adapter;
 
-/// The global context for the bot.
-/// It acts as a dependency injection container and state manager.
-#[derive(Clone, Default)]
-pub struct Context {
-    // Stores arbitrary data by TypeId. Thread-safe.
-    pub storage: Arc<DashMap<TypeId, Box<dyn Any + Send + Sync>>>,
-    // Stores active adapters by their name
-    pub adapters: Arc<DashMap<String, Arc<dyn Adapter>>>,
+/// 上下文，持有 Adapter 引用，供 Plugin 发送消息
+#[derive(Default, Clone)]
+pub struct Ctx {
+    adapters: HashMap<String, Arc<dyn Adapter>>,
 }
 
-impl Context {
+impl Ctx {
     pub fn new() -> Self {
-        Self {
-            storage: Arc::new(DashMap::new()),
-            adapters: Arc::new(DashMap::new()),
-        }
+        Self::default()
     }
 
-    /// Register a adapter instance
-    pub fn register_adapter(&self, adapter: Arc<dyn Adapter>) {
+    /// 注册 Adapter
+    pub fn register_adapter(&mut self, adapter: Arc<dyn Adapter>) {
         self.adapters.insert(adapter.name().to_string(), adapter);
     }
 
-    /// Get a adapter by ID
-    pub fn get_adapter(&self, name: &str) -> Option<Arc<dyn Adapter>> {
-        self.adapters.get(name).map(|r| r.value().clone())
-    }
-
-    /// Get any adapter (useful if there's only one)
-    pub fn get_any_adapter(&self) -> Option<Arc<dyn Adapter>> {
-        self.adapters.iter().next().map(|r| r.value().clone())
-    }
-
-    /// Get the adapter responsible for the specified platform name.
-    pub fn get_adapter_for_platform(&self, platform: &str) -> Option<Arc<dyn Adapter>> {
-        self.get_adapter(platform)
-    }
-
-    /// Get the adapter that produced the provided event.
-    pub fn get_adapter_for_event(&self, event: &dyn Event) -> Option<Arc<dyn Adapter>> {
-        self.get_adapter_for_platform(event.platform())
-    }
-
-    /// Insert a dependency or state into the context.
-    /// Recommend inserting Arc<T> for shared state.
-    pub fn insert<T: 'static + Send + Sync>(&self, val: T) {
-        self.storage.insert(TypeId::of::<T>(), Box::new(val));
-    }
-
-    /// Get a dependency from the context.
-    /// The type T must be Clone. This encourages using Arc<T> for shared state,
-    /// which is safe and efficient.
-    pub fn get<T: 'static + Send + Sync + Clone>(&self) -> Option<T> {
-        self.storage
-            .get(&TypeId::of::<T>())
-            .and_then(|r| r.downcast_ref::<T>().cloned())
+    /// 根据平台名获取 Adapter
+    pub fn adapter(&self, platform: &str) -> Option<&Arc<dyn Adapter>> {
+        self.adapters.get(platform)
     }
 }

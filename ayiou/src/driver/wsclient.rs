@@ -1,125 +1,68 @@
-use anyhow::{Context as AnyhowContext, Result};
+use crate::core::Driver;
+use anyhow::Result;
+use futures::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use std::{sync::Arc, time::Duration};
-use tokio::{
-    sync::{Mutex, mpsc},
-    time::sleep,
-};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use tracing::{error, info, warn};
+use tokio::sync::{Mutex, mpsc};
+use tokio::time::sleep;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
+use tracing::{info, warn};
+use url::Url;
 
-use crate::{
-    core::{adapter::Adapter, context::Context, driver::Driver},
-    driver::{AdapterBuilder, OutboundReceiver},
-};
+type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
-#[derive(Clone)]
-pub struct WSClientDriver {
-    url: String,
-    outbound_tx: mpsc::Sender<String>,
-    outbound_rx: OutboundReceiver,
-    adapter_builder: Option<AdapterBuilder>,
+pub struct WsClient {
+    url: Url,
+    sink: Arc<Mutex<Option<SplitSink<WsStream, Message>>>>,
 }
 
-impl WSClientDriver {
+impl WsClient {
     pub fn new(url: &str) -> Self {
-        let (tx, rx) = mpsc::channel(100);
         Self {
-            url: url.to_string(),
-            outbound_tx: tx,
-            outbound_rx: Arc::new(Mutex::new(Some(rx))),
-            adapter_builder: None,
+            url: Url::parse(url).unwrap(),
+            sink: Arc::new(Mutex::new(None)),
         }
-    }
-
-    pub fn register_adapter<A, F>(mut self, builder: F) -> Self
-    where
-        A: Adapter + 'static + Clone,
-        F: Fn(Context) -> A + Send + Sync + 'static,
-    {
-        self.adapter_builder = Some(Arc::new(move |ctx| Box::new(builder(ctx))));
-        self
     }
 }
 
 #[async_trait::async_trait]
-impl Driver for WSClientDriver {
-    fn create_adapter(&self, ctx: Context) -> Option<Box<dyn Adapter>> {
-        self.adapter_builder.as_ref().map(|builder| builder(ctx))
-    }
-
-    async fn run(&self, adapter: Arc<dyn Adapter>) -> Result<()> {
-        let url = url::Url::parse(&self.url).context("Invalid WebSocket URL")?;
-
-        let mut rx = self
-            .outbound_rx
-            .lock()
-            .await
-            .take()
-            .context("Driver already started")?;
-
+impl Driver for WsClient {
+    async fn run(&self, tx: mpsc::Sender<String>) -> Result<()> {
         loop {
-            info!("Connecting to WebSocket: {}", url);
-            match connect_async(url.as_str()).await {
+            match connect_async(self.url.as_str()).await {
                 Ok((ws_stream, _)) => {
                     info!("WebSocket connected to {}", &self.url);
-                    let (mut write, mut read) = ws_stream.split();
-
-                    loop {
-                        tokio::select! {
-                            maybe_msg = rx.recv() => {
-                                match maybe_msg {
-                                    Some(text) => {
-                                        if let Err(e) = write.send(Message::Text(text.into())).await {
-                                            error!("Failed to send message to WS: {}", e);
-                                            break;
-                                        }
-                                    }
-                                    None => {
-                                        info!("Outbound channel closed, stopping driver.");
-                                        return Ok(());
-                                    }
-                                }
-                            }
-                            maybe_ws_msg = read.next() => {
-                                match maybe_ws_msg {
-                                    Some(Ok(Message::Text(text))) => {
-                                        if let Err(e) = adapter.handle(text.to_string()).await {
-                                            warn!("Adapter failed to handle event: {}", e);
-                                        }
-                                    }
-                                    Some(Ok(Message::Close(_))) => {
-                                        info!("WebSocket closed by server");
-                                        break;
-                                    }
-                                    Some(Err(e)) => {
-                                        error!("WebSocket read error: {}", e);
-                                        break;
-                                    }
-                                    None => {
-                                        info!("WebSocket stream ended");
-                                        break;
-                                    }
-                                    _ => {}
-                                }
-                            }
+                    let (sink, mut read) = ws_stream.split();
+                    {
+                        let mut s = self.sink.lock().await;
+                        *s = Some(sink);
+                    }
+                    while let Some(Ok(msg)) = read.next().await {
+                        if let Message::Text(text) = msg
+                            && let Err(err) = tx.send(text.to_string()).await
+                        {
+                            warn!("Failed to send message: {}", err);
                         }
                     }
-                    info!("WebSocket disconnected from {}", &self.url);
+                    {
+                        let mut s = self.sink.lock().await;
+                        *s = None;
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to connect to {}: {}", url, e);
+                Err(err) => {
+                    warn!("WebSocket connection failed: {}", err);
                 }
             }
-            warn!("Reconnecting in 5 seconds...");
+            warn!("WebSocket disconnected, reconnecting in 5s...");
             sleep(Duration::from_secs(5)).await;
         }
     }
 
-    async fn send(&self, content: String) -> Result<()> {
-        self.outbound_tx
-            .send(content)
-            .await
-            .map_err(|_| anyhow::anyhow!("WebSocket write loop closed"))
+    async fn send(&self, message: String) -> Result<()> {
+        let mut s = self.sink.lock().await;
+        if let Some(sink) = s.as_mut() {
+            sink.send(Message::Text(message.into())).await?;
+        }
+        Ok(())
     }
 }

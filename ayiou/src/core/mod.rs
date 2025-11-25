@@ -6,14 +6,7 @@ pub mod event;
 pub mod plugin;
 
 pub use adapter::Adapter;
-pub use context::Context;
+pub use context::Ctx;
 pub use driver::Driver;
 pub use event::Event;
-pub use plugin::Plugin;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TargetType {
-    Private,
-    Group,
-    Channel,
-}
+pub use plugin::{Plugin, PluginMeta};

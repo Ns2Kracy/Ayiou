@@ -1,77 +1,51 @@
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
-use crate::core::Context;
-
-/// Represents a generic event from any platform (OneBot, Discord, Console, etc.)
-pub trait Event: Send + Sync + Debug {
-    /// The platform name (e.g., "onebot", "console", "discord")
-    fn platform(&self) -> &str;
-
-    /// The event type (e.g., "message", "notice", "request")
-    fn kind(&self) -> EventKind;
-
-    /// Unique ID of the user who triggered the event (if any)
-    fn user_id(&self) -> Option<&str>;
-
-    /// Group/Channel ID (if any)
-    fn group_id(&self) -> Option<&str>;
-
-    /// The raw message content (if applicable)
-    fn message(&self) -> Option<&str>;
-
-    /// Downcast helper.
-    /// Implementation should typically be: `fn as_any(&self) -> &dyn Any { self }`
-    fn as_any(&self) -> &dyn Any;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EventKind {
-    Message,
-    Notice,
-    Request,
-    Meta,
-    Unknown,
-}
-
-/// A concrete event wrapper for basic testing/console.
+/// 消息事件，包含平台、用户、群组、消息内容等信息
 #[derive(Debug, Clone)]
-pub struct BaseEvent {
+pub struct Event {
+    /// 事件类型 (如 "console.message", "onebot.message")
+    pub name: String,
+    /// 平台名称 (如 "console", "onebot_v11")
     pub platform: String,
-    pub kind: EventKind,
-    pub content: String,
-    pub user_id: String,
+    /// 用户 ID
+    pub user_id: Option<String>,
+    /// 群组 ID (私聊时为 None)
     pub group_id: Option<String>,
+    /// 消息内容
+    pub message: Option<String>,
+    /// 原始数据 (JSON 字符串等)
+    pub raw: String,
 }
 
-impl Event for BaseEvent {
-    fn platform(&self) -> &str {
-        &self.platform
+impl Event {
+    pub fn new(name: impl Into<String>, platform: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            platform: platform.into(),
+            user_id: None,
+            group_id: None,
+            message: None,
+            raw: String::new(),
+        }
     }
-    fn kind(&self) -> EventKind {
-        self.kind
-    }
-    fn user_id(&self) -> Option<&str> {
-        Some(&self.user_id)
-    }
-    fn group_id(&self) -> Option<&str> {
-        self.group_id.as_deref()
-    }
-    fn message(&self) -> Option<&str> {
-        Some(&self.content)
-    }
-    fn as_any(&self) -> &dyn Any {
+
+    pub fn user_id(mut self, id: impl Into<String>) -> Self {
+        self.user_id = Some(id.into());
         self
     }
-}
 
-/// A handler handles an event.
-#[async_trait::async_trait]
-pub trait EventHandler: Send + Sync {
-    /// Check if this handler should run for this event.
-    /// In a full framework, this would be handled by a Matcher system.
-    fn matches(&self, _event: &dyn Event) -> bool {
-        true
+    pub fn group_id(mut self, id: impl Into<String>) -> Self {
+        self.group_id = Some(id.into());
+        self
     }
 
-    async fn handle(&self, ctx: Context, event: Arc<dyn Event>);
+    pub fn message(mut self, msg: impl Into<String>) -> Self {
+        self.message = Some(msg.into());
+        self
+    }
+
+    pub fn raw(mut self, raw: impl Into<String>) -> Self {
+        self.raw = raw.into();
+        self
+    }
 }

@@ -1,76 +1,46 @@
+use crate::core::Driver;
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::io::{self, AsyncBufReadExt};
-use tracing::{info, warn};
-
-use crate::{
-    core::{adapter::Adapter, context::Context, driver::Driver},
-    driver::AdapterBuilder,
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin, stdout},
+    sync::{Mutex, mpsc},
 };
+use tracing::info;
 
-#[derive(Clone)]
 pub struct ConsoleDriver {
-    message: String,
-    output_format: String,
-    adapter_builder: Option<AdapterBuilder>,
+    output: Arc<Mutex<tokio::io::Stdout>>,
 }
 
 impl ConsoleDriver {
-    pub fn new(
-        message: Option<impl Into<String>>,
-        output_format: Option<impl Into<String>>,
-    ) -> Self {
+    pub fn new() -> Self {
         Self {
-            message: message.map_or_else(|| "".to_string(), |s| s.into()),
-            output_format: output_format.map_or_else(
-                || "\x1b[36m[ConsoleDriver Output]\x1b[0m {}".to_string(),
-                |s| s.into(),
-            ),
-            adapter_builder: None,
+            output: Arc::new(Mutex::new(stdout())),
         }
-    }
-
-    pub fn register_adapter<A, F>(mut self, builder: F) -> Self
-    where
-        A: Adapter + 'static + Clone,
-        F: Fn(Context) -> A + Send + Sync + 'static,
-    {
-        self.adapter_builder = Some(Arc::new(move |ctx| Box::new(builder(ctx))));
-        self
     }
 }
 
 impl Default for ConsoleDriver {
     fn default() -> Self {
-        info!("Console Driver Started. Type something...");
-        Self::new(None::<String>, None::<String>)
+        Self::new()
     }
 }
 
 #[async_trait::async_trait]
 impl Driver for ConsoleDriver {
-    fn create_adapter(&self, ctx: Context) -> Option<Box<dyn Adapter>> {
-        self.adapter_builder.as_ref().map(|builder| builder(ctx))
-    }
-
-    async fn run(&self, adapter: Arc<dyn Adapter>) -> Result<()> {
-        println!("{}", self.message);
-        let stdin = io::stdin();
-        let mut reader = io::BufReader::new(stdin).lines();
-
-        while let Ok(Some(line)) = reader.next_line().await {
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Err(e) = adapter.handle(line).await {
-                warn!("Adapter failed to handle event: {}", e);
-            }
+    async fn run(&self, tx: mpsc::Sender<String>) -> Result<()> {
+        info!("Console driver started");
+        let stdin = stdin();
+        let mut reader = BufReader::new(stdin).lines();
+        while let Some(line) = reader.next_line().await? {
+            tx.send(line).await?;
         }
         Ok(())
     }
 
-    async fn send(&self, content: String) -> Result<()> {
-        println!("{}", self.output_format.replace("{}", &content));
+    async fn send(&self, message: String) -> Result<()> {
+        let mut out = self.output.lock().await;
+        out.write_all(format!("{}\n", message).as_bytes()).await?;
+        out.flush().await?;
         Ok(())
     }
 }
