@@ -7,7 +7,7 @@ use tracing::{error, info};
 
 use crate::{
     connection::BotConnection,
-    core::{Ctx, Event, Plugin},
+    core::{CronScheduler, Ctx, Event, MessageHandler},
     onebot::{api::Api, model::OneBotEvent},
 };
 
@@ -16,7 +16,8 @@ pub mod core;
 pub mod onebot;
 
 pub struct AyiouBot {
-    plugins: Vec<Arc<dyn Plugin>>,
+    handlers: Vec<MessageHandler>,
+    cron_scheduler: Option<CronScheduler>,
     connection: Option<BotConnection>,
     api: Option<Api>,
     event_tx: mpsc::Sender<OneBotEvent>,
@@ -33,7 +34,8 @@ impl AyiouBot {
     pub fn new() -> Self {
         let (event_tx, event_rx) = mpsc::channel(100);
         Self {
-            plugins: vec![],
+            handlers: vec![],
+            cron_scheduler: None,
             connection: None,
             api: None,
             event_tx,
@@ -41,15 +43,30 @@ impl AyiouBot {
         }
     }
 
-    /// 注册插件
-    pub fn plugin(mut self, plugin: impl Plugin + 'static) -> Self {
-        let plugin = Arc::new(plugin);
-        info!(
-            "Loaded plugin: {}, version: {}",
-            plugin.meta().name,
-            plugin.meta().version
-        );
-        self.plugins.push(plugin);
+    /// 注册消息处理器
+    ///
+    /// # Example
+    /// ```ignore
+    /// use ayiou::core::on_command;
+    ///
+    /// AyiouBot::new()
+    ///     .handler(on_command("/ping").name("ping").handle(|ctx| async move {
+    ///         ctx.reply_text("pong").await?;
+    ///         Ok(false)
+    ///     }))
+    ///     .connect("ws://...")
+    ///     .run()
+    ///     .await;
+    /// ```
+    pub fn handler(mut self, h: MessageHandler) -> Self {
+        info!("Loaded handler: {}", h.name);
+        self.handlers.push(h);
+        self
+    }
+
+    /// 注册 Cron 定时任务调度器
+    pub fn cron(mut self, scheduler: CronScheduler) -> Self {
+        self.cron_scheduler = Some(scheduler);
         self
     }
 
@@ -66,24 +83,46 @@ impl AyiouBot {
 
     /// 启动 Bot
     pub async fn run(mut self) {
-        let plugins = Arc::new(self.plugins);
-        let Some(api) = self.api else {
+        let handlers = Arc::new(self.handlers);
+        let Some(api) = self.api.clone() else {
             panic!("Bot is not connected, please call .connect() before .run()");
         };
-        let ctx = Arc::new(Ctx::new(api));
+
+        // 启动 Cron 调度器
+        if let Some(scheduler) = self.cron_scheduler {
+            scheduler.start(api.clone());
+        }
 
         // 事件分发任务
-        let dispatch_plugins = plugins.clone();
+        let dispatch_handlers = handlers.clone();
+        let dispatch_api = api.clone();
         tokio::spawn(async move {
             info!("Event dispatch started!");
             while let Some(onebot_event) = self.event_rx.recv().await {
                 let event = Arc::new(Event::new(onebot_event));
-                let plugins = dispatch_plugins.clone();
-                let ctx = ctx.clone();
+                let handlers = dispatch_handlers.clone();
+                let api = dispatch_api.clone();
+
                 tokio::spawn(async move {
-                    for plugin in &*plugins {
-                        if let Err(err) = plugin.call(event.clone(), ctx.clone()).await {
-                            error!("Plugin {} call failed: {}", plugin.meta().name, err)
+                    // 尝试创建消息上下文
+                    let Some(ctx) = Ctx::from_event(event, api) else {
+                        return;
+                    };
+
+                    for h in &*handlers {
+                        if !h.matches(&ctx) {
+                            continue;
+                        }
+
+                        match h.call(ctx.clone()).await {
+                            Ok(block) => {
+                                if block {
+                                    break; // 返回 true 表示阻止后续处理
+                                }
+                            }
+                            Err(err) => {
+                                error!("Handler {} failed: {}", h.name, err);
+                            }
                         }
                     }
                 });
