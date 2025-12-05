@@ -12,8 +12,8 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
-    connection::BotConnection,
     core::{
+        Driver,
         cron::CronScheduler,
         ctx::Ctx,
         plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
@@ -21,14 +21,14 @@ use crate::{
     onebot::{api::Api, model::OneBotEvent},
 };
 
-pub mod connection;
 pub mod core;
 pub mod onebot;
+pub mod prelude;
 
 pub struct AyiouBot {
     plugin_manager: PluginManager,
     cron_scheduler: Option<CronScheduler>,
-    connection: Option<BotConnection>,
+    driver: Option<Driver>,
     api: Option<Api>,
     event_tx: mpsc::Sender<OneBotEvent>,
     event_rx: mpsc::Receiver<OneBotEvent>,
@@ -46,7 +46,7 @@ impl AyiouBot {
         Self {
             plugin_manager: PluginManager::new(),
             cron_scheduler: None,
-            connection: None,
+            driver: None,
             api: None,
             event_tx,
             event_rx,
@@ -80,8 +80,7 @@ impl AyiouBot {
     pub fn connect(mut self, url: &str) -> Self {
         info!("Connecting to bot at {}", url);
         let (api_tx, api_rx) = mpsc::channel(100);
-        let conn = BotConnection::new(url.to_string(), self.event_tx.clone(), api_rx);
-        self.connection = Some(conn);
+        self.driver = Some(Driver::new(url.to_string(), self.event_tx.clone(), api_rx));
         self.api = Some(Api::new(api_tx));
         self
     }
@@ -125,7 +124,7 @@ impl AyiouBot {
         });
 
         // 启动连接
-        if let Some(conn) = self.connection {
+        if let Some(conn) = self.driver {
             tokio::spawn(async move {
                 if let Err(err) = conn.run().await {
                     error!("Connection error: {}", err);

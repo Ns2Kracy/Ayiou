@@ -6,20 +6,19 @@ use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message as TungsteniteMessage,
 };
 use tracing::{info, warn};
-use url::Url;
 
 use crate::onebot::model::{Message, MessageEvent, MessageSegment, OneBotEvent};
 
 type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>, TungsteniteMessage>;
 
 /// 代表一个到 OneBot v11 服务端的连接
-pub struct BotConnection {
-    url: Url,
+pub struct Driver {
+    url: url::Url,
     api_rx: mpsc::Receiver<String>,
     event_tx: mpsc::Sender<OneBotEvent>,
 }
 
-impl BotConnection {
+impl Driver {
     /// 创建一个新的 BotConnection
     pub fn new(
         url: String,
@@ -27,7 +26,7 @@ impl BotConnection {
         api_rx: mpsc::Receiver<String>,
     ) -> Self {
         Self {
-            url: Url::parse(&url).expect("Invalid WebSocket URL"),
+            url: url::Url::parse(&url).expect("Invalid WebSocket URL"),
             api_rx,
             event_tx,
         }
@@ -71,8 +70,10 @@ impl BotConnection {
         if let TungsteniteMessage::Text(text) = msg {
             match serde_json::from_str::<OneBotEvent>(&text) {
                 Ok(mut event) => {
-                    // Process message content if it's a message event
                     if let OneBotEvent::Message(msg_event) = &mut event {
+                        info!("{}", Self::format_message_event_for_log(msg_event));
+
+                        // Process message content for plugins
                         match &mut **msg_event {
                             MessageEvent::Private(p) => {
                                 Self::process_message_content(&mut p.message);
@@ -96,6 +97,25 @@ impl BotConnection {
     async fn write_ws_message(&self, sink: &mut WsSink, msg: String) -> Result<()> {
         sink.send(TungsteniteMessage::Text(msg.into())).await?;
         Ok(())
+    }
+
+    fn format_message_event_for_log(msg_event: &MessageEvent) -> String {
+        match msg_event {
+            MessageEvent::Private(p) => {
+                format!(
+                    "接收 <- 私聊 [{}({})] {:?}",
+                    &p.sender.nickname, p.user_id, p.message
+                )
+            }
+            MessageEvent::Group(g) => {
+                let sender_name = g.sender.card.as_deref().unwrap_or(&g.sender.nickname);
+
+                format!(
+                    "接收 <- 群聊 [{}] [{}({})] {:?}",
+                    g.group_id, sender_name, g.user_id, g.message
+                )
+            }
+        }
     }
 
     // Helper function to process message content
