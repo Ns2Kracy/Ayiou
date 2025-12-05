@@ -82,7 +82,6 @@ impl Driver {
                                 Self::process_message_content(&mut g.message);
                             }
                         }
-                        info!("Processed message event: {:?}", event);
                     }
                     self.event_tx.send(event).await?;
                 }
@@ -104,7 +103,7 @@ impl Driver {
             MessageEvent::Private(p) => {
                 format!(
                     "接收 <- 私聊 [{}({})] {:?}",
-                    &p.sender.nickname, p.user_id, p.message
+                    &p.sender.nickname, p.user_id, p.raw_message
                 )
             }
             MessageEvent::Group(g) => {
@@ -112,7 +111,7 @@ impl Driver {
 
                 format!(
                     "接收 <- 群聊 [{}] [{}({})] {:?}",
-                    g.group_id, sender_name, g.user_id, g.message
+                    g.group_id, sender_name, g.user_id, g.raw_message
                 )
             }
         }
