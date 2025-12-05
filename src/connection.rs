@@ -1,9 +1,9 @@
 use anyhow::Result;
-use futures_util::{stream::SplitSink, SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, stream::SplitSink};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
-    connect_async, tungstenite::Message as TungsteniteMessage, MaybeTlsStream, WebSocketStream,
+    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message as TungsteniteMessage,
 };
 use tracing::{info, warn};
 use url::Url;
