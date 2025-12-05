@@ -6,4 +6,4 @@ pub mod plugin;
 
 pub use cron::{CronBuilder, CronJob, CronScheduler, CronTask, cron};
 pub use ctx::Ctx;
-pub use plugin::{Plugin, PluginManager, PluginMetadata};
+pub use plugin::{Dispatcher, Plugin, PluginManager, PluginMetadata};

@@ -8,7 +8,7 @@ use crate::{
     core::{
         cron::CronScheduler,
         ctx::Ctx,
-        plugin::{Plugin, PluginManager},
+        plugin::{Dispatcher, Plugin, PluginManager},
     },
     onebot::{api::Api, model::OneBotEvent},
 };
@@ -46,30 +46,18 @@ impl AyiouBot {
     }
 
     /// 注册插件（实现 Plugin trait 即可）
-    pub fn plugin<P: Plugin>(self, plugin: P) -> Self {
-        let meta = plugin.meta();
-        info!("Loaded plugin: {} v{}", meta.name, meta.version);
-        // 同步注册（构建阶段）
-        let plugins = self.plugin_manager.plugins();
-        futures::executor::block_on(async {
-            plugins.write().await.push(Box::new(plugin));
-        });
+    pub fn plugin<P: Plugin>(mut self, plugin: P) -> Self {
+        self.plugin_manager.register(plugin);
         self
     }
 
-    pub fn plugins<P: Plugin>(self, plugins: Vec<P>) -> Self {
-        for plugin in plugins {
-            let meta = plugin.meta();
-            info!("Loaded plugin: {} v{}", meta.name, meta.version);
-            let storage = self.plugin_manager.plugins();
-            futures::executor::block_on(async {
-                storage.write().await.push(Box::new(plugin));
-            });
-        }
+    /// 批量注册插件
+    pub fn plugins<P: Plugin>(mut self, plugins: impl IntoIterator<Item = P>) -> Self {
+        self.plugin_manager.register_all(plugins);
         self
     }
 
-    /// 获取插件管理器（用于运行时动态管理插件）
+    /// 获取插件管理器
     pub fn plugin_manager(&self) -> &PluginManager {
         &self.plugin_manager
     }
@@ -92,10 +80,14 @@ impl AyiouBot {
 
     /// 启动 Bot
     pub async fn run(mut self) {
-        let plugin_manager = self.plugin_manager.clone();
         let Some(api) = self.api.clone() else {
             panic!("Bot is not connected, please call .connect() before .run()");
         };
+
+        // 构建插件快照，创建分发器
+        let plugins = self.plugin_manager.build();
+        let dispatcher = Dispatcher::new(plugins);
+        info!("Loaded {} plugins", self.plugin_manager.count());
 
         // 启动 Cron 调度器
         if let Some(scheduler) = self.cron_scheduler {
@@ -108,16 +100,16 @@ impl AyiouBot {
             info!("Event dispatch started!");
             while let Some(onebot_event) = self.event_rx.recv().await {
                 let event = Arc::new(onebot_event);
-                let pm = plugin_manager.clone();
+                let dispatcher = dispatcher.clone();
                 let api = dispatch_api.clone();
 
+                // 每个事件独立 spawn，不阻塞接收
                 tokio::spawn(async move {
-                    // 尝试创建消息上下文
-                    let Some(ctx) = Ctx::from_event(event, api) else {
+                    let Some(ctx) = Ctx::new(event, api) else {
                         return;
                     };
 
-                    if let Err(err) = pm.dispatch(ctx).await {
+                    if let Err(err) = dispatcher.dispatch(&ctx).await {
                         error!("Plugin dispatch error: {}", err);
                     }
                 });
