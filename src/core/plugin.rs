@@ -63,6 +63,8 @@ pub trait Plugin: Send + Sync + 'static {
     async fn handle(&self, ctx: Ctx) -> Result<bool>;
 }
 
+pub type PluginBox = Box<dyn Plugin>;
+
 // ============================================================================
 // PluginManager - 插件管理器（无锁设计）
 // ============================================================================
@@ -105,10 +107,15 @@ impl PluginManager {
         self.pending.push(Arc::new(plugin));
     }
 
-    /// 批量注册插件
-    pub fn register_all<P: Plugin>(&mut self, plugins: impl IntoIterator<Item = P>) {
+    /// 批量注册插件（支持不同类型的插件）
+    pub fn register_all(&mut self, plugins: impl IntoIterator<Item = PluginBox>) {
         for plugin in plugins {
-            self.register(plugin);
+            let meta = plugin.meta();
+            info!(
+                "Registering plugin: {} v{} - {}",
+                meta.name, meta.version, meta.description
+            );
+            self.pending.push(Arc::from(plugin));
         }
     }
 

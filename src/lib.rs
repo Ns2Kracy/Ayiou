@@ -1,5 +1,13 @@
 use std::sync::Arc;
 
+/// 批量创建插件列表的宏，自动装箱为 `PluginBox`
+#[macro_export]
+macro_rules! plugins {
+    ($($plugin:expr),* $(,)?) => {
+        vec![$(Box::new($plugin) as $crate::core::plugin::PluginBox),*]
+    };
+}
+
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -8,7 +16,7 @@ use crate::{
     core::{
         cron::CronScheduler,
         ctx::Ctx,
-        plugin::{Dispatcher, Plugin, PluginManager},
+        plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
     },
     onebot::{api::Api, model::OneBotEvent},
 };
@@ -46,13 +54,13 @@ impl AyiouBot {
     }
 
     /// 注册插件（实现 Plugin trait 即可）
-    pub fn plugin<P: Plugin>(mut self, plugin: P) -> Self {
+    pub fn reegister_plugin<P: Plugin>(mut self, plugin: P) -> Self {
         self.plugin_manager.register(plugin);
         self
     }
 
-    /// 批量注册插件
-    pub fn plugins<P: Plugin>(mut self, plugins: impl IntoIterator<Item = P>) -> Self {
+    /// 批量注册插件（支持不同类型的插件）
+    pub fn reegister_plugins(mut self, plugins: impl IntoIterator<Item = PluginBox>) -> Self {
         self.plugin_manager.register_all(plugins);
         self
     }
