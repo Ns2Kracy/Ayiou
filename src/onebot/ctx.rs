@@ -2,25 +2,31 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::{
-    core::message::MsgEvent,
-    onebot::{
-        api::Api,
-        model::{Message, MessageEvent, MessageSegment, OneBotEvent},
+use crate::onebot::{
+    bot::Bot,
+    model::{
+        GroupMessageEvent, Message, MessageEvent, MessageSegment, OneBotEvent, PrivateMessageEvent,
     },
 };
 
-/// 消息上下文（所有字段都是 Arc，clone 零成本）
+/// Message event type
+#[derive(Clone)]
+pub enum MsgEvent {
+    Private(Arc<PrivateMessageEvent>),
+    Group(Arc<GroupMessageEvent>),
+}
+
+/// Message context
 #[derive(Clone)]
 pub struct Ctx {
-    api: Api,
+    bot: Bot,
     event: Arc<OneBotEvent>,
     msg: MsgEvent,
 }
 
 impl Ctx {
-    /// 从 OneBot 事件创建上下文
-    pub(crate) fn new(event: Arc<OneBotEvent>, api: Api) -> Option<Self> {
+    /// Create context from OneBot event
+    pub fn new(event: Arc<OneBotEvent>, bot: Bot) -> Option<Self> {
         let OneBotEvent::Message(msg_event) = event.as_ref() else {
             return None;
         };
@@ -30,16 +36,22 @@ impl Ctx {
             MessageEvent::Group(g) => MsgEvent::Group(Arc::new(g.clone())),
         };
 
-        Some(Self { api, event, msg })
+        Some(Self { bot, event, msg })
     }
 
-    /// 获取 API 引用
+    /// Get the underlying Bot for direct API calls
     #[inline]
-    pub fn api(&self) -> &Api {
-        &self.api
+    pub fn bot(&self) -> &Bot {
+        &self.bot
     }
 
-    /// 消息文本（提取纯文本内容）
+    /// Get raw OneBot event
+    #[inline]
+    pub fn event(&self) -> &OneBotEvent {
+        &self.event
+    }
+
+    /// Get plain text from message
     pub fn text(&self) -> String {
         let message = match &self.msg {
             MsgEvent::Private(p) => &p.message,
@@ -64,7 +76,7 @@ impl Ctx {
         }
     }
 
-    /// 原始消息
+    /// Raw message string
     #[inline]
     pub fn raw_message(&self) -> &str {
         match &self.msg {
@@ -73,7 +85,7 @@ impl Ctx {
         }
     }
 
-    /// 发送者 ID
+    /// Sender user ID
     #[inline]
     pub fn user_id(&self) -> i64 {
         match &self.msg {
@@ -82,7 +94,7 @@ impl Ctx {
         }
     }
 
-    /// 群 ID（私聊返回 None）
+    /// Group ID (None for private messages)
     #[inline]
     pub fn group_id(&self) -> Option<i64> {
         match &self.msg {
@@ -91,19 +103,19 @@ impl Ctx {
         }
     }
 
-    /// 是否私聊
+    /// Check if private message
     #[inline]
     pub fn is_private(&self) -> bool {
         matches!(self.msg, MsgEvent::Private(_))
     }
 
-    /// 是否群聊
+    /// Check if group message
     #[inline]
     pub fn is_group(&self) -> bool {
         matches!(self.msg, MsgEvent::Group(_))
     }
 
-    /// 发送者昵称
+    /// Sender nickname
     #[inline]
     pub fn nickname(&self) -> &str {
         match &self.msg {
@@ -112,24 +124,22 @@ impl Ctx {
         }
     }
 
-    /// 回复消息
+    /// Reply with message
     pub async fn reply(&self, message: impl Into<Message>) -> Result<()> {
         let msg = message.into();
         match &self.msg {
-            MsgEvent::Private(p) => self.api.send_private_msg(p.user_id, &msg).await?,
-            MsgEvent::Group(g) => self.api.send_group_msg(g.group_id, &msg).await?,
+            MsgEvent::Private(p) => {
+                self.bot.send_private_msg(p.user_id, &msg).await?;
+            }
+            MsgEvent::Group(g) => {
+                self.bot.send_group_msg(g.group_id, &msg).await?;
+            }
         };
         Ok(())
     }
 
-    /// 回复文本
+    /// Reply with text
     pub async fn reply_text(&self, text: impl Into<String>) -> Result<()> {
         self.reply(Message::String(text.into())).await
-    }
-
-    /// 原始事件
-    #[inline]
-    pub fn event(&self) -> &OneBotEvent {
-        &self.event
     }
 }

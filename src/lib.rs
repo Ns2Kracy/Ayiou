@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-/// 批量创建插件列表的宏，自动装箱为 `PluginBox`
+/// Macro to create a list of plugins, auto-boxed as `PluginBox`
 #[macro_export]
 macro_rules! plugins {
     ($($plugin:expr),* $(,)?) => {
@@ -13,12 +13,15 @@ use tracing::{error, info};
 
 use crate::{
     core::{
-        Driver,
+        Adapter,
         cron::CronScheduler,
-        ctx::Ctx,
         plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
     },
-    onebot::{api::Api, model::OneBotEvent},
+    onebot::{
+        adapter::{OneBotAdapterBuilder, OneBotMessage},
+        bot::Bot,
+        ctx::Ctx,
+    },
 };
 
 pub mod core;
@@ -28,10 +31,10 @@ pub mod prelude;
 pub struct AyiouBot {
     plugin_manager: PluginManager,
     cron_scheduler: Option<CronScheduler>,
-    driver: Option<Driver>,
-    api: Option<Api>,
-    event_tx: mpsc::Sender<OneBotEvent>,
-    event_rx: mpsc::Receiver<OneBotEvent>,
+    adapter: Option<Box<dyn Adapter<Bot = Bot>>>,
+    bot: Option<Bot>,
+    event_tx: mpsc::Sender<OneBotMessage>,
+    event_rx: mpsc::Receiver<OneBotMessage>,
 }
 
 impl Default for AyiouBot {
@@ -46,73 +49,92 @@ impl AyiouBot {
         Self {
             plugin_manager: PluginManager::new(),
             cron_scheduler: None,
-            driver: None,
-            api: None,
+            adapter: None,
+            bot: None,
             event_tx,
             event_rx,
         }
     }
 
-    /// 注册插件（实现 Plugin trait 即可）
-    pub fn reegister_plugin<P: Plugin>(mut self, plugin: P) -> Self {
+    /// Register a plugin
+    pub fn register_plugin<P: Plugin>(mut self, plugin: P) -> Self {
         self.plugin_manager.register(plugin);
         self
     }
 
-    /// 批量注册插件（支持不同类型的插件）
-    pub fn reegister_plugins(mut self, plugins: impl IntoIterator<Item = PluginBox>) -> Self {
+    /// Register multiple plugins
+    pub fn register_plugins(mut self, plugins: impl IntoIterator<Item = PluginBox>) -> Self {
         self.plugin_manager.register_all(plugins);
         self
     }
 
-    /// 获取插件管理器
+    /// Get plugin manager
     pub fn plugin_manager(&self) -> &PluginManager {
         &self.plugin_manager
     }
 
-    /// 注册 Cron 定时任务调度器
+    /// Register cron scheduler
     pub fn cron(mut self, scheduler: CronScheduler) -> Self {
         self.cron_scheduler = Some(scheduler);
         self
     }
 
-    /// 注册一个 OneBot v11 连接
-    pub fn connect(mut self, url: &str) -> Self {
-        info!("Connecting to bot at {}", url);
-        let (api_tx, api_rx) = mpsc::channel(100);
-        self.driver = Some(Driver::new(url.to_string(), self.event_tx.clone(), api_rx));
-        self.api = Some(Api::new(api_tx));
+    /// Register an adapter (e.g., OneBot, Satori)
+    ///
+    /// Example:
+    /// ```ignore
+    /// .adapter(OneBotAdapterBuilder::new().ws("ws://..."))
+    /// ```
+    pub fn adapter(mut self, builder: OneBotAdapterBuilder) -> Self {
+        info!("Registering adapter");
+
+        let connection = builder.build(self.event_tx.clone());
+        let bot = connection.bot();
+
+        self.adapter = Some(Box::new(connection));
+        self.bot = Some(bot);
         self
     }
 
-    /// 启动 Bot
+    /// Start the bot
     pub async fn run(mut self) {
-        let Some(api) = self.api.clone() else {
+        let Some(bot) = self.bot.clone() else {
             panic!("Bot is not connected, please call .connect() before .run()");
         };
 
-        // 构建插件快照，创建分发器
         let plugins = self.plugin_manager.build();
         let dispatcher = Dispatcher::new(plugins);
         info!("Loaded {} plugins", self.plugin_manager.count());
 
-        // 启动 Cron 调度器
+        // Start cron scheduler
         if let Some(scheduler) = self.cron_scheduler {
-            scheduler.start(api.clone());
+            scheduler.start(bot.clone());
         }
 
-        // 事件分发任务
-        let dispatch_api = api.clone();
+        // Start adapter (includes driver)
+        if let Some(adapter) = self.adapter {
+            tokio::spawn(async move {
+                if let Err(e) = adapter.run().await {
+                    error!("Adapter error: {}", e);
+                }
+            });
+        }
+
+        // Event dispatch task
+        let dispatch_bot = bot.clone();
         tokio::spawn(async move {
             info!("Event dispatch started!");
-            while let Some(onebot_event) = self.event_rx.recv().await {
+            while let Some(msg) = self.event_rx.recv().await {
+                let OneBotMessage::Event(onebot_event) = msg else {
+                    continue;
+                };
+
                 let event = Arc::new(onebot_event);
                 let dispatcher = dispatcher.clone();
-                let api = dispatch_api.clone();
+                let bot = dispatch_bot.clone();
 
-                // 每个事件独立 spawn，不阻塞接收
                 tokio::spawn(async move {
-                    let Some(ctx) = Ctx::new(event, api) else {
+                    let Some(ctx) = Ctx::new(event, bot) else {
                         return;
                     };
 
@@ -122,15 +144,6 @@ impl AyiouBot {
                 });
             }
         });
-
-        // 启动连接
-        if let Some(conn) = self.driver {
-            tokio::spawn(async move {
-                if let Err(err) = conn.run().await {
-                    error!("Connection error: {}", err);
-                }
-            });
-        }
 
         info!("Ayiou is running, press Ctrl+C to exit.");
         tokio::signal::ctrl_c().await.unwrap();

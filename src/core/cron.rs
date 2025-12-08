@@ -4,23 +4,23 @@ use cron::Schedule;
 use std::{future::Future, pin::Pin, str::FromStr};
 use tokio::time::{Duration, sleep};
 
-use crate::onebot::api::Api;
+use crate::onebot::bot::Bot;
 
-/// 类型擦除的 Future
+/// Type-erased future
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Cron 任务 trait
+/// Cron task trait
 pub trait CronTask: Send + Sync + 'static {
-    /// 任务名称
+    /// Task name
     fn name(&self) -> &str {
         "unnamed"
     }
 
-    /// 执行任务
-    fn run(&self, api: Api) -> BoxFuture<'static, Result<()>>;
+    /// Execute task
+    fn run(&self, api: Bot) -> BoxFuture<'static, Result<()>>;
 }
 
-/// Cron 任务包装器
+/// Cron job wrapper
 pub struct CronJob {
     schedule: Schedule,
     task: Box<dyn CronTask>,
@@ -39,8 +39,8 @@ impl CronJob {
         self.task.name()
     }
 
-    /// 启动 cron 任务循环
-    pub async fn start(self, api: Api) {
+    /// Start cron task loop
+    pub async fn start(self, api: Bot) {
         let name = self.task.name().to_string();
         tracing::info!("Starting cron task: {}", name);
 
@@ -61,7 +61,7 @@ impl CronJob {
     }
 }
 
-/// 从闭包创建 Cron 任务的包装器
+/// Cron task wrapper created from closure
 pub struct CronHandler<F> {
     name: String,
     handler: F,
@@ -69,19 +69,19 @@ pub struct CronHandler<F> {
 
 impl<F, Fut> CronTask for CronHandler<F>
 where
-    F: Fn(Api) -> Fut + Send + Sync + 'static,
+    F: Fn(Bot) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
     fn name(&self) -> &str {
         &self.name
     }
 
-    fn run(&self, api: Api) -> BoxFuture<'static, Result<()>> {
+    fn run(&self, api: Bot) -> BoxFuture<'static, Result<()>> {
         Box::pin((self.handler)(api))
     }
 }
 
-/// Cron 任务构建器
+/// Cron task builder
 pub struct CronBuilder<F> {
     cron_expr: String,
     name: String,
@@ -90,7 +90,7 @@ pub struct CronBuilder<F> {
 
 impl<F, Fut> CronBuilder<F>
 where
-    F: Fn(Api) -> Fut + Send + Sync + 'static,
+    F: Fn(Bot) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
     pub fn new(cron_expr: impl Into<String>, handler: F) -> Self {
@@ -115,13 +115,13 @@ where
     }
 }
 
-/// 创建 Cron 任务构建器
+/// Create a cron task builder
 ///
 /// # Example
 /// ```ignore
 /// let job = cron("0 * * * * *", |api| async move {
-///     // 每分钟执行一次
-///     api.send_group_msg(123456, &Message::String("定时消息".into())).await?;
+///     // Runs every minute
+///     api.send_group_msg(123456, &Message::String("Scheduled message".into())).await?;
 ///     Ok(())
 /// })
 /// .name("heartbeat")
@@ -129,13 +129,13 @@ where
 /// ```
 pub fn cron<F, Fut>(cron_expr: impl Into<String>, handler: F) -> CronBuilder<F>
 where
-    F: Fn(Api) -> Fut + Send + Sync + 'static,
+    F: Fn(Bot) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
     CronBuilder::new(cron_expr, handler)
 }
 
-/// Cron 任务管理器
+/// Cron task scheduler
 pub struct CronScheduler {
     jobs: Vec<CronJob>,
 }
@@ -145,15 +145,15 @@ impl CronScheduler {
         Self { jobs: vec![] }
     }
 
-    /// 添加 cron 任务
+    /// Add a cron job
     pub fn job(mut self, job: CronJob) -> Self {
         tracing::info!("Registered cron task: {}", job.name());
         self.jobs.push(job);
         self
     }
 
-    /// 启动所有 cron 任务
-    pub fn start(self, api: Api) {
+    /// Start all cron jobs
+    pub fn start(self, api: Bot) {
         for job in self.jobs {
             let api = api.clone();
             tokio::spawn(async move {

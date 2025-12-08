@@ -99,6 +99,47 @@ pub enum MessageSegment {
     Json { data: String },
 }
 
+impl MessageSegment {
+    /// Write preview text into buffer to avoid extra allocations
+    pub fn write_preview(&self, buf: &mut String) {
+        use std::fmt::Write;
+        match self {
+            MessageSegment::Text { text } => buf.push_str(text),
+            MessageSegment::Face { id } => {
+                let _ = write!(buf, "[表情:{}]", id);
+            }
+            MessageSegment::Image { .. } => buf.push_str("[图片]"),
+            MessageSegment::Record { .. } => buf.push_str("[语音]"),
+            MessageSegment::Video { .. } => buf.push_str("[视频]"),
+            MessageSegment::At { qq } => {
+                let _ = write!(buf, "[@{}]", qq);
+            }
+            MessageSegment::Rps => buf.push_str("[猜拳]"),
+            MessageSegment::Dice => buf.push_str("[骰子]"),
+            MessageSegment::Shake => buf.push_str("[戳一戳]"),
+            MessageSegment::Poke { .. } => buf.push_str("[戳一戳]"),
+            MessageSegment::Anonymous => buf.push_str("[匿名]"),
+            MessageSegment::Share { title, .. } => {
+                let _ = write!(buf, "[分享:{}]", title);
+            }
+            MessageSegment::Contact { contact_type, id } => {
+                let _ = write!(buf, "[推荐{}:{}]", contact_type, id);
+            }
+            MessageSegment::Location { .. } => buf.push_str("[位置]"),
+            MessageSegment::Music { music_type, .. } => {
+                let _ = write!(buf, "[音乐:{}]", music_type);
+            }
+            MessageSegment::Reply { id } => {
+                let _ = write!(buf, "[回复:{}]", id);
+            }
+            MessageSegment::Forward { .. } => buf.push_str("[转发消息]"),
+            MessageSegment::Node { .. } => buf.push_str("[消息节点]"),
+            MessageSegment::Xml { .. } => buf.push_str("[XML消息]"),
+            MessageSegment::Json { .. } => buf.push_str("[JSON消息]"),
+        }
+    }
+}
+
 // Event
 
 #[derive(Debug, Clone, Deserialize)]
@@ -170,8 +211,19 @@ pub enum NoticeEvent {
     GroupRecall(GroupRecallNoticeEvent),
     #[serde(rename = "friend_recall")]
     FriendRecall(FriendRecallNoticeEvent),
+    #[serde(rename = "group_card")]
+    GroupCard(GroupCardNoticeEvent),
+    #[serde(rename = "offline_file")]
+    OfflineFile(OfflineFileNoticeEvent),
+    #[serde(rename = "client_status")]
+    ClientStatus(ClientStatusNoticeEvent),
+    #[serde(rename = "essence")]
+    Essence(EssenceNoticeEvent),
     #[serde(rename = "notify")]
     Notify(NotifyEvent),
+    /// Unknown notice types (extensions like group_msg_emoji_like)
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -257,6 +309,11 @@ pub enum NotifyEvent {
     LuckyKing(LuckyKingNotifyEvent),
     #[serde(rename = "honor")]
     Honor(HonorNotifyEvent),
+    #[serde(rename = "title")]
+    Title(TitleNotifyEvent),
+    /// Unknown notify sub_types
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -284,6 +341,71 @@ pub struct HonorNotifyEvent {
     pub group_id: i64,
     pub honor_type: String, // "talkative", "performer", "emotion"
     pub user_id: i64,
+}
+
+/// Group title change notification
+#[derive(Debug, Clone, Deserialize)]
+pub struct TitleNotifyEvent {
+    pub time: i64,
+    pub self_id: i64,
+    pub group_id: i64,
+    pub user_id: i64,
+    pub title: String,
+}
+
+/// Group card (nickname) change notification (extension)
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupCardNoticeEvent {
+    pub time: i64,
+    pub self_id: i64,
+    pub group_id: i64,
+    pub user_id: i64,
+    pub card_new: String,
+    pub card_old: String,
+}
+
+/// Offline file received notification (extension)
+#[derive(Debug, Clone, Deserialize)]
+pub struct OfflineFileNoticeEvent {
+    pub time: i64,
+    pub self_id: i64,
+    pub user_id: i64,
+    pub file: OfflineFile,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OfflineFile {
+    pub name: String,
+    pub size: i64,
+    pub url: String,
+}
+
+/// Client status change notification (extension)
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClientStatusNoticeEvent {
+    pub time: i64,
+    pub self_id: i64,
+    pub online: bool,
+    pub client: ClientDevice,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClientDevice {
+    pub app_id: i64,
+    pub device_name: String,
+    pub device_kind: String,
+}
+
+/// Essence message notification (extension)
+#[derive(Debug, Clone, Deserialize)]
+pub struct EssenceNoticeEvent {
+    pub time: i64,
+    pub self_id: i64,
+    pub sub_type: String, // "add", "delete"
+    pub group_id: i64,
+    pub sender_id: i64,
+    pub operator_id: i64,
+    pub message_id: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
