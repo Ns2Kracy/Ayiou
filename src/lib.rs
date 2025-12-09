@@ -12,29 +12,21 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
-    core::{
-        Adapter,
-        cron::CronScheduler,
-        plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
-    },
-    onebot::{
-        adapter::{OneBotAdapterBuilder, OneBotMessage},
-        bot::Bot,
-        ctx::Ctx,
-    },
+    adapter::onebot::v11::{adapter::OneBotV11Adapter, api::Api, ctx::Ctx, model::OneBotEvent},
+    core::plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
 };
 
+pub mod adapter;
 pub mod core;
-pub mod onebot;
+pub mod driver;
 pub mod prelude;
 
 pub struct AyiouBot {
     plugin_manager: PluginManager,
-    cron_scheduler: Option<CronScheduler>,
-    adapter: Option<Box<dyn Adapter<Bot = Bot>>>,
-    bot: Option<Bot>,
-    event_tx: mpsc::Sender<OneBotMessage>,
-    event_rx: mpsc::Receiver<OneBotMessage>,
+    adapter: Option<OneBotV11Adapter>,
+    api: Option<Api>,
+    event_tx: mpsc::Sender<OneBotEvent>,
+    event_rx: mpsc::Receiver<OneBotEvent>,
 }
 
 impl Default for AyiouBot {
@@ -48,9 +40,8 @@ impl AyiouBot {
         let (event_tx, event_rx) = mpsc::channel(100);
         Self {
             plugin_manager: PluginManager::new(),
-            cron_scheduler: None,
             adapter: None,
-            bot: None,
+            api: None,
             event_tx,
             event_rx,
         }
@@ -73,32 +64,24 @@ impl AyiouBot {
         &self.plugin_manager
     }
 
-    /// Register cron scheduler
-    pub fn cron(mut self, scheduler: CronScheduler) -> Self {
-        self.cron_scheduler = Some(scheduler);
-        self
-    }
-
-    /// Register an adapter (e.g., OneBot, Satori)
+    /// Connect to OneBot via WebSocket
     ///
     /// Example:
     /// ```ignore
-    /// .adapter(OneBotAdapterBuilder::new().ws("ws://..."))
+    /// AyiouBot::new().connect("ws://127.0.0.1:6700")
     /// ```
-    pub fn adapter(mut self, builder: OneBotAdapterBuilder) -> Self {
-        info!("Registering adapter");
-
-        let connection = builder.build(self.event_tx.clone());
-        let bot = connection.bot();
-
-        self.adapter = Some(Box::new(connection));
-        self.bot = Some(bot);
+    pub fn connect(mut self, url: impl Into<String>) -> Self {
+        info!("Connecting to OneBot via WebSocket");
+        let mut adapter = OneBotV11Adapter::ws(url);
+        let api = adapter.connect(self.event_tx.clone());
+        self.adapter = Some(adapter);
+        self.api = Some(api);
         self
     }
 
-    /// Start the bot
+    /// Start the api
     pub async fn run(mut self) {
-        let Some(bot) = self.bot.clone() else {
+        let Some(api) = self.api.clone() else {
             panic!("Bot is not connected, please call .connect() before .run()");
         };
 
@@ -106,13 +89,8 @@ impl AyiouBot {
         let dispatcher = Dispatcher::new(plugins);
         info!("Loaded {} plugins", self.plugin_manager.count());
 
-        // Start cron scheduler
-        if let Some(scheduler) = self.cron_scheduler {
-            scheduler.start(bot.clone());
-        }
-
         // Start adapter (includes driver)
-        if let Some(adapter) = self.adapter {
+        if let Some(adapter) = self.adapter.take() {
             tokio::spawn(async move {
                 if let Err(e) = adapter.run().await {
                     error!("Adapter error: {}", e);
@@ -121,20 +99,16 @@ impl AyiouBot {
         }
 
         // Event dispatch task
-        let dispatch_bot = bot.clone();
+        let dispatch_api = api.clone();
         tokio::spawn(async move {
             info!("Event dispatch started!");
             while let Some(msg) = self.event_rx.recv().await {
-                let OneBotMessage::Event(onebot_event) = msg else {
-                    continue;
-                };
-
-                let event = Arc::new(onebot_event);
+                let event = Arc::new(msg);
                 let dispatcher = dispatcher.clone();
-                let bot = dispatch_bot.clone();
+                let api = dispatch_api.clone();
 
                 tokio::spawn(async move {
-                    let Some(ctx) = Ctx::new(event, bot) else {
+                    let Some(ctx) = Ctx::new(event, api) else {
                         return;
                     };
 

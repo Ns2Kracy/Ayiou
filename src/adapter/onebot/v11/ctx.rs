@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::onebot::{
-    bot::Bot,
+use crate::adapter::onebot::v11::{
+    api::Api,
     model::{
         GroupMessageEvent, Message, MessageEvent, MessageSegment, OneBotEvent, PrivateMessageEvent,
     },
@@ -19,14 +19,14 @@ pub enum MsgEvent {
 /// Message context
 #[derive(Clone)]
 pub struct Ctx {
-    bot: Bot,
+    api: Api,
     event: Arc<OneBotEvent>,
     msg: MsgEvent,
 }
 
 impl Ctx {
     /// Create context from OneBot event
-    pub fn new(event: Arc<OneBotEvent>, bot: Bot) -> Option<Self> {
+    pub fn new(event: Arc<OneBotEvent>, api: Api) -> Option<Self> {
         let OneBotEvent::Message(msg_event) = event.as_ref() else {
             return None;
         };
@@ -36,13 +36,13 @@ impl Ctx {
             MessageEvent::Group(g) => MsgEvent::Group(Arc::new(g.clone())),
         };
 
-        Some(Self { bot, event, msg })
+        Some(Self { api, event, msg })
     }
 
     /// Get the underlying Bot for direct API calls
     #[inline]
-    pub fn bot(&self) -> &Bot {
-        &self.bot
+    pub fn api(&self) -> &Api {
+        &self.api
     }
 
     /// Get raw OneBot event
@@ -129,10 +129,10 @@ impl Ctx {
         let msg = message.into();
         match &self.msg {
             MsgEvent::Private(p) => {
-                self.bot.send_private_msg(p.user_id, &msg).await?;
+                self.api.send_private_msg(p.user_id, &msg).await?;
             }
             MsgEvent::Group(g) => {
-                self.bot.send_group_msg(g.group_id, &msg).await?;
+                self.api.send_group_msg(g.group_id, &msg).await?;
             }
         };
         Ok(())

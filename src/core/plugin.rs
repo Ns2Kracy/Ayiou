@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 
-use crate::onebot::ctx::Ctx;
+use crate::adapter::onebot::v11::ctx::Ctx;
 
 // ============================================================================
 // Metadata
