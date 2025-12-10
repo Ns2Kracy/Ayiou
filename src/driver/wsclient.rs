@@ -9,27 +9,19 @@ use url::Url;
 
 use crate::core::Driver;
 
-/// Raw transport message
-#[derive(Debug)]
-pub enum RawMessage {
-    Text(String),
-    Binary(Vec<u8>),
-    Close,
-}
-
 /// WebSocket driver
 ///
 /// Pure transport layer, no protocol parsing
 pub struct WsDriver {
     url: Url,
     outgoing_rx: mpsc::Receiver<String>,
-    incoming_tx: mpsc::Sender<RawMessage>,
+    incoming_tx: mpsc::Sender<String>,
 }
 
 impl WsDriver {
     pub fn new(
         url: &str,
-        incoming_tx: mpsc::Sender<RawMessage>,
+        incoming_tx: mpsc::Sender<String>,
         outgoing_rx: mpsc::Receiver<String>,
     ) -> Self {
         Self {
@@ -55,13 +47,18 @@ impl WsDriver {
                         tokio::select! {
                             msg = stream.next() => {
                                 match msg {
-                                    Some(Ok(ws_msg)) => {
-                                        if let Some(raw) = Self::convert(ws_msg) {
-                                            if self.incoming_tx.send(raw).await.is_err() {
-                                                return Ok(());
-                                            }
+                                    Some(Ok(Message::Text(text))) => {
+                                        let payload = text.to_string();
+                                        if self.incoming_tx.send(payload).await.is_err() {
+                                            return Ok(());
                                         }
                                     }
+                                    Some(Ok(Message::Binary(_))) => {
+                                        // ignore binary frames for OneBot
+                                        continue;
+                                    }
+                                    Some(Ok(Message::Close(_))) => break,
+                                    Some(Ok(_)) => continue,
                                     Some(Err(e)) => {
                                         warn!("WebSocket error: {}", e);
                                         break;
@@ -91,15 +88,6 @@ impl WsDriver {
 
             tokio::time::sleep(retry_delay).await;
             retry_delay = (retry_delay * 2).min(max_delay);
-        }
-    }
-
-    fn convert(msg: Message) -> Option<RawMessage> {
-        match msg {
-            Message::Text(t) => Some(RawMessage::Text(t.to_string())),
-            Message::Binary(b) => Some(RawMessage::Binary(b.to_vec())),
-            Message::Close(_) => Some(RawMessage::Close),
-            _ => None,
         }
     }
 }
