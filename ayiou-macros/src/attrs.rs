@@ -1,26 +1,19 @@
-use syn::{Attribute, Expr, Lit, Result};
+use darling::{FromDeriveInput, FromMeta, FromVariant};
 
-/// Command-level attributes (#[command(...)])
-#[derive(Default)]
-pub struct CommandAttrs {
-    pub name: Option<String>,
-    pub prefix: Option<String>,
-    pub rename_rule: Option<RenameRule>,
-    pub description: Option<String>,
-    pub version: Option<String>,
-    pub alias: Option<String>,
-    pub aliases: Vec<String>,
-    pub rename: Option<String>,
-    pub hide: bool,
-}
-
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default, FromMeta)]
 pub enum RenameRule {
+    #[default]
+    #[darling(rename = "lowercase")]
     Lowercase,
+    #[darling(rename = "UPPERCASE")]
     Uppercase,
+    #[darling(rename = "snake_case")]
     SnakeCase,
+    #[darling(rename = "camelCase")]
     CamelCase,
+    #[darling(rename = "PascalCase")]
     PascalCase,
+    #[darling(rename = "kebab-case")]
     KebabCase,
 }
 
@@ -33,18 +26,6 @@ impl RenameRule {
             RenameRule::CamelCase => to_camel_case(name),
             RenameRule::PascalCase => name.to_string(),
             RenameRule::KebabCase => to_kebab_case(name),
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "lowercase" => Some(RenameRule::Lowercase),
-            "UPPERCASE" | "uppercase" => Some(RenameRule::Uppercase),
-            "snake_case" => Some(RenameRule::SnakeCase),
-            "camelCase" => Some(RenameRule::CamelCase),
-            "PascalCase" => Some(RenameRule::PascalCase),
-            "kebab-case" => Some(RenameRule::KebabCase),
-            _ => None,
         }
     }
 }
@@ -81,71 +62,40 @@ fn to_kebab_case(s: &str) -> String {
     to_snake_case(s).replace('_', "-")
 }
 
-impl CommandAttrs {
-    pub fn from_attributes(attrs: &[Attribute]) -> Result<Self> {
-        let mut result = Self::default();
+/// Plugin-level attributes from #[plugin(...)]
+#[derive(Debug, FromDeriveInput)]
+#[darling(attributes(plugin), supports(enum_any))]
+pub struct PluginAttrs {
+    pub ident: syn::Ident,
+    pub data: darling::ast::Data<VariantAttrs, ()>,
 
-        for attr in attrs {
-            let is_plugin = attr.path().is_ident("plugin");
-            let is_command = attr.path().is_ident("command");
-            if !is_plugin && !is_command {
-                continue;
-            }
+    #[darling(default)]
+    pub name: Option<String>,
+    #[darling(default)]
+    pub prefix: Option<String>,
+    #[darling(default)]
+    pub rename_rule: Option<RenameRule>,
+    #[darling(default)]
+    pub description: Option<String>,
+    #[darling(default)]
+    pub version: Option<String>,
+}
 
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("name") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Str(s) = value {
-                        result.name = Some(s.value());
-                    }
-                } else if meta.path.is_ident("prefix") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Str(s) = value {
-                        result.prefix = Some(s.value());
-                    }
-                } else if meta.path.is_ident("rename_rule") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Str(s) = value {
-                        result.rename_rule = RenameRule::from_str(&s.value());
-                    }
-                } else if meta.path.is_ident("description") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Str(s) = value {
-                        result.description = Some(s.value());
-                    }
-                } else if meta.path.is_ident("version") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Str(s) = value {
-                        result.version = Some(s.value());
-                    }
-                } else if meta.path.is_ident("alias") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Str(s) = value {
-                        result.alias = Some(s.value());
-                    }
-                } else if meta.path.is_ident("aliases") {
-                    let value: Expr = meta.value()?.parse()?;
-                    if let Expr::Array(arr) = value {
-                        for elem in arr.elems {
-                            if let Expr::Lit(lit) = elem
-                                && let Lit::Str(s) = lit.lit
-                            {
-                                result.aliases.push(s.value());
-                            }
-                        }
-                    }
-                } else if meta.path.is_ident("rename") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Str(s) = value {
-                        result.rename = Some(s.value());
-                    }
-                } else if meta.path.is_ident("hide") {
-                    result.hide = true;
-                }
-                Ok(())
-            })?;
-        }
+/// Variant-level attributes from #[plugin(...)]
+#[derive(Debug, FromVariant)]
+#[darling(attributes(plugin))]
+pub struct VariantAttrs {
+    pub ident: syn::Ident,
+    pub fields: darling::ast::Fields<syn::Field>,
 
-        Ok(result)
-    }
+    #[darling(default)]
+    pub description: Option<String>,
+    #[darling(default)]
+    pub alias: Option<String>,
+    #[darling(default, multiple)]
+    pub aliases: Vec<String>,
+    #[darling(default)]
+    pub rename: Option<String>,
+    #[darling(default)]
+    pub hide: bool,
 }

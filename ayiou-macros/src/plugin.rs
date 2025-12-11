@@ -1,222 +1,177 @@
+use darling::{FromDeriveInput, ast::Style};
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Result};
+use syn::{DeriveInput, Result};
 
-use crate::attrs::{CommandAttrs, RenameRule};
-
-struct CommandVariant {
-    ident: syn::Ident,
-    command_name: String,
-    description: Option<String>,
-    aliases: Vec<String>,
-    fields: Fields,
-    hide: bool,
-}
+use crate::attrs::{PluginAttrs, RenameRule, VariantAttrs};
 
 pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
-    let enum_name = &input.ident;
+    let plugin =
+        PluginAttrs::from_derive_input(&input).map_err(|e| syn::Error::new_spanned(&input, e))?;
 
-    let cmd_attrs = CommandAttrs::from_attributes(&input.attrs)?;
-    let command_name = cmd_attrs.name.unwrap_or_else(|| enum_name.to_string());
-    let prefix = cmd_attrs.prefix.unwrap_or_else(|| "/".to_string());
-    let rename_rule = cmd_attrs.rename_rule.unwrap_or(RenameRule::Lowercase);
-    let command_description = cmd_attrs.description.unwrap_or_default();
-    let command_version = cmd_attrs.version.unwrap_or_else(|| "0.1.0".to_string());
+    let variants =
+        plugin.data.as_ref().take_enum().ok_or_else(|| {
+            syn::Error::new_spanned(&input, "Plugin can only be derived for enums")
+        })?;
 
-    let Data::Enum(data_enum) = &input.data else {
-        return Err(syn::Error::new_spanned(
-            &input,
-            "Command can only be derived for enums",
-        ));
-    };
-
-    let mut variants = Vec::new();
-
-    for variant in &data_enum.variants {
-        let var_attrs = CommandAttrs::from_attributes(&variant.attrs)?;
-
-        let variant_name = if let Some(rename) = var_attrs.rename {
-            rename
-        } else {
-            rename_rule.apply(&variant.ident.to_string())
-        };
-
-        let mut aliases = var_attrs.aliases;
-        if let Some(alias) = var_attrs.alias {
-            aliases.push(alias);
-        }
-
-        variants.push(CommandVariant {
-            ident: variant.ident.clone(),
-            command_name: variant_name,
-            description: var_attrs.description,
-            aliases,
-            fields: variant.fields.clone(),
-            hide: var_attrs.hide,
-        });
-    }
-
-    let match_arms = generate_match_arms(&variants, &prefix, enum_name);
-    let descriptions_impl = generate_descriptions(&variants, &prefix);
-    let commands_list = generate_commands_list(&variants, &prefix);
-
-    let first_variant = &variants[0].ident;
-    let default_construction = match &variants[0].fields {
-        Fields::Unit => quote! { #enum_name::#first_variant },
-        Fields::Unnamed(_) => quote! { #enum_name::#first_variant(Default::default()) },
-        Fields::Named(fields) => {
-            let field_names: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
-            quote! { #enum_name::#first_variant { #(#field_names: Default::default()),* } }
-        }
-    };
-
-    let output = quote! {
-        impl Default for #enum_name {
-            fn default() -> Self {
-                #default_construction
-            }
-        }
-
-        impl #enum_name {
-            /// Parse command from text, returns the parsed command variant
-            pub fn parse(text: &str) -> Option<Self> {
-                let text = text.trim();
-                let mut parts = text.splitn(2, char::is_whitespace);
-                let cmd_part = parts.next()?;
-                let args = parts.next().unwrap_or("").trim().to_string();
-
-                #match_arms
-            }
-
-            /// Get all command descriptions
-            pub fn descriptions() -> Vec<(&'static str, &'static str)> {
-                #descriptions_impl
-            }
-
-            /// Get all commands (for registering with bot API)
-            pub fn commands() -> Vec<(&'static str, &'static str)> {
-                #commands_list
-            }
-
-            /// Get help text
-            pub fn help_text() -> String {
-                let mut help = String::new();
-                let desc = #command_description;
-                if !desc.is_empty() {
-                    help.push_str(desc);
-                    help.push_str("\n\n");
-                }
-                for (cmd, desc) in Self::descriptions() {
-                    help.push_str(cmd);
-                    help.push_str(" - ");
-                    help.push_str(desc);
-                    help.push('\n');
-                }
-                help.trim_end().to_string()
-            }
-        }
-
-        #[async_trait::async_trait]
-        impl ayiou::core::Plugin for #enum_name {
-            fn meta(&self) -> ayiou::core::PluginMetadata {
-                ayiou::core::PluginMetadata::new(#command_name)
-                    .description(#command_description)
-                    .version(#command_version)
-            }
-
-            fn matches(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> bool {
-                let text = ctx.text();
-                Self::parse(&text).is_some()
-            }
-
-            async fn handle(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<bool> {
-                let text = ctx.text();
-                if let Some(cmd) = Self::parse(&text) {
-                    cmd.execute(ctx).await?;
-                    return Ok(true);
-                }
-                Ok(false)
-            }
-        }
-    };
-
-    Ok(output)
+    let ctx = GenContext::new(&plugin, variants);
+    Ok(ctx.generate())
 }
 
-fn generate_match_arms(
-    variants: &[CommandVariant],
-    prefix: &str,
-    enum_name: &syn::Ident,
-) -> TokenStream {
-    let arms: Vec<TokenStream> = variants
-        .iter()
-        .map(|v| {
+struct GenContext<'a> {
+    enum_name: &'a syn::Ident,
+    plugin_name: String,
+    plugin_description: String,
+    plugin_version: String,
+    prefix: String,
+    rename_rule: RenameRule,
+    variants: Vec<&'a VariantAttrs>,
+}
+
+impl<'a> GenContext<'a> {
+    fn new(plugin: &'a PluginAttrs, variants: Vec<&'a VariantAttrs>) -> Self {
+        Self {
+            enum_name: &plugin.ident,
+            plugin_name: plugin
+                .name
+                .clone()
+                .unwrap_or_else(|| plugin.ident.to_string()),
+            plugin_description: plugin.description.clone().unwrap_or_default(),
+            plugin_version: plugin.version.clone().unwrap_or_else(|| "0.1.0".into()),
+            prefix: plugin.prefix.clone().unwrap_or_else(|| "/".into()),
+            rename_rule: plugin.rename_rule.unwrap_or_default(),
+            variants,
+        }
+    }
+
+    fn generate(&self) -> TokenStream {
+        let enum_name = self.enum_name;
+        let plugin_name = &self.plugin_name;
+        let plugin_description = &self.plugin_description;
+        let plugin_version = &self.plugin_version;
+
+        let default_impl = self.gen_default();
+        let parse_arms = self.gen_parse_arms();
+        let descriptions = self.gen_descriptions();
+
+        quote! {
+            #default_impl
+
+            impl #enum_name {
+                pub fn parse(text: &str) -> Option<Self> {
+                    let text = text.trim();
+                    let (cmd, args) = text.split_once(char::is_whitespace)
+                        .map(|(c, a)| (c, a.trim()))
+                        .unwrap_or((text, ""));
+                    match cmd {
+                        #parse_arms
+                        _ => None,
+                    }
+                }
+
+                pub fn descriptions() -> &'static [(&'static str, &'static str)] {
+                    &[#descriptions]
+                }
+
+                pub fn help_text() -> String {
+                    let mut help = String::new();
+                    let desc = #plugin_description;
+                    if !desc.is_empty() {
+                        help.push_str(desc);
+                        help.push_str("\n\n");
+                    }
+                    for (cmd, desc) in Self::descriptions() {
+                        help.push_str(&format!("{} - {}\n", cmd, desc));
+                    }
+                    help.trim_end().to_string()
+                }
+            }
+
+            #[async_trait::async_trait]
+            impl ayiou::core::Plugin for #enum_name {
+                fn meta(&self) -> ayiou::core::PluginMetadata {
+                    ayiou::core::PluginMetadata::new(#plugin_name)
+                        .description(#plugin_description)
+                        .version(#plugin_version)
+                }
+
+                fn matches(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> bool {
+                    Self::parse(&ctx.text()).is_some()
+                }
+
+                async fn handle(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<bool>;
+            }
+        }
+    }
+
+    fn gen_default(&self) -> TokenStream {
+        let enum_name = self.enum_name;
+        let first = &self.variants[0];
+        let ident = &first.ident;
+
+        let construction = match first.fields.style {
+            Style::Unit => quote! { Self::#ident },
+            Style::Tuple => quote! { Self::#ident(Default::default()) },
+            Style::Struct => {
+                let fields = first.fields.iter().map(|f| &f.ident);
+                quote! { Self::#ident { #(#fields: Default::default()),* } }
+            }
+        };
+
+        quote! {
+            impl Default for #enum_name {
+                fn default() -> Self { #construction }
+            }
+        }
+    }
+
+    fn gen_parse_arms(&self) -> TokenStream {
+        let enum_name = self.enum_name;
+        let arms = self.variants.iter().map(|v| {
             let ident = &v.ident;
-            let cmd = format!("{}{}", prefix, v.command_name);
-            let aliases: Vec<String> = v
+            let cmd_name = self.command_name(v);
+            let cmd = format!("{}{}", self.prefix, cmd_name);
+
+            let aliases: Vec<_> = v
                 .aliases
                 .iter()
-                .map(|a| format!("{}{}", prefix, a))
+                .chain(v.alias.iter())
+                .map(|a| format!("{}{}", self.prefix, a))
                 .collect();
 
-            let variant_construction = match &v.fields {
-                Fields::Unit => quote! { #enum_name::#ident },
-                Fields::Unnamed(_) => {
-                    quote! { #enum_name::#ident(args.to_string()) }
+            let construction = match v.fields.style {
+                Style::Unit => quote! { #enum_name::#ident },
+                Style::Tuple if v.fields.len() == 1 => {
+                    let ty = &v.fields.fields[0].ty;
+                    quote! { #enum_name::#ident(<#ty>::parse(args)) }
                 }
-                Fields::Named(_) => {
-                    quote! { #enum_name::#ident { text: args.to_string() } }
-                }
+                Style::Tuple => quote! { #enum_name::#ident(args.into()) },
+                Style::Struct => quote! { #enum_name::#ident { text: args.into() } },
             };
 
             if aliases.is_empty() {
-                quote! {
-                    #cmd => Some(#variant_construction),
-                }
+                quote! { #cmd => Some(#construction), }
             } else {
-                quote! {
-                    #cmd #(| #aliases)* => Some(#variant_construction),
-                }
+                quote! { #cmd #(| #aliases)* => Some(#construction), }
             }
-        })
-        .collect();
+        });
 
-    quote! {
-        match cmd_part {
-            #(#arms)*
-            _ => None,
-        }
+        quote! { #(#arms)* }
     }
-}
 
-fn generate_descriptions(variants: &[CommandVariant], prefix: &str) -> TokenStream {
-    let items: Vec<TokenStream> = variants
-        .iter()
-        .filter(|v| !v.hide)
-        .map(|v| {
-            let cmd = format!("{}{}", prefix, v.command_name);
+    fn gen_descriptions(&self) -> TokenStream {
+        let items = self.variants.iter().filter(|v| !v.hide).map(|v| {
+            let cmd = format!("{}{}", self.prefix, self.command_name(v));
             let desc = v.description.as_deref().unwrap_or("");
             quote! { (#cmd, #desc) }
-        })
-        .collect();
+        });
 
-    quote! {
-        vec![#(#items),*]
+        quote! { #(#items),* }
     }
-}
 
-fn generate_commands_list(variants: &[CommandVariant], prefix: &str) -> TokenStream {
-    let items: Vec<TokenStream> = variants
-        .iter()
-        .filter(|v| !v.hide)
-        .map(|v| {
-            let cmd = format!("{}{}", prefix, v.command_name);
-            let desc = v.description.as_deref().unwrap_or("");
-            quote! { (#cmd, #desc) }
-        })
-        .collect();
-
-    quote! {
-        vec![#(#items),*]
+    fn command_name(&self, v: &VariantAttrs) -> String {
+        v.rename
+            .clone()
+            .unwrap_or_else(|| self.rename_rule.apply(&v.ident.to_string()))
     }
 }
