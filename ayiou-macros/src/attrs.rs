@@ -155,10 +155,10 @@ impl VariantAttrs {
                     let value: Expr = meta.value()?.parse()?;
                     if let Expr::Array(arr) = value {
                         for elem in arr.elems {
-                            if let Expr::Lit(lit) = elem {
-                                if let Lit::Str(s) = lit.lit {
-                                    result.aliases.push(s.value());
-                                }
+                            if let Expr::Lit(lit) = elem
+                                && let Lit::Str(s) = lit.lit
+                            {
+                                result.aliases.push(s.value());
                             }
                         }
                     }
