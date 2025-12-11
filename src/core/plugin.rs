@@ -1,5 +1,4 @@
 use anyhow::Result;
-use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 
@@ -47,7 +46,7 @@ impl Default for PluginMetadata {
 }
 
 /// Plugin trait: main entry point for message handling
-#[async_trait]
+#[async_trait::async_trait]
 pub trait Plugin: Send + Sync + 'static {
     /// Metadata (name/description/version)
     fn meta(&self) -> PluginMetadata {

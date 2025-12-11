@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
-    adapter::onebot::v11::{adapter::OneBotV11Adapter, api::Api, ctx::Ctx, model::OneBotEvent},
+    adapter::onebot::v11::{adapter::OneBotV11Adapter, ctx::Ctx, model::OneBotEvent},
     core::plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
 };
 
@@ -23,8 +23,6 @@ pub mod prelude;
 
 pub struct AyiouBot {
     plugin_manager: PluginManager,
-    adapter: Option<OneBotV11Adapter>,
-    api: Option<Api>,
     event_tx: mpsc::Sender<OneBotEvent>,
     event_rx: mpsc::Receiver<OneBotEvent>,
 }
@@ -40,8 +38,6 @@ impl AyiouBot {
         let (event_tx, event_rx) = mpsc::channel(100);
         Self {
             plugin_manager: PluginManager::new(),
-            adapter: None,
-            api: None,
             event_tx,
             event_rx,
         }
@@ -64,51 +60,27 @@ impl AyiouBot {
         &self.plugin_manager
     }
 
-    /// Connect to OneBot via WebSocket
-    ///
-    /// Example:
-    /// ```ignore
-    /// AyiouBot::new().connect("ws://127.0.0.1:6700")
-    /// ```
-    pub fn connect(mut self, url: impl Into<String>) -> Self {
+    /// Start the bot and connect to OneBot via WebSocket
+    pub async fn run(mut self, url: impl Into<String>) {
         info!("Connecting to OneBot via WebSocket");
-        let mut adapter = OneBotV11Adapter::ws(url);
-        let api = adapter.connect(self.event_tx.clone());
-        self.adapter = Some(adapter);
-        self.api = Some(api);
-        self
-    }
 
-    /// Start the api
-    pub async fn run(mut self) {
-        let Some(api) = self.api.clone() else {
-            panic!("Bot is not connected, please call .connect() before .run()");
-        };
+        let outgoing_tx = OneBotV11Adapter::start(url, self.event_tx.clone());
 
         let plugins = self.plugin_manager.build();
         let dispatcher = Dispatcher::new(plugins);
         info!("Loaded {} plugins", self.plugin_manager.count());
 
-        // Start adapter (includes driver)
-        if let Some(adapter) = self.adapter.take() {
-            tokio::spawn(async move {
-                if let Err(e) = adapter.run().await {
-                    error!("Adapter error: {}", e);
-                }
-            });
-        }
-
         // Event dispatch task
-        let dispatch_api = api.clone();
+        let mut event_rx = self.event_rx;
         tokio::spawn(async move {
             info!("Event dispatch started!");
-            while let Some(msg) = self.event_rx.recv().await {
+            while let Some(msg) = event_rx.recv().await {
                 let event = Arc::new(msg);
                 let dispatcher = dispatcher.clone();
-                let api = dispatch_api.clone();
+                let outgoing = outgoing_tx.clone();
 
                 tokio::spawn(async move {
-                    let Some(ctx) = Ctx::new(event, api) else {
+                    let Some(ctx) = Ctx::new(event, outgoing) else {
                         return;
                     };
 

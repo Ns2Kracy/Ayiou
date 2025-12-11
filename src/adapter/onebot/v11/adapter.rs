@@ -1,133 +1,78 @@
-use anyhow::{Result, anyhow};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::adapter::onebot::v11::api::Api;
-use crate::adapter::onebot::v11::model::{ApiRequest, Message, MessageEvent, OneBotEvent};
-use crate::core::Driver;
-use crate::driver::wsclient::{RawMessage, WsDriver};
+use crate::{
+    adapter::onebot::v11::model::{Message, MessageEvent, OneBotEvent},
+    core::Driver,
+    driver::wsclient::WsDriver,
+};
 
-/// OneBot v11 Adapter
+/// OneBot v11 Adapter utilities
 ///
-/// Handles:
-/// - Driver management (WebSocket/HTTP)
-/// - Protocol parsing (raw -> OneBotEvent)
-/// - API request building
-pub struct OneBotV11Adapter {
-    url: String,
-    event_tx: Option<mpsc::Sender<OneBotEvent>>,
-    outgoing_rx: Option<mpsc::Receiver<String>>,
-}
+/// Provides a single entry point to start the transport + protocol stack
+pub struct OneBotV11Adapter;
 
 impl OneBotV11Adapter {
-    /// Create adapter with WebSocket URL
-    pub fn ws(url: impl Into<String>) -> Self {
-        Self {
-            url: url.into(),
-            event_tx: None,
-            outgoing_rx: None,
-        }
-    }
-
-    /// Initialize channels and return Api instance
-    pub fn connect(&mut self, event_tx: mpsc::Sender<OneBotEvent>) -> Api {
+    /// Start the adapter and return the outgoing channel for API calls
+    pub fn start(
+        url: impl Into<String>,
+        event_tx: mpsc::Sender<OneBotEvent>,
+    ) -> mpsc::Sender<String> {
+        let url = url.into();
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<String>(100);
-        self.event_tx = Some(event_tx);
-        self.outgoing_rx = Some(outgoing_rx);
-        Api::new(outgoing_tx)
-    }
+        let (raw_tx, mut raw_rx) = mpsc::channel::<String>(100);
 
-    /// Run the adapter (starts driver and event processing)
-    pub async fn run(mut self) -> Result<()> {
-        let event_tx = self
-            .event_tx
-            .take()
-            .ok_or_else(|| anyhow!("Not connected, call connect() first"))?;
-        let outgoing_rx = self
-            .outgoing_rx
-            .take()
-            .ok_or_else(|| anyhow!("Not connected, call connect() first"))?;
+        tokio::spawn(async move {
+            let driver = WsDriver::new(&url, raw_tx, outgoing_rx);
+            let driver_handle = tokio::spawn(async move {
+                if let Err(e) = Box::new(driver).run().await {
+                    error!("Driver error: {}", e);
+                }
+            });
 
-        // Create channel for driver -> adapter
-        let (raw_tx, mut raw_rx) = mpsc::channel::<RawMessage>(100);
+            while let Some(raw) = raw_rx.recv().await {
+                match serde_json::from_str::<OneBotEvent>(&raw) {
+                    Ok(event) => {
+                        if let OneBotEvent::Message(msg_event) = &event {
+                            Self::log_message(msg_event);
+                        }
 
-        // Create and start driver
-        let driver = WsDriver::new(&self.url, raw_tx, outgoing_rx);
-        let driver_handle = tokio::spawn(async move {
-            if let Err(e) = Box::new(driver).run().await {
-                error!("Driver error: {}", e);
-            }
-        });
-
-        // Process incoming messages
-        while let Some(raw) = raw_rx.recv().await {
-            match Self::parse(raw) {
-                Ok(Some(event)) => {
-                    Self::log_event(&event);
-                    if event_tx.send(event).await.is_err() {
-                        break;
+                        if event_tx.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse: {}, raw: {}", e, raw);
                     }
                 }
-                Ok(None) => {}
-                Err(e) => {
-                    warn!("Parse error: {}", e);
-                    break;
-                }
             }
-        }
 
-        driver_handle.abort();
-        Ok(())
+            driver_handle.abort();
+        });
+
+        outgoing_tx
     }
 
-    /// Parse raw message into OneBot event
-    fn parse(raw: RawMessage) -> Result<Option<OneBotEvent>> {
-        let text = match raw {
-            RawMessage::Text(t) => t,
-            RawMessage::Binary(_) => return Ok(None),
-            RawMessage::Close => return Err(anyhow!("Connection closed")),
-        };
-
-        match serde_json::from_str::<OneBotEvent>(&text) {
-            Ok(event) => Ok(Some(event)),
-            Err(e) => {
-                warn!("Failed to parse: {}, raw: {}", e, text);
-                Ok(None)
-            }
-        }
-    }
-
-    /// Build API request JSON
-    pub fn build_request(action: &str, params: serde_json::Value) -> Result<String> {
-        Ok(serde_json::to_string(&ApiRequest {
-            action: action.to_string(),
-            params,
-            echo: None,
-        })?)
-    }
-
-    fn log_event(event: &OneBotEvent) {
-        if let OneBotEvent::Message(msg_event) = event {
-            info!("{}", Self::format_message_event(msg_event));
-        }
-    }
-
-    fn format_message_event(msg_event: &MessageEvent) -> String {
+    fn log_message(msg_event: &MessageEvent) {
         match msg_event {
-            MessageEvent::Private(p) => format!(
-                "收到 <- 私聊 [{}({})] {}",
-                p.sender.nickname,
-                p.user_id,
-                Self::format_message(&p.message)
-            ),
-            MessageEvent::Group(g) => format!(
-                "收到 <- 群聊 [{}] [{}({})] {}",
-                g.group_id,
-                g.sender.card.as_deref().unwrap_or(&g.sender.nickname),
-                g.user_id,
-                Self::format_message(&g.message)
-            ),
-        }
+            MessageEvent::Private(p) => {
+                info!(
+                    "私聊 [{}({})] {}",
+                    p.sender.nickname,
+                    p.user_id,
+                    Self::format_message(&p.message)
+                )
+            }
+            MessageEvent::Group(g) => {
+                info!(
+                    "群聊 [{}] [{}({})] {}",
+                    g.group_id,
+                    g.sender.card.as_deref().unwrap_or(&g.sender.nickname),
+                    g.user_id,
+                    Self::format_message(&g.message)
+                )
+            }
+        };
     }
 
     fn format_message(message: &Message) -> String {

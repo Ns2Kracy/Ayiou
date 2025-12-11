@@ -49,6 +49,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "ayiou-macros",
  "chrono",
  "cron",
  "dashmap",
@@ -64,6 +65,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "ayiou-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
