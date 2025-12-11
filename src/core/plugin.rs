@@ -169,13 +169,10 @@ impl Dispatcher {
                 continue;
             }
 
-            match plugin.handle(ctx).await {
-                Ok(block) => {
-                    if block {
-                        break; // Block subsequent handlers
-                    }
-                }
-                Err(_) => {}
+            if let Ok(block) = plugin.handle(ctx).await
+                && block
+            {
+                break; // Block subsequent handlers
             }
         }
         Ok(())

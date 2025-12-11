@@ -56,11 +56,10 @@ impl WsDriver {
                             msg = stream.next() => {
                                 match msg {
                                     Some(Ok(ws_msg)) => {
-                                        if let Some(raw) = Self::convert(ws_msg) {
-                                            if self.incoming_tx.send(raw).await.is_err() {
+                                        if let Some(raw) = Self::convert(ws_msg)
+                                            && self.incoming_tx.send(raw).await.is_err() {
                                                 return Ok(());
                                             }
-                                        }
                                     }
                                     Some(Err(e)) => {
                                         warn!("WebSocket error: {}", e);
