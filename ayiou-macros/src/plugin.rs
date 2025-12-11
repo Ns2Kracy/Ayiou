@@ -4,7 +4,7 @@ use syn::{Data, DeriveInput, Fields, Result};
 
 use crate::attrs::{PluginAttrs, RenameRule, VariantAttrs};
 
-struct CommandVariant {
+struct PluginVariant {
     ident: syn::Ident,
     command_name: String,
     description: Option<String>,
@@ -46,7 +46,7 @@ pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
             aliases.push(alias);
         }
 
-        variants.push(CommandVariant {
+        variants.push(PluginVariant {
             ident: variant.ident.clone(),
             command_name,
             description: var_attrs.description,
@@ -128,7 +128,7 @@ pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
 }
 
 fn generate_match_arms(
-    variants: &[CommandVariant],
+    variants: &[PluginVariant],
     prefix: &str,
     enum_name: &syn::Ident,
 ) -> TokenStream {
@@ -173,7 +173,7 @@ fn generate_match_arms(
     }
 }
 
-fn generate_descriptions(variants: &[CommandVariant], prefix: &str) -> TokenStream {
+fn generate_descriptions(variants: &[PluginVariant], prefix: &str) -> TokenStream {
     let items: Vec<TokenStream> = variants
         .iter()
         .filter(|v| !v.hide)
@@ -189,7 +189,7 @@ fn generate_descriptions(variants: &[CommandVariant], prefix: &str) -> TokenStre
     }
 }
 
-fn generate_commands_list(variants: &[CommandVariant], prefix: &str) -> TokenStream {
+fn generate_commands_list(variants: &[PluginVariant], prefix: &str) -> TokenStream {
     let items: Vec<TokenStream> = variants
         .iter()
         .filter(|v| !v.hide)
