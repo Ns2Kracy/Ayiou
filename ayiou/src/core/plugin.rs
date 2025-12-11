@@ -58,7 +58,7 @@ pub trait Plugin: Send + Sync + 'static {
         true
     }
 
-    /// Handle logic, return Ok(true) to block subsequent handlers, Ok(false) to continue
+    /// Handle the message, return Ok(true) to block subsequent handlers
     async fn handle(&self, ctx: &Ctx) -> Result<bool>;
 }
 

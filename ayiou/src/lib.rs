@@ -43,10 +43,21 @@ impl AyiouBot {
         }
     }
 
-    /// Register a plugin
+    /// Register a plugin instance
     pub fn register_plugin<P: Plugin>(mut self, plugin: P) -> Self {
         self.plugin_manager.register(plugin);
         self
+    }
+
+    /// Register a plugin by type (requires Default)
+    pub fn plugin<P: Plugin + Default>(mut self) -> Self {
+        self.plugin_manager.register(P::default());
+        self
+    }
+
+    /// Register a command handler (alias for plugin, more semantic for Command enums)
+    pub fn command<C: Plugin + Default>(self) -> Self {
+        self.plugin::<C>()
     }
 
     /// Register multiple plugins

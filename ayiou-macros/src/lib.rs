@@ -6,7 +6,7 @@ mod plugin;
 
 use plugin::expand_plugin;
 
-/// Derive macro for defining a plugin as an enum with commands.
+/// Derive macro for defining bot plugins with commands.
 ///
 /// # Example
 ///
@@ -14,8 +14,8 @@ use plugin::expand_plugin;
 /// use ayiou::prelude::*;
 ///
 /// #[derive(Plugin)]
-/// #[plugin(name = "bot", prefix = "/", description = "机器人命令")]
-/// pub enum BotCommands {
+/// #[plugin(prefix = "/", description = "可用命令列表:")]
+/// pub enum ExamplePlugins{
 ///     #[command(description = "显示帮助")]
 ///     Help,
 ///
@@ -26,7 +26,7 @@ use plugin::expand_plugin;
 ///     Echo { text: String },
 /// }
 ///
-/// impl BotCommands {
+/// impl ExamplePlugins {
 ///     pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
 ///         match self {
 ///             Self::Help => ctx.reply_text(Self::help_text()).await?,
@@ -36,6 +36,9 @@ use plugin::expand_plugin;
 ///         Ok(())
 ///     }
 /// }
+///
+/// // Register with bot
+/// AyiouBot::new().plugin::<ExamplePlugins>().run("ws://...").await;
 /// ```
 #[proc_macro_derive(Plugin, attributes(plugin, command))]
 pub fn derive_plugin(input: TokenStream) -> TokenStream {

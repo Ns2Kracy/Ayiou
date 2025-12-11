@@ -2,9 +2,9 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, Result};
 
-use crate::attrs::{PluginAttrs, RenameRule, VariantAttrs};
+use crate::attrs::{CommandAttrs, RenameRule};
 
-struct PluginVariant {
+struct CommandVariant {
     ident: syn::Ident,
     command_name: String,
     description: Option<String>,
@@ -16,26 +16,26 @@ struct PluginVariant {
 pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
     let enum_name = &input.ident;
 
-    let plugin_attrs = PluginAttrs::from_attributes(&input.attrs)?;
-    let plugin_name = plugin_attrs.name.unwrap_or_else(|| enum_name.to_string());
-    let prefix = plugin_attrs.prefix.unwrap_or_else(|| "/".to_string());
-    let rename_rule = plugin_attrs.rename_rule.unwrap_or(RenameRule::Lowercase);
-    let plugin_description = plugin_attrs.description.unwrap_or_default();
-    let plugin_version = plugin_attrs.version.unwrap_or_else(|| "0.1.0".to_string());
+    let cmd_attrs = CommandAttrs::from_attributes(&input.attrs)?;
+    let command_name = cmd_attrs.name.unwrap_or_else(|| enum_name.to_string());
+    let prefix = cmd_attrs.prefix.unwrap_or_else(|| "/".to_string());
+    let rename_rule = cmd_attrs.rename_rule.unwrap_or(RenameRule::Lowercase);
+    let command_description = cmd_attrs.description.unwrap_or_default();
+    let command_version = cmd_attrs.version.unwrap_or_else(|| "0.1.0".to_string());
 
     let Data::Enum(data_enum) = &input.data else {
         return Err(syn::Error::new_spanned(
             &input,
-            "Plugin can only be derived for enums",
+            "Command can only be derived for enums",
         ));
     };
 
     let mut variants = Vec::new();
 
     for variant in &data_enum.variants {
-        let var_attrs = VariantAttrs::from_attributes(&variant.attrs)?;
+        let var_attrs = CommandAttrs::from_attributes(&variant.attrs)?;
 
-        let command_name = if let Some(rename) = var_attrs.rename {
+        let variant_name = if let Some(rename) = var_attrs.rename {
             rename
         } else {
             rename_rule.apply(&variant.ident.to_string())
@@ -46,9 +46,9 @@ pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
             aliases.push(alias);
         }
 
-        variants.push(PluginVariant {
+        variants.push(CommandVariant {
             ident: variant.ident.clone(),
-            command_name,
+            command_name: variant_name,
             description: var_attrs.description,
             aliases,
             fields: variant.fields.clone(),
@@ -60,7 +60,23 @@ pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
     let descriptions_impl = generate_descriptions(&variants, &prefix);
     let commands_list = generate_commands_list(&variants, &prefix);
 
+    let first_variant = &variants[0].ident;
+    let default_construction = match &variants[0].fields {
+        Fields::Unit => quote! { #enum_name::#first_variant },
+        Fields::Unnamed(_) => quote! { #enum_name::#first_variant(Default::default()) },
+        Fields::Named(fields) => {
+            let field_names: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
+            quote! { #enum_name::#first_variant { #(#field_names: Default::default()),* } }
+        }
+    };
+
     let output = quote! {
+        impl Default for #enum_name {
+            fn default() -> Self {
+                #default_construction
+            }
+        }
+
         impl #enum_name {
             /// Parse command from text, returns the parsed command variant
             pub fn parse(text: &str) -> Option<Self> {
@@ -85,7 +101,7 @@ pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
             /// Get help text
             pub fn help_text() -> String {
                 let mut help = String::new();
-                let desc = #plugin_description;
+                let desc = #command_description;
                 if !desc.is_empty() {
                     help.push_str(desc);
                     help.push_str("\n\n");
@@ -103,9 +119,9 @@ pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
         #[async_trait::async_trait]
         impl ayiou::core::Plugin for #enum_name {
             fn meta(&self) -> ayiou::core::PluginMetadata {
-                ayiou::core::PluginMetadata::new(#plugin_name)
-                    .description(#plugin_description)
-                    .version(#plugin_version)
+                ayiou::core::PluginMetadata::new(#command_name)
+                    .description(#command_description)
+                    .version(#command_version)
             }
 
             fn matches(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> bool {
@@ -128,7 +144,7 @@ pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
 }
 
 fn generate_match_arms(
-    variants: &[PluginVariant],
+    variants: &[CommandVariant],
     prefix: &str,
     enum_name: &syn::Ident,
 ) -> TokenStream {
@@ -173,7 +189,7 @@ fn generate_match_arms(
     }
 }
 
-fn generate_descriptions(variants: &[PluginVariant], prefix: &str) -> TokenStream {
+fn generate_descriptions(variants: &[CommandVariant], prefix: &str) -> TokenStream {
     let items: Vec<TokenStream> = variants
         .iter()
         .filter(|v| !v.hide)
@@ -189,7 +205,7 @@ fn generate_descriptions(variants: &[PluginVariant], prefix: &str) -> TokenStrea
     }
 }
 
-fn generate_commands_list(variants: &[PluginVariant], prefix: &str) -> TokenStream {
+fn generate_commands_list(variants: &[CommandVariant], prefix: &str) -> TokenStream {
     let items: Vec<TokenStream> = variants
         .iter()
         .filter(|v| !v.hide)

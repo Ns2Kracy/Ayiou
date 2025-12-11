@@ -1,19 +1,13 @@
 use syn::{Attribute, Expr, Lit, Result};
 
-/// Plugin-level attributes (#[plugin(...)])
+/// Command-level attributes (#[command(...)])
 #[derive(Default)]
-pub struct PluginAttrs {
+pub struct CommandAttrs {
     pub name: Option<String>,
     pub prefix: Option<String>,
     pub rename_rule: Option<RenameRule>,
     pub description: Option<String>,
     pub version: Option<String>,
-}
-
-/// Variant-level attributes
-#[derive(Default)]
-pub struct VariantAttrs {
-    pub description: Option<String>,
     pub alias: Option<String>,
     pub aliases: Vec<String>,
     pub rename: Option<String>,
@@ -87,12 +81,14 @@ fn to_kebab_case(s: &str) -> String {
     to_snake_case(s).replace('_', "-")
 }
 
-impl PluginAttrs {
+impl CommandAttrs {
     pub fn from_attributes(attrs: &[Attribute]) -> Result<Self> {
         let mut result = Self::default();
 
         for attr in attrs {
-            if !attr.path().is_ident("plugin") {
+            let is_plugin = attr.path().is_ident("plugin");
+            let is_command = attr.path().is_ident("command");
+            if !is_plugin && !is_command {
                 continue;
             }
 
@@ -121,30 +117,6 @@ impl PluginAttrs {
                     let value: Lit = meta.value()?.parse()?;
                     if let Lit::Str(s) = value {
                         result.version = Some(s.value());
-                    }
-                }
-                Ok(())
-            })?;
-        }
-
-        Ok(result)
-    }
-}
-
-impl VariantAttrs {
-    pub fn from_attributes(attrs: &[Attribute]) -> Result<Self> {
-        let mut result = Self::default();
-
-        for attr in attrs {
-            if !attr.path().is_ident("command") {
-                continue;
-            }
-
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("description") {
-                    let value: Lit = meta.value()?.parse()?;
-                    if let Lit::Str(s) = value {
-                        result.description = Some(s.value());
                     }
                 } else if meta.path.is_ident("alias") {
                     let value: Lit = meta.value()?.parse()?;
