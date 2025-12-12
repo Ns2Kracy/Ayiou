@@ -220,6 +220,40 @@ pub trait Plugin: Send + Sync + 'static {
 
     /// Handle the message, return Ok(true) to block subsequent handlers
     async fn handle(&self, ctx: &Ctx) -> Result<bool>;
+
+    // ========================================================================
+    // Lifecycle hooks
+    // ========================================================================
+
+    /// Called when the plugin is loaded (initialize resources, db connections, etc.)
+    async fn on_load(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called when the plugin is enabled
+    async fn on_enable(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called when the plugin is disabled
+    async fn on_disable(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called when the plugin is unloaded (cleanup resources)
+    async fn on_unload(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called before hot reload (save state)
+    async fn on_before_reload(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+
+    /// Called after hot reload (restore state)
+    async fn on_after_reload(&self, _state: serde_json::Value) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub type PluginBox = Box<dyn Plugin>;

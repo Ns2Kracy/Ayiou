@@ -13,6 +13,7 @@ use tracing::{error, info};
 
 use crate::{
     adapter::onebot::v11::{adapter::OneBotV11Adapter, ctx::Ctx, model::OneBotEvent},
+    core::dynamic::DynamicDispatcher,
     core::plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
 };
 
@@ -103,6 +104,42 @@ impl AyiouBot {
         });
 
         info!("Ayiou is running, press Ctrl+C to exit.");
+        tokio::signal::ctrl_c().await.unwrap();
+        info!("Ayiou is shutting down.");
+    }
+
+    /// Start the bot with a dynamic dispatcher (supports runtime plugin management)
+    pub async fn run_with_dynamic_dispatcher(
+        self,
+        url: impl Into<String>,
+        dispatcher: DynamicDispatcher,
+    ) {
+        info!("Connecting to OneBot via WebSocket (dynamic mode)");
+
+        let outgoing_tx = OneBotV11Adapter::start(url, self.event_tx.clone());
+
+        // Event dispatch task
+        let mut event_rx = self.event_rx;
+        tokio::spawn(async move {
+            info!("Event dispatch started (dynamic mode)!");
+            while let Some(msg) = event_rx.recv().await {
+                let event = Arc::new(msg);
+                let dispatcher = dispatcher.clone();
+                let outgoing = outgoing_tx.clone();
+
+                tokio::spawn(async move {
+                    let Some(ctx) = Ctx::new(event, outgoing) else {
+                        return;
+                    };
+
+                    if let Err(err) = dispatcher.dispatch(&ctx).await {
+                        error!("Plugin dispatch error: {}", err);
+                    }
+                });
+            }
+        });
+
+        info!("Ayiou is running (dynamic mode), press Ctrl+C to exit.");
         tokio::signal::ctrl_c().await.unwrap();
         info!("Ayiou is shutting down.");
     }

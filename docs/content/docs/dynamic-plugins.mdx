@@ -1,0 +1,349 @@
+---
+title: 动态插件系统
+description: 使用动态插件系统实现热重载和远程加载
+---
+
+## 概述
+
+Ayiou 提供了一个完整的动态插件系统，支持：
+
+- **生命周期管理** - `on_load`, `on_enable`, `on_disable`, `on_unload` 钩子
+- **热重载** - 运行时重新加载 WASM 插件，保留状态
+- **远程加载** - 从 URL 下载并安装 WASM 插件
+- **沙盒执行** - 使用 Wasmtime 安全运行第三方插件
+
+## OneBot 事件 vs Action 回包
+
+OneBot 的 WebSocket 会同时下发两类 JSON：
+
+- **事件 (Event)**：包含 `post_type` 字段（例如 `message/notice/meta_event`）
+- **动作回包 (Action Response)**：不包含 `post_type`，通常形如：
+
+```json
+{"status":"ok","retcode":0,"data":{...},"echo":"","stream":"normal-action"}
+```
+
+框架只会把 **包含 `post_type` 的消息** 当作事件解析并分发给插件；action 回包会被忽略（后续可按 `echo` 做请求-响应匹配）。
+
+## 插件生命周期
+
+每个插件都有以下生命周期钩子：
+
+```rust
+#[async_trait]
+pub trait Plugin: Send + Sync + 'static {
+    // 核心方法
+    fn meta(&self) -> PluginMetadata;
+    fn matches(&self, ctx: &Ctx) -> bool;
+    async fn handle(&self, ctx: &Ctx) -> Result<bool>;
+
+    // 生命周期钩子
+    async fn on_load(&self) -> Result<()> { Ok(()) }
+    async fn on_enable(&self) -> Result<()> { Ok(()) }
+    async fn on_disable(&self) -> Result<()> { Ok(()) }
+    async fn on_unload(&self) -> Result<()> { Ok(()) }
+
+    // 热重载支持
+    async fn on_before_reload(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+    async fn on_after_reload(&self, state: serde_json::Value) -> Result<()> {
+        Ok(())
+    }
+}
+```
+
+## 使用动态插件注册表
+
+```rust
+use ayiou::prelude::*;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // 创建动态插件注册表
+    let registry = Arc::new(DynamicPluginRegistry::new("./plugins"));
+
+    // 注册静态插件
+    registry.register_static(MyPlugin::default()).await?;
+
+    // 启用插件
+    registry.enable("my-plugin").await?;
+
+    // 创建动态调度器
+    let dispatcher = DynamicDispatcher::new(registry.clone());
+
+    // 运行时控制
+    let (handler, cmd_tx) = PluginCommandHandler::new(registry.clone());
+    tokio::spawn(handler.run());
+
+    // 发送命令
+    cmd_tx.send(PluginCommand::List).await?;
+    cmd_tx.send(PluginCommand::Disable("my-plugin".into())).await?;
+
+    Ok(())
+}
+```
+
+## WASM 插件开发
+
+## AssemblyScript / Wasmtime 兼容性说明
+
+如果你使用 AssemblyScript（TypeScript 子集）编译 WASM，模块默认会导入 `env::abort`。宿主（框架）必须在 linker 里提供该导入，否则会出现类似：
+
+```
+unknown import: `env::abort` has not been defined
+```
+
+另外，当前 Ayiou 的 WASM 运行时采用 **同步实例化**，因此 Wasmtime 配置会关闭 `async_support`（避免运行时断言失败）。
+
+这两点在框架代码中已经处理。
+
+### 插件 ABI
+
+WASM 插件需要导出以下函数：
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `ayiou_meta` | `() -> i32` | 返回元数据 JSON 指针 |
+| `ayiou_matches` | `(ctx_ptr, ctx_len) -> i32` | 检查是否匹配 (1=是) |
+| `ayiou_handle` | `(ctx_ptr, ctx_len) -> i32` | 处理事件，返回响应 JSON 指针 |
+| `ayiou_alloc` | `(size) -> i32` | 分配内存 |
+| `ayiou_free` | `(ptr)` | 释放内存 |
+
+### 元数据格式
+
+```json
+{
+  "name": "my-wasm-plugin",
+  "description": "A sample WASM plugin",
+  "version": "1.0.0"
+}
+```
+
+### 上下文格式 (传入插件)
+
+```json
+{
+  "text": "消息文本",
+  "raw_message": "原始消息",
+  "user_id": 123456,
+  "group_id": 789012,
+  "is_private": false,
+  "is_group": true,
+  "nickname": "用户昵称"
+}
+```
+
+### 响应格式 (插件返回)
+
+```json
+{
+  "block": true,
+  "reply": "回复消息内容"
+}
+```
+
+### Rust WASM 插件示例
+
+```rust
+// Cargo.toml
+// [lib]
+// crate-type = ["cdylib"]
+//
+// [dependencies]
+// serde = { version = "1", features = ["derive"] }
+// serde_json = "1"
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize)]
+struct PluginMeta {
+    name: &'static str,
+    description: &'static str,
+    version: &'static str,
+}
+
+#[derive(Deserialize)]
+struct Context {
+    text: String,
+    user_id: i64,
+    group_id: Option<i64>,
+    is_group: bool,
+}
+
+#[derive(Serialize)]
+struct Response {
+    block: bool,
+    reply: Option<String>,
+}
+
+static mut BUFFER: [u8; 4096] = [0; 4096];
+
+#[no_mangle]
+pub extern "C" fn ayiou_alloc(size: i32) -> i32 {
+    unsafe { BUFFER.as_ptr() as i32 }
+}
+
+#[no_mangle]
+pub extern "C" fn ayiou_meta() -> i32 {
+    let meta = PluginMeta {
+        name: "hello-wasm",
+        description: "A hello world WASM plugin",
+        version: "1.0.0",
+    };
+    write_json(&meta)
+}
+
+#[no_mangle]
+pub extern "C" fn ayiou_matches(ctx_ptr: i32, ctx_len: i32) -> i32 {
+    let ctx: Context = read_json(ctx_ptr, ctx_len);
+    if ctx.text.starts_with("/hello") { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn ayiou_handle(ctx_ptr: i32, ctx_len: i32) -> i32 {
+    let ctx: Context = read_json(ctx_ptr, ctx_len);
+    let response = Response {
+        block: true,
+        reply: Some(format!("Hello, user {}!", ctx.user_id)),
+    };
+    write_json(&response)
+}
+
+fn read_json<T: for<'de> Deserialize<'de>>(ptr: i32, len: i32) -> T {
+    unsafe {
+        let slice = std::slice::from_raw_parts(
+            (ptr + 4) as *const u8,
+            len as usize
+        );
+        serde_json::from_slice(slice).unwrap()
+    }
+}
+
+fn write_json<T: Serialize>(value: &T) -> i32 {
+    let json = serde_json::to_vec(value).unwrap();
+    let len = json.len() as u32;
+    unsafe {
+        BUFFER[0..4].copy_from_slice(&len.to_le_bytes());
+        BUFFER[4..4 + json.len()].copy_from_slice(&json);
+        BUFFER.as_ptr() as i32
+    }
+}
+```
+
+编译：
+```bash
+cargo build --target wasm32-unknown-unknown --release
+```
+
+## 远程插件加载
+
+```rust
+use ayiou::prelude::*;
+
+async fn load_remote_plugins() -> anyhow::Result<()> {
+    let mut loader = RemotePluginLoader::new("./plugin-cache");
+
+    // 添加插件仓库
+    loader.add_repository("https://example.com/plugins/index.json").await?;
+
+    // 搜索并安装插件
+    let path = loader.install("hello-wasm").await?;
+
+    // 加载 WASM 插件
+    let runtime = WasmRuntime::new()?;
+    let plugin = runtime.load_plugin(&path).await?;
+
+    println!("Loaded: {} v{}", plugin.meta().name, plugin.meta().version);
+
+    Ok(())
+}
+```
+
+## 插件配置文件
+
+创建 `plugins.toml` 管理已安装插件：
+
+```toml
+# 插件仓库
+repositories = [
+    "https://example.com/plugins/index.json"
+]
+
+# 已安装插件
+[[plugins]]
+name = "hello-wasm"
+enabled = true
+source = "https://example.com/plugins/hello-wasm.wasm"
+
+[[plugins]]
+name = "local-plugin"
+enabled = true
+source = "./plugins/local-plugin.wasm"
+```
+
+加载配置：
+
+```rust
+let config = PluginConfig::load(Path::new("plugins.toml")).await?;
+
+for plugin in &config.plugins {
+    if plugin.enabled {
+        println!("Loading plugin: {}", plugin.name);
+        // 加载插件...
+    }
+}
+```
+
+## Feature Flags
+
+| Feature | 说明 |
+|---------|------|
+| `wasm` | 启用 Wasmtime WASM 插件支持 (默认启用) |
+| `remote` | 启用远程插件下载功能 |
+
+```toml
+[dependencies]
+ayiou = { version = "0.1", features = ["wasm", "remote"] }
+```
+
+## 示例：加载 WASM 插件并运行 Bot
+
+仓库内有一个可运行示例：
+
+- `examples/wasm-plugin-ts`：AssemblyScript 插件（输出 `build/plugin.wasm`）
+- `examples/bot-with-wasm`：Rust Bot（运行时加载 WASM 插件）
+
+步骤：
+
+```bash
+# 1) 构建 WASM 插件
+cd examples/wasm-plugin-ts
+bun install
+bun run build
+
+# 2) 运行 Bot（会加载 ../wasm-plugin-ts/build/plugin.wasm）
+cd ../bot-with-wasm
+cargo run
+```
+
+然后在聊天里发送：
+
+- `/hello`
+- `/hi`
+
+## Windows：`cargo run` 提示无法删除 exe（拒绝访问）
+
+在 Windows 上如果上一次运行的进程没有退出，Cargo 可能会报：
+
+```
+failed to remove file ...\\target\\debug\\bot-with-wasm.exe
+Caused by: 拒绝访问 (os error 5)
+```
+
+处理方式：
+
+- **优先**：在运行窗口或终端里按 `Ctrl+C` 停掉进程
+- 或者：任务管理器结束 `bot-with-wasm.exe`
+- 或者：执行 `taskkill /IM bot-with-wasm.exe /F`
