@@ -52,6 +52,7 @@ impl<'a> GenContext<'a> {
 
         let default_impl = self.gen_default();
         let parse_arms = self.gen_parse_arms();
+        let handle_arms = self.gen_handle_arms();
         let descriptions = self.gen_descriptions();
 
         quote! {
@@ -99,7 +100,11 @@ impl<'a> GenContext<'a> {
                     Self::parse(&ctx.text()).is_some()
                 }
 
-                async fn handle(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<bool>;
+                async fn handle(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<bool> {
+                    match self {
+                        #handle_arms
+                    }
+                }
             }
         }
     }
@@ -153,6 +158,34 @@ impl<'a> GenContext<'a> {
                 quote! { #cmd => Some(#construction), }
             } else {
                 quote! { #cmd #(| #aliases)* => Some(#construction), }
+            }
+        });
+
+        quote! { #(#arms)* }
+    }
+
+    fn gen_handle_arms(&self) -> TokenStream {
+        let enum_name = self.enum_name;
+        let arms = self.variants.iter().map(|v| {
+            let ident = &v.ident;
+            match v.fields.style {
+                Style::Unit => {
+                    quote! { #enum_name::#ident => Ok(true), }
+                }
+                Style::Tuple if v.fields.len() == 1 => {
+                    quote! {
+                        #enum_name::#ident(inner) => {
+                            inner.handle(ctx).await?;
+                            Ok(true)
+                        }
+                    }
+                }
+                Style::Tuple => {
+                    quote! { #enum_name::#ident(..) => Ok(true), }
+                }
+                Style::Struct => {
+                    quote! { #enum_name::#ident { .. } => Ok(true), }
+                }
             }
         });
 
