@@ -2,4 +2,7 @@ pub mod driver;
 pub mod plugin;
 
 pub use driver::Driver;
-pub use plugin::{Dispatcher, Plugin, PluginManager, PluginMetadata};
+pub use plugin::{
+    Args, ArgsParseError, CronSchedule, Dispatcher, Plugin, PluginManager, PluginMetadata,
+    RegexValidated,
+};

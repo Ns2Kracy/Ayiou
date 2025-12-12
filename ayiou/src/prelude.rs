@@ -1,7 +1,10 @@
 // Convenience re-exports: use ayiou::prelude::*;
 pub use crate::AyiouBot;
 
-pub use crate::core::{Dispatcher, Plugin, PluginManager, PluginMetadata};
+pub use crate::core::{
+    Args, ArgsParseError, CronSchedule, Dispatcher, Plugin, PluginManager, PluginMetadata,
+    RegexValidated,
+};
 
 pub use crate::adapter::onebot::v11::ctx::Ctx;
 

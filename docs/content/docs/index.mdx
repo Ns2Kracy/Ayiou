@@ -1,0 +1,44 @@
+---
+title: Ayiou 框架
+description: 一个简洁高效的 Rust Bot 框架
+---
+
+Ayiou 是一个基于 Rust 的 Bot 框架，专注于简洁的 API 设计和强大的宏支持。
+
+## 特性
+
+- **声明式插件定义** - 使用 `#[derive(Plugin)]` 宏快速定义命令
+- **灵活的参数解析** - 使用 `#[derive(Args)]` 宏自动解析命令参数
+- **正则验证** - 支持 `#[arg(regex = "...")]` 进行参数验证
+- **Cron 调度** - 支持 `#[arg(cron)]` 解析 cron 表达式
+- **自动错误处理** - 参数解析失败时自动回复错误消息
+- **OneBot v11 协议** - 兼容主流 Bot 平台
+
+## 快速开始
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Args)]
+pub struct Ping;
+
+impl Ping {
+    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        ctx.reply_text("pong").await?;
+        Ok(())
+    }
+}
+
+#[derive(Plugin)]
+#[plugin(name = "basic", prefix = "/")]
+pub enum Commands {
+    #[plugin(description = "ping测试")]
+    Ping(Ping),
+}
+```
+
+<Cards>
+  <Card title="快速开始" href="/docs/getting-started" />
+  <Card title="Plugin 宏" href="/docs/plugin-macro" />
+  <Card title="Args 宏" href="/docs/args-macro" />
+</Cards>

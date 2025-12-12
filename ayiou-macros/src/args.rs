@@ -1,93 +1,209 @@
+use darling::{FromDeriveInput, FromField};
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Result};
+use syn::{DeriveInput, Result};
+
+/// Field-level attributes for #[arg(...)]
+#[derive(Debug, FromField)]
+#[darling(attributes(arg))]
+struct ArgFieldAttrs {
+    ident: Option<syn::Ident>,
+    ty: syn::Type,
+
+    /// Regex pattern to validate the field value
+    #[darling(default)]
+    regex: Option<String>,
+
+    /// Mark this field as a cron expression
+    #[darling(default)]
+    cron: bool,
+
+    /// Mark this field to consume the rest of the input
+    #[darling(default)]
+    rest: bool,
+
+    /// Mark this field as optional
+    #[darling(default)]
+    optional: bool,
+
+    /// Custom error message for validation failure
+    #[darling(default)]
+    error: Option<String>,
+}
+
+/// Struct-level attributes for #[derive(Args)]
+#[derive(Debug, FromDeriveInput)]
+#[darling(attributes(arg), supports(struct_any))]
+struct ArgsAttrs {
+    ident: syn::Ident,
+    data: darling::ast::Data<(), ArgFieldAttrs>,
+
+    /// Usage text for help messages
+    #[darling(default)]
+    usage: Option<String>,
+}
 
 pub fn expand_args(input: DeriveInput) -> Result<TokenStream> {
-    let struct_name = &input.ident;
+    let args =
+        ArgsAttrs::from_derive_input(&input).map_err(|e| syn::Error::new_spanned(&input, e))?;
 
-    let fields_info = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(fields) => {
-                let field_names: Vec<_> = fields.named.iter().map(|f| &f.ident).collect();
-                let field_count = field_names.len();
+    let struct_name = &args.ident;
 
-                if field_count == 0 {
-                    quote! {
-                        impl #struct_name {
-                            pub fn parse(_args: &str) -> Self {
-                                Self {}
-                            }
-                        }
-                    }
-                } else if field_count == 1 {
-                    let field_name = &field_names[0];
-                    quote! {
-                        impl #struct_name {
-                            pub fn parse(args: &str) -> Self {
-                                Self {
-                                    #field_name: args.to_string(),
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    let assignments: Vec<_> = field_names
-                        .iter()
-                        .enumerate()
-                        .map(|(i, name)| {
-                            quote! {
-                                #name: parts.get(#i).map(|s| s.to_string()).unwrap_or_default()
-                            }
-                        })
-                        .collect();
+    let fields =
+        args.data.as_ref().take_struct().ok_or_else(|| {
+            syn::Error::new_spanned(&input, "Args can only be derived for structs")
+        })?;
 
-                    quote! {
-                        impl #struct_name {
-                            pub fn parse(args: &str) -> Self {
-                                let parts: Vec<&str> = args.split_whitespace().collect();
-                                Self {
-                                    #(#assignments),*
-                                }
-                            }
-                        }
-                    }
-                }
+    let field_count = fields.len();
+
+    // Generate parse implementation based on fields
+    let parse_impl = if field_count == 0 {
+        // Unit-like struct with no fields
+        quote! {
+            fn parse(_args: &str) -> std::result::Result<Self, ayiou::core::ArgsParseError> {
+                Ok(Self {})
             }
-            Fields::Unnamed(_) => {
-                quote! {
-                    impl #struct_name {
-                        pub fn parse(args: &str) -> Self {
-                            Self(args.to_string())
-                        }
-                    }
-                }
-            }
-            Fields::Unit => {
-                quote! {
-                    impl #struct_name {
-                        pub fn parse(_args: &str) -> Self {
-                            Self
-                        }
-                    }
-                }
-            }
-        },
-        _ => {
-            return Err(syn::Error::new_spanned(
-                &input,
-                "Args can only be derived for structs",
-            ));
         }
+    } else {
+        // Generate field assignments
+        let mut assignments = Vec::new();
+        let mut has_rest = false;
+
+        for (i, field) in fields.iter().enumerate() {
+            let field_name = field.ident.as_ref().unwrap();
+            let _field_ty = &field.ty; // Reserved for future type-based parsing
+
+            if field.rest {
+                has_rest = true;
+                // Rest field consumes remaining input
+                if i == 0 {
+                    assignments.push(quote! {
+                        #field_name: args.trim().to_string()
+                    });
+                } else {
+                    assignments.push(quote! {
+                        #field_name: parts[#i..].join(" ")
+                    });
+                }
+            } else if field.cron {
+                // Cron field - parse as CronSchedule
+                let error_msg = field.error.as_deref().unwrap_or("Invalid cron expression");
+                if field_count == 1 {
+                    assignments.push(quote! {
+                        #field_name: ayiou::core::CronSchedule::parse(args.trim())
+                            .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
+                    });
+                } else {
+                    assignments.push(quote! {
+                        #field_name: ayiou::core::CronSchedule::parse(
+                            parts.get(#i).copied().unwrap_or("")
+                        ).map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
+                    });
+                }
+            } else if let Some(ref pattern) = field.regex {
+                // Regex-validated field
+                let error_msg = field.error.clone().unwrap_or_else(|| {
+                    format!(
+                        "Field '{}' does not match pattern '{}'",
+                        field_name, pattern
+                    )
+                });
+                if field_count == 1 {
+                    assignments.push(quote! {
+                        #field_name: {
+                            let value = args.trim();
+                            ayiou::core::RegexValidated::validate(value, #pattern)
+                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
+                                .value()
+                                .to_string()
+                        }
+                    });
+                } else {
+                    assignments.push(quote! {
+                        #field_name: {
+                            let value = parts.get(#i).copied().unwrap_or("");
+                            ayiou::core::RegexValidated::validate(value, #pattern)
+                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
+                                .value()
+                                .to_string()
+                        }
+                    });
+                }
+            } else if field.optional {
+                // Optional field
+                if field_count == 1 {
+                    assignments.push(quote! {
+                        #field_name: {
+                            let value = args.trim();
+                            if value.is_empty() { None } else { Some(value.to_string()) }
+                        }
+                    });
+                } else {
+                    assignments.push(quote! {
+                        #field_name: parts.get(#i).filter(|s| !s.is_empty()).map(|s| s.to_string())
+                    });
+                }
+            } else {
+                // Regular string field
+                if field_count == 1 {
+                    assignments.push(quote! {
+                        #field_name: args.trim().to_string()
+                    });
+                } else {
+                    assignments.push(quote! {
+                        #field_name: parts.get(#i).map(|s| s.to_string()).unwrap_or_default()
+                    });
+                }
+            }
+        }
+
+        if field_count == 1 || has_rest {
+            quote! {
+                fn parse(args: &str) -> std::result::Result<Self, ayiou::core::ArgsParseError> {
+                    let parts: Vec<&str> = args.split_whitespace().collect();
+                    Ok(Self {
+                        #(#assignments),*
+                    })
+                }
+            }
+        } else {
+            quote! {
+                fn parse(args: &str) -> std::result::Result<Self, ayiou::core::ArgsParseError> {
+                    let parts: Vec<&str> = args.split_whitespace().collect();
+                    Ok(Self {
+                        #(#assignments),*
+                    })
+                }
+            }
+        }
+    };
+
+    // Generate usage() implementation
+    let usage_impl = if let Some(ref usage) = args.usage {
+        quote! {
+            fn usage() -> Option<&'static str> {
+                Some(#usage)
+            }
+        }
+    } else {
+        quote! {}
     };
 
     let output = quote! {
         impl Default for #struct_name {
             fn default() -> Self {
-                Self::parse("")
+                Self::parse("").unwrap_or_else(|_| {
+                    // Fallback for default - create with empty/default values
+                    // This is a best-effort default
+                    panic!("Cannot create default {} without valid input", stringify!(#struct_name))
+                })
             }
         }
 
-        #fields_info
+        impl ayiou::core::Args for #struct_name {
+            #parse_impl
+            #usage_impl
+        }
     };
 
     Ok(output)

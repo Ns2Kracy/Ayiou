@@ -5,7 +5,167 @@ use tracing::info;
 use crate::adapter::onebot::v11::ctx::Ctx;
 
 // ============================================================================
-// Metadata
+// Args parsing types
+// ============================================================================
+
+/// Error returned when argument parsing fails
+#[derive(Debug, Clone)]
+pub struct ArgsParseError {
+    message: String,
+    help: Option<String>,
+}
+
+impl ArgsParseError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            help: None,
+        }
+    }
+
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn help(&self) -> Option<&str> {
+        self.help.as_deref()
+    }
+}
+
+impl std::fmt::Display for ArgsParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ArgsParseError {}
+
+/// Trait for parsing command arguments
+pub trait Args: Sized + Default {
+    /// Parse arguments from a string
+    fn parse(args: &str) -> std::result::Result<Self, ArgsParseError>;
+
+    /// Get usage/help text for this args type (optional)
+    fn usage() -> Option<&'static str> {
+        None
+    }
+}
+
+// ============================================================================
+// Cron schedule wrapper
+// ============================================================================
+
+/// A parsed cron schedule that can compute upcoming trigger times
+#[derive(Clone, Debug)]
+pub struct CronSchedule {
+    inner: cron::Schedule,
+    source: String,
+}
+
+impl CronSchedule {
+    /// Parse a cron expression string
+    pub fn parse(expr: &str) -> std::result::Result<Self, ArgsParseError> {
+        use std::str::FromStr;
+        cron::Schedule::from_str(expr)
+            .map(|inner| Self {
+                inner,
+                source: expr.to_string(),
+            })
+            .map_err(|e| ArgsParseError::new(format!("Invalid cron expression: {}", e)))
+    }
+
+    /// Get the source cron expression
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// Get an iterator of upcoming trigger times from now
+    pub fn upcoming(&self) -> impl Iterator<Item = chrono::DateTime<chrono::Utc>> + '_ {
+        self.inner.upcoming(chrono::Utc)
+    }
+
+    /// Get the next trigger time after a given datetime
+    pub fn next_after(
+        &self,
+        after: &chrono::DateTime<chrono::Utc>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.inner.after(after).next()
+    }
+
+    /// Check if a datetime matches this schedule
+    pub fn includes(&self, dt: chrono::DateTime<chrono::Utc>) -> bool {
+        self.inner.includes(dt)
+    }
+}
+
+impl std::fmt::Display for CronSchedule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.source)
+    }
+}
+
+// ============================================================================
+// Regex wrapper for validated strings
+// ============================================================================
+
+/// A string that has been validated against a regex pattern
+#[derive(Clone, Debug)]
+pub struct RegexValidated {
+    value: String,
+    pattern: &'static str,
+}
+
+impl RegexValidated {
+    /// Validate a string against a regex pattern
+    pub fn validate(
+        value: &str,
+        pattern: &'static str,
+    ) -> std::result::Result<Self, ArgsParseError> {
+        let re = regex::Regex::new(pattern)
+            .map_err(|e| ArgsParseError::new(format!("Invalid regex pattern: {}", e)))?;
+        if re.is_match(value) {
+            Ok(Self {
+                value: value.to_string(),
+                pattern,
+            })
+        } else {
+            Err(ArgsParseError::new(format!(
+                "Value '{}' does not match pattern '{}'",
+                value, pattern
+            )))
+        }
+    }
+
+    /// Get the validated value
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    /// Get the pattern used for validation
+    pub fn pattern(&self) -> &'static str {
+        self.pattern
+    }
+}
+
+impl std::fmt::Display for RegexValidated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value)
+    }
+}
+
+impl AsRef<str> for RegexValidated {
+    fn as_ref(&self) -> &str {
+        &self.value
+    }
+}
+
+// ============================================================================
+// Plugin metadata
 // ============================================================================
 
 #[derive(Clone, Debug)]

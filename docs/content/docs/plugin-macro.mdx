@@ -1,0 +1,160 @@
+---
+title: Plugin 宏
+description: 使用 #[derive(Plugin)] 宏定义插件
+---
+
+`#[derive(Plugin)]` 宏用于将多个命令组织成一个插件，自动生成命令解析、匹配和分发逻辑。
+
+## 基本用法
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Plugin)]
+#[plugin(name = "my_plugin", prefix = "/")]
+pub enum MyCommands {
+    #[plugin(description = "ping测试")]
+    Ping(Ping),
+
+    #[plugin(description = "帮助信息")]
+    Help(Help),
+}
+```
+
+## 插件级属性
+
+在 `#[plugin(...)]` 中可以配置以下属性：
+
+| 属性 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | `String` | 是 | 插件名称 |
+| `prefix` | `String` | 否 | 命令前缀，默认为空 |
+| `description` | `String` | 否 | 插件描述，用于帮助信息 |
+| `version` | `String` | 否 | 插件版本，默认 "0.1.0" |
+| `rename_all` | `String` | 否 | 命令名称转换规则 |
+
+### rename_all 规则
+
+- `lowercase` - 全小写 (默认)
+- `UPPERCASE` - 全大写
+- `camelCase` - 驼峰
+- `snake_case` - 蛇形
+- `kebab-case` - 短横线
+
+```rust
+#[derive(Plugin)]
+#[plugin(name = "cmds", prefix = "/", rename_all = "lowercase")]
+pub enum Commands {
+    MyCommand(MyCommand), // 命令名: /mycommand
+}
+```
+
+## 变体级属性
+
+每个枚举变体可以配置：
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `description` | `String` | 命令描述 |
+| `alias` | `String` | 单个别名 |
+| `aliases` | `[String]` | 多个别名 |
+| `rename` | `String` | 重命名命令 |
+| `hide` | `bool` | 从帮助列表隐藏 |
+
+```rust
+#[derive(Plugin)]
+#[plugin(name = "cmds", prefix = "/")]
+pub enum Commands {
+    #[plugin(description = "ping测试", alias = "p")]
+    Ping(Ping),
+
+    #[plugin(description = "帮助", aliases = ["h", "?"])]
+    Help(Help),
+
+    #[plugin(rename = "info", description = "信息")]
+    About(About),
+
+    #[plugin(hide)]
+    Debug(Debug), // 不显示在帮助列表
+}
+```
+
+## 生成的方法
+
+宏会为枚举生成以下方法：
+
+### `matches_cmd(text: &str) -> bool`
+
+检查文本是否匹配某个命令：
+
+```rust
+if MyCommands::matches_cmd("/ping") {
+    println!("匹配到命令");
+}
+```
+
+### `try_parse(text: &str) -> Result<Self, ArgsParseError>`
+
+尝试解析文本为命令，包含参数验证：
+
+```rust
+match MyCommands::try_parse("/echo hello") {
+    Ok(cmd) => { /* 处理命令 */ }
+    Err(e) => println!("解析失败: {}", e),
+}
+```
+
+### `descriptions() -> &'static [(&'static str, &'static str)]`
+
+获取所有命令的描述列表：
+
+```rust
+for (cmd, desc) in MyCommands::descriptions() {
+    println!("{} - {}", cmd, desc);
+}
+```
+
+### `help_text() -> String`
+
+生成格式化的帮助文本：
+
+```rust
+let help = MyCommands::help_text();
+ctx.reply_text(help).await?;
+```
+
+## 自动错误处理
+
+当命令参数解析失败时，框架会自动：
+
+1. 调用 `ctx.reply_text()` 发送错误消息
+2. 返回 `Ok(true)` 阻断后续处理器
+
+错误消息格式：
+```
+❌ 错误信息
+
+帮助文本（如果有）
+```
+
+这意味着你不需要手动处理参数验证错误，框架会自动回复用户。
+
+## 实现 Plugin trait
+
+宏自动实现 `ayiou::core::Plugin` trait：
+
+```rust
+#[async_trait]
+impl Plugin for MyCommands {
+    fn meta(&self) -> PluginMetadata { ... }
+    fn matches(&self, ctx: &Ctx) -> bool { ... }
+    async fn handle(&self, ctx: &Ctx) -> Result<bool> { ... }
+}
+```
+
+## 命令处理流程
+
+1. `matches()` 检查消息是否匹配任一命令
+2. `handle()` 调用 `try_parse()` 解析命令和参数
+3. 如果解析失败，自动回复错误并返回
+4. 如果解析成功，分发到对应变体的 `handle` 方法

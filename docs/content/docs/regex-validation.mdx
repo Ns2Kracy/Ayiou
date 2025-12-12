@@ -1,0 +1,152 @@
+---
+title: 正则验证
+description: 使用正则表达式验证命令参数
+---
+
+Ayiou 框架支持在命令参数上使用正则表达式进行验证，验证失败时自动回复错误消息。
+
+## 基本用法
+
+使用 `#[arg(regex = "...")]` 属性：
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Args)]
+pub struct PhoneArgs {
+    #[arg(regex = r"^\d{11}$")]
+    pub phone: String,
+}
+```
+
+## 自定义错误消息
+
+使用 `error` 属性自定义验证失败时的提示：
+
+```rust
+#[derive(Args)]
+pub struct PhoneArgs {
+    #[arg(regex = r"^\d{11}$", error = "请输入正确的11位手机号")]
+    pub phone: String,
+}
+```
+
+## 常用正则模式
+
+### 数字验证
+
+```rust
+// 纯数字
+#[arg(regex = r"^\d+$", error = "请输入数字")]
+pub id: String,
+
+// 指定位数
+#[arg(regex = r"^\d{6}$", error = "请输入6位数字")]
+pub code: String,
+
+// 数字范围 (1-100)
+#[arg(regex = r"^([1-9]|[1-9]\d|100)$", error = "请输入1-100之间的数字")]
+pub count: String,
+```
+
+### 用户标识
+
+```rust
+// QQ号 (5-11位数字)
+#[arg(regex = r"^\d{5,11}$", error = "请输入正确的QQ号")]
+pub qq: String,
+
+// @用户 格式
+#[arg(regex = r"^\[CQ:at,qq=\d+\]$", error = "请@一个用户")]
+pub target: String,
+```
+
+### 时间格式
+
+```rust
+// HH:MM 格式
+#[arg(regex = r"^([01]\d|2[0-3]):[0-5]\d$", error = "请输入正确的时间格式 HH:MM")]
+pub time: String,
+
+// 日期 YYYY-MM-DD
+#[arg(regex = r"^\d{4}-\d{2}-\d{2}$", error = "请输入正确的日期格式 YYYY-MM-DD")]
+pub date: String,
+```
+
+### 其他常用
+
+```rust
+// 邮箱
+#[arg(regex = r"^[\w\.-]+@[\w\.-]+\.\w+$", error = "请输入正确的邮箱地址")]
+pub email: String,
+
+// URL
+#[arg(regex = r"^https?://\S+$", error = "请输入正确的URL")]
+pub url: String,
+
+// 中文
+#[arg(regex = r"^[\u4e00-\u9fa5]+$", error = "请输入中文")]
+pub name: String,
+```
+
+## RegexValidated 类型
+
+框架提供 `RegexValidated` 类型用于手动验证：
+
+```rust
+use ayiou::prelude::*;
+
+let result = RegexValidated::validate("13812345678", r"^\d{11}$");
+match result {
+    Ok(validated) => println!("验证通过: {}", validated.value()),
+    Err(e) => println!("验证失败: {}", e),
+}
+```
+
+### 方法
+
+| 方法 | 返回类型 | 说明 |
+|------|----------|------|
+| `validate(value, pattern)` | `Result<Self, ArgsParseError>` | 验证字符串 |
+| `value()` | `&str` | 获取验证后的值 |
+| `pattern()` | `&'static str` | 获取使用的正则模式 |
+
+## 完整示例
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Args)]
+#[arg(usage = "/transfer <目标QQ> <金额>")]
+pub struct TransferArgs {
+    #[arg(regex = r"^\d{5,11}$", error = "请输入正确的QQ号")]
+    pub target_qq: String,
+
+    #[arg(regex = r"^\d+$", error = "金额必须是正整数")]
+    pub amount: String,
+}
+
+impl TransferArgs {
+    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        let amount: u64 = self.amount.parse().unwrap(); // 已验证为数字
+        ctx.reply_text(format!(
+            "已向 {} 转账 {} 金币",
+            self.target_qq,
+            amount
+        )).await?;
+        Ok(())
+    }
+}
+
+#[derive(Plugin)]
+#[plugin(name = "economy", prefix = "/")]
+pub enum EconomyCommands {
+    #[plugin(description = "转账")]
+    Transfer(TransferArgs),
+}
+```
+
+用户输入：
+- `/transfer 12345678 100` -> 成功
+- `/transfer abc 100` -> 失败，回复 "❌ 请输入正确的QQ号"
+- `/transfer 12345678 abc` -> 失败，回复 "❌ 金额必须是正整数"

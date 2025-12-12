@@ -1,0 +1,199 @@
+---
+title: Args 宏
+description: 使用 #[derive(Args)] 宏定义命令参数
+---
+
+`#[derive(Args)]` 宏用于定义命令的参数结构，支持自动解析、验证和错误处理。
+
+## 基本用法
+
+### 无参数命令
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Args)]
+pub struct Ping;
+```
+
+### 单参数命令
+
+```rust
+#[derive(Args)]
+pub struct Echo {
+    pub message: String,
+}
+```
+
+用户输入 `/echo hello world` 时，`message` 为 `"hello world"`。
+
+### 多参数命令
+
+```rust
+#[derive(Args)]
+pub struct SetNick {
+    pub user_id: String,
+    pub nickname: String,
+}
+```
+
+参数按空格分割，`/setnick 12345 新昵称` 解析为 `user_id = "12345"`, `nickname = "新昵称"`。
+
+## 字段属性
+
+### `#[arg(regex = "...")]`
+
+使用正则表达式验证字段值：
+
+```rust
+#[derive(Args)]
+pub struct PhoneArgs {
+    #[arg(regex = r"^\d{11}$", error = "请输入11位手机号")]
+    pub phone: String,
+}
+```
+
+如果验证失败，框架自动回复错误消息。
+
+### `#[arg(cron)]`
+
+将字段解析为 cron 表达式：
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Args)]
+pub struct RemindArgs {
+    #[arg(cron, error = "无效的 cron 表达式")]
+    pub schedule: CronSchedule,
+
+    #[arg(rest)]
+    pub message: String,
+}
+```
+
+`CronSchedule` 类型支持计算下次触发时间等操作。
+
+### `#[arg(rest)]`
+
+消费剩余所有输入：
+
+```rust
+#[derive(Args)]
+pub struct SayArgs {
+    pub target: String,
+
+    #[arg(rest)]
+    pub content: String, // 包含剩余所有文本
+}
+```
+
+`/say user hello world` 解析为 `target = "user"`, `content = "hello world"`。
+
+### `#[arg(optional)]`
+
+标记字段为可选：
+
+```rust
+#[derive(Args)]
+pub struct SearchArgs {
+    pub keyword: String,
+
+    #[arg(optional)]
+    pub page: Option<String>,
+}
+```
+
+### `#[arg(error = "...")]`
+
+自定义验证失败时的错误消息：
+
+```rust
+#[derive(Args)]
+pub struct AgeArgs {
+    #[arg(regex = r"^\d+$", error = "年龄必须是数字")]
+    pub age: String,
+}
+```
+
+## 结构级属性
+
+### `#[arg(usage = "...")]`
+
+定义用法说明，用于帮助信息：
+
+```rust
+#[derive(Args)]
+#[arg(usage = "/remind <cron表达式> <提醒内容>")]
+pub struct RemindArgs {
+    #[arg(cron)]
+    pub schedule: CronSchedule,
+
+    #[arg(rest)]
+    pub message: String,
+}
+```
+
+## 生成的实现
+
+宏会生成以下实现：
+
+### `Args` trait
+
+```rust
+impl Args for MyArgs {
+    fn parse(args: &str) -> Result<Self, ArgsParseError>;
+    fn usage() -> Option<&'static str>;
+}
+```
+
+### `Default` trait
+
+```rust
+impl Default for MyArgs {
+    fn default() -> Self;
+}
+```
+
+## 错误处理
+
+当参数解析失败时，`Args::parse` 返回 `Err(ArgsParseError)`。
+
+`ArgsParseError` 包含：
+- `message()` - 错误消息
+- `help()` - 可选的帮助文本
+
+框架会自动将错误发送给用户，无需手动处理。
+
+## 完整示例
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Args)]
+#[arg(usage = "/ban <用户ID> [原因]")]
+pub struct BanArgs {
+    #[arg(regex = r"^\d+$", error = "用户ID必须是数字")]
+    pub user_id: String,
+
+    #[arg(optional)]
+    pub reason: Option<String>,
+}
+
+impl BanArgs {
+    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        let reason = self.reason.as_deref().unwrap_or("无");
+        ctx.reply_text(format!(
+            "已封禁用户 {}，原因: {}",
+            self.user_id,
+            reason
+        )).await?;
+        Ok(())
+    }
+}
+```
+
+用户输入：
+- `/ban 12345` -> 成功，reason 为 None
+- `/ban 12345 违规` -> 成功，reason 为 Some("违规")
+- `/ban abc` -> 失败，自动回复 "❌ 用户ID必须是数字"

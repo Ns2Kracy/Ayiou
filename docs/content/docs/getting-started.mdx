@@ -1,0 +1,120 @@
+---
+title: 快速开始
+description: 开始使用 Ayiou 框架构建你的 Bot
+---
+
+## 安装
+
+在你的 `Cargo.toml` 中添加依赖：
+
+```toml
+[dependencies]
+ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git" }
+async-trait = "0.1"
+anyhow = "1.0"
+tokio = { version = "1", features = ["full"] }
+```
+
+## 基本用法
+
+### 1. 定义命令参数
+
+使用 `#[derive(Args)]` 宏定义命令的参数结构：
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Args)]
+pub struct Ping;
+```
+
+### 2. 实现命令处理
+
+为你的参数结构实现 `handle` 方法：
+
+```rust
+impl Ping {
+    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        ctx.reply_text("pong").await?;
+        Ok(())
+    }
+}
+```
+
+### 3. 定义插件
+
+使用 `#[derive(Plugin)]` 宏将命令组织成插件：
+
+```rust
+#[derive(Plugin)]
+#[plugin(name = "commands", prefix = "/", description = "可用命令列表:")]
+pub enum BotCommands {
+    #[plugin(description = "ping测试", alias = "p")]
+    Ping(Ping),
+}
+```
+
+### 4. 注册并运行
+
+```rust
+use ayiou::prelude::*;
+
+#[tokio::main]
+async fn main() {
+    let bot = AyiouBot::new()
+        .plugin(BotCommands::default());
+
+    bot.run("ws://127.0.0.1:8080").await;
+}
+```
+
+## 完整示例
+
+```rust
+use ayiou::prelude::*;
+
+// 定义 Ping 命令
+#[derive(Args)]
+pub struct Ping;
+
+impl Ping {
+    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        ctx.reply_text("pong").await?;
+        Ok(())
+    }
+}
+
+// 定义 Echo 命令
+#[derive(Args)]
+pub struct Echo {
+    pub message: String,
+}
+
+impl Echo {
+    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        ctx.reply_text(&self.message).await?;
+        Ok(())
+    }
+}
+
+// 组织成插件
+#[derive(Plugin)]
+#[plugin(name = "basic", prefix = "/", description = "基础命令")]
+pub enum BasicCommands {
+    #[plugin(description = "ping测试")]
+    Ping(Ping),
+
+    #[plugin(description = "复读消息")]
+    Echo(Echo),
+}
+
+#[tokio::main]
+async fn main() {
+    let bot = AyiouBot::new()
+        .plugin(BasicCommands::default());
+
+    bot.run("ws://127.0.0.1:8080").await;
+}
+```
+
+用户发送 `/ping` 会收到 `pong`，发送 `/echo hello` 会收到 `hello`。

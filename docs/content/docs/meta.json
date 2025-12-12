@@ -1,0 +1,14 @@
+{
+    "title": "Ayiou 文档",
+    "pages": [
+        "index",
+        "---快速开始---",
+        "getting-started",
+        "---插件系统---",
+        "plugin-macro",
+        "args-macro",
+        "---高级功能---",
+        "regex-validation",
+        "cron-scheduling"
+    ]
+}

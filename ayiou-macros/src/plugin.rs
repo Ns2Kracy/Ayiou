@@ -55,18 +55,33 @@ impl<'a> GenContext<'a> {
         let handle_arms = self.gen_handle_arms();
         let descriptions = self.gen_descriptions();
 
+        let try_parse_arms = self.gen_try_parse_arms();
+
         quote! {
             #default_impl
 
             impl #enum_name {
-                pub fn parse(text: &str) -> Option<Self> {
+                /// Check if text matches a command (for matches())
+                pub fn matches_cmd(text: &str) -> bool {
+                    let text = text.trim();
+                    let (cmd, _args) = text.split_once(char::is_whitespace)
+                        .map(|(c, a)| (c, a.trim()))
+                        .unwrap_or((text, ""));
+                    match cmd {
+                        #parse_arms
+                        _ => false,
+                    }
+                }
+
+                /// Try to parse text into a command, returning error on args parse failure
+                pub fn try_parse(text: &str) -> std::result::Result<Self, ayiou::core::ArgsParseError> {
                     let text = text.trim();
                     let (cmd, args) = text.split_once(char::is_whitespace)
                         .map(|(c, a)| (c, a.trim()))
                         .unwrap_or((text, ""));
                     match cmd {
-                        #parse_arms
-                        _ => None,
+                        #try_parse_arms
+                        _ => Err(ayiou::core::ArgsParseError::new("Unknown command")),
                     }
                 }
 
@@ -97,11 +112,27 @@ impl<'a> GenContext<'a> {
                 }
 
                 fn matches(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> bool {
-                    Self::parse(&ctx.text()).is_some()
+                    Self::matches_cmd(&ctx.text())
                 }
 
                 async fn handle(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<bool> {
-                    match self {
+                    // Try to parse the command with args validation
+                    let parsed = match Self::try_parse(&ctx.text()) {
+                        Ok(cmd) => cmd,
+                        Err(e) => {
+                            // Auto-reply with error message
+                            let msg = if let Some(help) = e.help() {
+                                format!("❌ {}\n\n{}", e.message(), help)
+                            } else {
+                                format!("❌ {}", e.message())
+                            };
+                            ctx.reply_text(msg).await?;
+                            return Ok(true); // Block subsequent handlers
+                        }
+                    };
+
+                    // Dispatch to the parsed command
+                    match parsed {
                         #handle_arms
                     }
                 }
@@ -130,7 +161,31 @@ impl<'a> GenContext<'a> {
         }
     }
 
+    /// Generate match arms for matches_cmd (returns bool)
     fn gen_parse_arms(&self) -> TokenStream {
+        let arms = self.variants.iter().map(|v| {
+            let cmd_name = self.command_name(v);
+            let cmd = format!("{}{}", self.prefix, cmd_name);
+
+            let aliases: Vec<_> = v
+                .aliases
+                .iter()
+                .chain(v.alias.iter())
+                .map(|a| format!("{}{}", self.prefix, a))
+                .collect();
+
+            if aliases.is_empty() {
+                quote! { #cmd => true, }
+            } else {
+                quote! { #cmd #(| #aliases)* => true, }
+            }
+        });
+
+        quote! { #(#arms)* }
+    }
+
+    /// Generate match arms for try_parse (returns Result<Self, ArgsParseError>)
+    fn gen_try_parse_arms(&self) -> TokenStream {
         let enum_name = self.enum_name;
         let arms = self.variants.iter().map(|v| {
             let ident = &v.ident;
@@ -145,19 +200,23 @@ impl<'a> GenContext<'a> {
                 .collect();
 
             let construction = match v.fields.style {
-                Style::Unit => quote! { #enum_name::#ident },
+                Style::Unit => quote! { Ok(#enum_name::#ident) },
                 Style::Tuple if v.fields.len() == 1 => {
                     let ty = &v.fields.fields[0].ty;
-                    quote! { #enum_name::#ident(<#ty>::parse(args)) }
+                    // Use Args trait parse which returns Result
+                    quote! {
+                        <#ty as ayiou::core::Args>::parse(args)
+                            .map(|inner| #enum_name::#ident(inner))
+                    }
                 }
-                Style::Tuple => quote! { #enum_name::#ident(args.into()) },
-                Style::Struct => quote! { #enum_name::#ident { text: args.into() } },
+                Style::Tuple => quote! { Ok(#enum_name::#ident(args.into())) },
+                Style::Struct => quote! { Ok(#enum_name::#ident { text: args.into() }) },
             };
 
             if aliases.is_empty() {
-                quote! { #cmd => Some(#construction), }
+                quote! { #cmd => #construction, }
             } else {
-                quote! { #cmd #(| #aliases)* => Some(#construction), }
+                quote! { #cmd #(| #aliases)* => #construction, }
             }
         });
 
