@@ -31,19 +31,29 @@ impl OneBotV11Adapter {
             });
 
             while let Some(raw) = raw_rx.recv().await {
-                match serde_json::from_str::<OneBotEvent>(&raw) {
-                    Ok(event) => {
-                        if let OneBotEvent::Message(msg_event) = &event {
-                            Self::log_message(msg_event);
-                        }
+                // OneBot WS contains both:
+                // - Events: {"post_type": "message" | "notice" | ...}
+                // - Action responses: {"status": "ok", "retcode": 0, ...}
+                // We should only forward events into event_tx.
+                if raw.contains("\"post_type\"") {
+                    match serde_json::from_str::<OneBotEvent>(&raw) {
+                        Ok(event) => {
+                            if let OneBotEvent::Message(msg_event) = &event {
+                                Self::log_message(msg_event);
+                            }
 
-                        if event_tx.send(event).await.is_err() {
-                            break;
+                            if event_tx.send(event).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to parse event: {}, raw: {}", e, raw);
                         }
                     }
-                    Err(e) => {
-                        warn!("Failed to parse: {}, raw: {}", e, raw);
-                    }
+                } else {
+                    // Ignore action responses for now.
+                    // (Future: route by echo to awaiting callers)
+                    tracing::debug!("Ignoring OneBot action response: {}", raw);
                 }
             }
 

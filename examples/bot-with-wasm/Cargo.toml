@@ -1,0 +1,12 @@
+[package]
+name = "bot-with-wasm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ayiou = { path = "../../ayiou", features = ["wasm", "remote"] }
+anyhow = "1.0"
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"

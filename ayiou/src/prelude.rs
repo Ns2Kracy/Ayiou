@@ -6,6 +6,22 @@ pub use crate::core::{
     RegexValidated,
 };
 
+// Dynamic plugin system
+pub use crate::core::{
+    DynamicDispatcher, DynamicPluginRegistry, PluginCommand, PluginCommandHandler, PluginEntry,
+    PluginSource, PluginState,
+};
+
+// WASM plugin runtime (requires "wasm" feature)
+#[cfg(feature = "wasm")]
+pub use crate::core::{WasmPlugin, WasmRuntime};
+
+// Remote plugin loading (requires "remote" feature)
+#[cfg(feature = "remote")]
+pub use crate::core::{
+    InstalledPlugin, PluginConfig, PluginManifest, PluginRepository, RemotePluginLoader,
+};
+
 pub use crate::adapter::onebot::v11::ctx::Ctx;
 
 // Re-export derive macros

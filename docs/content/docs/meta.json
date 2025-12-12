@@ -9,6 +9,8 @@
         "args-macro",
         "---高级功能---",
         "regex-validation",
-        "cron-scheduling"
+        "cron-scheduling",
+        "---动态插件---",
+        "dynamic-plugins"
     ]
 }
