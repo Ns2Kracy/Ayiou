@@ -23,3 +23,5 @@ target
 .serena
 
 node_modules/
+
+build/
