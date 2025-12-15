@@ -120,7 +120,7 @@ async fn handle_greet(user: UserId, ctx: Ctx) -> Result<()> {
 - `Ctx`: 完整的事件上下文
 - `String`: 消息内容（去除命令前缀后的部分）
 - `UserId`: 发送消息的用户 ID
-- `GroupId`: 群组 ID (Option<i64>)
+- `GroupId`: 群组 ID (`Option<i64>`)
 - `Session`: 会话对象（用于多轮对话，见 Session 文档）
 - 任何实现了 `FromEvent` trait 的类型
 
