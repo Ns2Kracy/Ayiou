@@ -97,6 +97,8 @@ pub enum MessageSegment {
     Xml { data: String },
     #[serde(rename = "json")]
     Json { data: String },
+    #[serde(other)]
+    Unknown,
 }
 
 impl MessageSegment {
@@ -136,6 +138,7 @@ impl MessageSegment {
             MessageSegment::Node { .. } => buf.push_str("[消息节点]"),
             MessageSegment::Xml { .. } => buf.push_str("[XML消息]"),
             MessageSegment::Json { .. } => buf.push_str("[JSON消息]"),
+            MessageSegment::Unknown => buf.push_str("[未知消息]"),
         }
     }
 }
@@ -507,5 +510,14 @@ pub struct File {
 pub struct ApiRequest {
     pub action: String,
     pub params: serde_json::Value,
+    pub echo: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiResponse {
+    pub status: String,
+    pub retcode: i32,
+    #[serde(default)]
+    pub data: serde_json::Value,
     pub echo: Option<String>,
 }
