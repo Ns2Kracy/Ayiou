@@ -26,6 +26,7 @@ struct GenContext<'a> {
     prefix: String,
     rename_rule: RenameRule,
     variants: Vec<&'a VariantAttrs>,
+    dependencies: Vec<String>,
 }
 
 impl<'a> GenContext<'a> {
@@ -41,6 +42,7 @@ impl<'a> GenContext<'a> {
             prefix: plugin.prefix.clone().unwrap_or_else(|| "/".into()),
             rename_rule: plugin.rename_rule.unwrap_or_default(),
             variants,
+            dependencies: plugin.dependencies.clone(),
         }
     }
 
@@ -54,6 +56,7 @@ impl<'a> GenContext<'a> {
         let parse_arms = self.gen_parse_arms();
         let handle_arms = self.gen_handle_arms();
         let descriptions = self.gen_descriptions();
+        let dependencies_impl = self.gen_dependencies();
 
         let try_parse_arms = self.gen_try_parse_arms();
 
@@ -113,6 +116,10 @@ impl<'a> GenContext<'a> {
 
                 fn matches(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> bool {
                     Self::matches_cmd(&ctx.text())
+                }
+
+                fn dependencies(&self) -> Vec<ayiou::core::PluginDependency> {
+                    #dependencies_impl
                 }
 
                 async fn handle(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<bool> {
@@ -265,5 +272,24 @@ impl<'a> GenContext<'a> {
         v.rename
             .clone()
             .unwrap_or_else(|| self.rename_rule.apply(&v.ident.to_string()))
+    }
+
+    /// Generate the dependencies() method implementation
+    fn gen_dependencies(&self) -> TokenStream {
+        if self.dependencies.is_empty() {
+            return quote! { vec![] };
+        }
+
+        let items = self.dependencies.iter().map(|dep| {
+            if let Some(name) = dep.strip_suffix('?') {
+                // Optional dependency: "name?"
+                quote! { ayiou::core::PluginDependency::optional(#name) }
+            } else {
+                // Required dependency: "name"
+                quote! { ayiou::core::PluginDependency::required(#dep) }
+            }
+        });
+
+        quote! { vec![#(#items),*] }
     }
 }

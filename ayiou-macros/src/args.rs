@@ -190,16 +190,6 @@ pub fn expand_args(input: DeriveInput) -> Result<TokenStream> {
     };
 
     let output = quote! {
-        impl Default for #struct_name {
-            fn default() -> Self {
-                Self::parse("").unwrap_or_else(|_| {
-                    // Fallback for default - create with empty/default values
-                    // This is a best-effort default
-                    panic!("Cannot create default {} without valid input", stringify!(#struct_name))
-                })
-            }
-        }
-
         impl ayiou::core::Args for #struct_name {
             #parse_impl
             #usage_impl

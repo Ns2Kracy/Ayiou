@@ -79,6 +79,9 @@ pub struct PluginAttrs {
     pub description: Option<String>,
     #[darling(default)]
     pub version: Option<String>,
+    /// Plugin dependencies. Use "name" for required, "name?" for optional.
+    #[darling(default, multiple)]
+    pub dependencies: Vec<String>,
 }
 
 /// Variant-level attributes from #[plugin(...)]
