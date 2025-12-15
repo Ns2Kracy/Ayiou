@@ -19,21 +19,17 @@ Ayiou 是一个基于 Rust 的 Bot 框架，专注于简洁的 API 设计和强�
 ```rust
 use ayiou::prelude::*;
 
-#[derive(Args)]
-pub struct Ping;
-
-impl Ping {
-    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        ctx.reply_text("pong").await?;
-        Ok(())
-    }
-}
-
 #[derive(Plugin)]
 #[plugin(name = "basic", prefix = "/")]
 pub enum Commands {
-    #[plugin(description = "ping测试")]
-    Ping(Ping),
+    #[plugin(handler = "handle_ping", description = "ping测试")]
+    Ping,
+}
+
+// 简单的 Async 函数处理器
+async fn handle_ping(ctx: Ctx) -> Result<()> {
+    ctx.reply_text("pong").await?;
+    Ok(())
 }
 ```
 

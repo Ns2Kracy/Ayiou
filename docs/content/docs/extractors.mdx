@@ -1,0 +1,122 @@
+---
+title: 依赖注入 (Extractors)
+description: 使用提取器自动解析事件参数
+---
+
+Ayiou 的核心设计哲学之一是 **依赖注入 (Dependency Injection)**。通过提取器（Extractors），你不再需要在 Handler 中手动解析 `Ctx`，而是直接声明你需要的参数，系统会自动为你准备好。
+
+## 什么是提取器？
+
+提取器是实现了 `FromEvent` trait 的类型。当事件发生时，框架会根据你函数签名的参数类型，调用对应的 `from_event` 方法来提取数据。
+
+## 内置提取器
+
+Ayiou 提供了一系列开箱即用的提取器：
+
+### `Ctx`
+最基础的提取器，获取完整的事件上下文。
+
+```rust
+async fn handler(ctx: Ctx) -> Result<()> {
+    ctx.reply_text("Hello").await?;
+    Ok(())
+}
+```
+
+### `String` (消息文本)
+提取去除命令前缀后的消息内容。
+
+```rust
+// 假设命令是 /echo hello world
+// text 将会是 "hello world"
+async fn handler(text: String, ctx: Ctx) -> Result<()> {
+    ctx.reply_text(text).await?;
+    Ok(())
+}
+```
+
+### `UserId`
+提取发送消息的用户 ID。
+
+```rust
+use ayiou::core::extract::UserId;
+
+async fn handler(user: UserId) -> Result<()> {
+    println!("User ID: {}", user.0);
+    Ok(())
+}
+```
+
+### `GroupId`
+提取群组 ID。注意这是一个 `Option` 包装的结构，因为消息可能来自私聊。
+
+```rust
+use ayiou::core::extract::GroupId;
+
+async fn handler(group: GroupId) -> Result<()> {
+    if let Some(gid) = group.0 {
+        println!("Group ID: {}", gid);
+    } else {
+        println!("Private message");
+    }
+    Ok(())
+}
+```
+
+### `Session`
+获取会话管理器，用于多轮对话。详见 [会话管理](/docs/session-management)。
+
+```rust
+async fn handler(session: Session) -> Result<()> {
+    // ...
+    Ok(())
+}
+```
+
+## 可选提取器
+
+任何实现了 `FromEvent` 的类型 `T`，其 `Option<T>` 也会自动实现 `FromEvent`。如果提取失败，会返回 `None` 而不是报错。
+
+```rust
+// 如果提取 UserId 失败（理论上不太可能，但作为演示），user 将为 None
+async fn handler(user: Option<UserId>) -> Result<()> {
+    // ...
+    Ok(())
+}
+```
+
+## 自定义提取器
+
+你可以通过实现 `FromEvent` trait 来定义自己的提取器。这对于将第三方库（如数据库连接池）注入到 Handler 非常有用。
+
+```rust
+use ayiou::core::extract::FromEvent;
+use ayiou::adapter::onebot::v11::ctx::Ctx;
+use async_trait::async_trait;
+
+// 假设这是你的数据库连接池
+#[derive(Clone)]
+pub struct DbPool;
+
+// 定义提取器
+pub struct Db(pub DbPool);
+
+#[async_trait]
+impl FromEvent for Db {
+    type Error = anyhow::Error;
+
+    async fn from_event(ctx: &Ctx) -> Result<Self, Self::Error> {
+        // 这里你需要一种方式获取全局状态
+        // 目前推荐的方式是在 Ctx 中扩展（需修改核心库）
+        // 或者使用 lazy_static / once_cell 等全局单例模式
+        // 未来的版本可能会支持更优雅的 State 注入
+        Ok(Db(DbPool))
+    }
+}
+
+// 使用
+async fn handler(db: Db) -> Result<()> {
+    // db.0.query(...)
+    Ok(())
+}
+```

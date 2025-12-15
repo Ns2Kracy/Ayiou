@@ -98,4 +98,6 @@ pub struct VariantAttrs {
     pub rename: Option<String>,
     #[darling(default)]
     pub hide: bool,
+    #[darling(default)]
+    pub handler: Option<String>,
 }

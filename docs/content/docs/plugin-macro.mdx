@@ -79,6 +79,51 @@ pub enum Commands {
 }
 ```
 
+## Handler 模式 (推荐)
+
+除了传统的结构体包装方式，现在支持直接绑定 async 函数作为处理器。这种方式利用了依赖注入（Extractor），代码更简洁。
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Plugin)]
+#[plugin(name = "my_plugin", prefix = "/")]
+pub enum MyPlugin {
+    // 绑定到 handle_echo 函数
+    #[plugin(handler = "handle_echo", description = "回显")]
+    Echo,
+
+    // 绑定到 handle_greet 函数
+    #[plugin(handler = "handle_greet", description = "打招呼")]
+    Greet,
+}
+
+// 处理器函数：参数自动注入
+// Ctx: 上下文
+// String: 消息文本 (剩余参数)
+// UserId: 发送者ID
+async fn handle_echo(ctx: Ctx, text: String) -> Result<()> {
+    ctx.reply_text(text).await?;
+    Ok(())
+}
+
+async fn handle_greet(user: UserId, ctx: Ctx) -> Result<()> {
+    ctx.reply_text(format!("Hello, user {}!", user.0)).await?;
+    Ok(())
+}
+```
+
+### 支持的提取器 (Extractors)
+
+处理器函数的参数可以是以下类型（顺序无关）：
+
+- `Ctx`: 完整的事件上下文
+- `String`: 消息内容（去除命令前缀后的部分）
+- `UserId`: 发送消息的用户 ID
+- `GroupId`: 群组 ID (Option<i64>)
+- `Session`: 会话对象（用于多轮对话，见 Session 文档）
+- 任何实现了 `FromEvent` trait 的类型
+
 ## 生成的方法
 
 宏会为枚举生成以下方法：

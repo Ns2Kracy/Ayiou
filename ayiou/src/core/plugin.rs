@@ -222,6 +222,12 @@ pub trait Plugin: Send + Sync + 'static {
     async fn handle(&self, ctx: &Ctx) -> Result<bool>;
 }
 
+/// Trait for individual commands
+#[async_trait::async_trait]
+pub trait CommandHandler: Send + Sync + 'static {
+    async fn handle(self, ctx: &Ctx) -> Result<()>;
+}
+
 pub type PluginBox = Box<dyn Plugin>;
 
 type PluginList = Arc<[Arc<dyn Plugin>]>;

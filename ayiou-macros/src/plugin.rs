@@ -227,23 +227,55 @@ impl<'a> GenContext<'a> {
         let enum_name = self.enum_name;
         let arms = self.variants.iter().map(|v| {
             let ident = &v.ident;
-            match v.fields.style {
-                Style::Unit => {
-                    quote! { #enum_name::#ident => Ok(true), }
-                }
-                Style::Tuple if v.fields.len() == 1 => {
-                    quote! {
-                        #enum_name::#ident(inner) => {
-                            inner.handle(ctx).await?;
-                            Ok(true)
+
+            if let Some(handler_path) = &v.handler {
+                let handler: syn::Path = syn::parse_str(handler_path).expect("Invalid handler path");
+                match v.fields.style {
+                    Style::Unit => {
+                        quote! {
+                            #enum_name::#ident => {
+                                ayiou::core::handler::call_handler(#handler, ctx.clone()).await?;
+                                Ok(true)
+                            }
+                        }
+                    }
+                    Style::Tuple if v.fields.len() == 1 => {
+                        quote! {
+                            #enum_name::#ident(args) => {
+                                ayiou::core::handler::call_command_handler(#handler, ctx.clone(), args).await?;
+                                Ok(true)
+                            }
+                        }
+                    }
+                    _ => {
+                        // Struct or multi-tuple not supported for handler yet
+                        quote! {
+                            #enum_name::#ident { .. } => {
+                                tracing::error!("Handler attribute only supports Unit or Single-Tuple variants");
+                                Ok(true)
+                            }
                         }
                     }
                 }
-                Style::Tuple => {
-                    quote! { #enum_name::#ident(..) => Ok(true), }
-                }
-                Style::Struct => {
-                    quote! { #enum_name::#ident { .. } => Ok(true), }
+            } else {
+                match v.fields.style {
+                    Style::Unit => {
+                        quote! { #enum_name::#ident => Ok(true), }
+                    }
+                    Style::Tuple if v.fields.len() == 1 => {
+                        quote! {
+                            #enum_name::#ident(inner) => {
+                                inner.handle(ctx).await?;
+                                Ok(true)
+                            }
+                        }
+                    }
+                    Style::Tuple => {
+                        quote! { #enum_name::#ident(..) => Ok(true), }
+                    }
+                    Style::Struct => {
+                        quote! { #enum_name::#ident { .. } => Ok(true), }
+                    }
                 }
             }
         });

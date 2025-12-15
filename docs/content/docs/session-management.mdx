@@ -1,0 +1,99 @@
+---
+title: 会话管理 (Session)
+description: 使用 Session 实现多轮线性对话
+---
+
+Ayiou 提供了一个强大的会话管理系统，允许你以线性的方式编写多轮对话，而不需要复杂的状态机。
+
+## 核心概念
+
+传统的 Bot 开发中，处理多轮对话（例如问卷调查）通常需要定义一个状态机（FSM），并维护 `WaitingForName`, `WaitingForAge` 等状态。这会导致逻辑分散在多个 `match` 分支中。
+
+Ayiou 利用 Rust 的 `async/await` 特性，允许你在 handler 函数中“暂停”执行，等待用户的下一条消息。
+
+## 使用 Session
+
+要使用会话功能，只需在你的 handler 参数中添加 `Session` 提取器：
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Plugin)]
+pub enum SurveyPlugin {
+    #[plugin(prefix = "/", handler = "start_survey", description = "开始问卷")]
+    Survey,
+}
+
+async fn start_survey(ctx: Ctx, session: Session) -> Result<()> {
+    // 1. 询问名字
+    ctx.reply_text("你好！请问你叫什么名字？").await?;
+
+    // 2. 等待回复 (会挂起当前函数，直到收到该用户的下一条消息)
+    let name_msg = session.wait_next().await;
+
+    // session.wait_next() 返回 Option<Ctx>
+    // 如果返回 None，通常意味着连接断开（但在目前实现中主要是用于配合超时）
+    let name = if let Some(msg) = name_msg {
+        msg.text()
+    } else {
+        return Ok(());
+    };
+
+    // 3. 询问年龄
+    ctx.reply_text(format!("很高兴认识你，{}。你今年多大了？", name)).await?;
+
+    let age_msg = session.wait_next().await;
+    let age = if let Some(msg) = age_msg {
+        msg.text()
+    } else {
+        return Ok(());
+    };
+
+    // 4. 完成
+    ctx.reply_text(format!("登记完成：姓名 {}, 年龄 {}", name, age)).await?;
+
+    Ok(())
+}
+```
+
+## 工作原理
+
+1. 当调用 `session.wait_next().await` 时，Bot 会在内部注册一个拦截器。
+2. 该用户（在当前群组或私聊）发送的**下一条**消息会被拦截。
+3. 拦截的消息**不会**触发其他的插件或指令。
+4. 消息通过 channel 直接传递给挂起的 `wait_next` 调用。
+5. 函数恢复执行。
+
+## 处理超时
+
+`wait_next()` 本身是永久等待的。为了避免用户通过开始一个会话然后弃坑导致资源泄漏或逻辑卡死，建议总是配合 `tokio::time::timeout` 使用。
+
+```rust
+use tokio::time::{timeout, Duration};
+
+async fn handler(ctx: Ctx, session: Session) -> Result<()> {
+    ctx.reply_text("请在 30 秒内回复...").await?;
+
+    let result = timeout(Duration::from_secs(30), session.wait_next()).await;
+
+    match result {
+        Ok(Some(msg)) => {
+            ctx.reply_text(format!("收到回复: {}", msg.text())).await?;
+        }
+        Ok(None) => {
+            // 理论上不会发生，除非 SessionManager 被关闭
+        }
+        Err(_) => {
+            ctx.reply_text("等待超时，会话结束。").await?;
+        }
+    }
+
+    Ok(())
+}
+```
+
+## 独占性
+
+Session 的拦截是**独占**的。在 `wait_next` 等待期间，用户发送的任何文本（包括其他指令如 `/help`）都会被视为对当前会话的回复，而不会触发 `/help` 插件。
+
+这对于需要捕获任意输入的场景（如输入密码、验证码、自由文本）非常有用。

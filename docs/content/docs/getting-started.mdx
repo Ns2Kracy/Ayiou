@@ -15,106 +15,93 @@ anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
-## 基本用法
+## 基本用法 (Handler 模式)
 
-### 1. 定义命令参数
+推荐使用新的 Handler 模式，通过 async 函数和依赖注入来处理命令。
 
-使用 `#[derive(Args)]` 宏定义命令的参数结构：
+### 1. 定义插件
+
+使用 `#[derive(Plugin)]` 宏定义插件结构，并使用 `handler` 属性绑定处理函数：
 
 ```rust
 use ayiou::prelude::*;
 
-#[derive(Args)]
-pub struct Ping;
-```
-
-### 2. 实现命令处理
-
-为你的参数结构实现 `handle` 方法：
-
-```rust
-impl Ping {
-    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        ctx.reply_text("pong").await?;
-        Ok(())
-    }
-}
-```
-
-### 3. 定义插件
-
-使用 `#[derive(Plugin)]` 宏将命令组织成插件：
-
-```rust
 #[derive(Plugin)]
-#[plugin(name = "commands", prefix = "/", description = "可用命令列表:")]
-pub enum BotCommands {
-    #[plugin(description = "ping测试", alias = "p")]
-    Ping(Ping),
+#[plugin(name = "hello", prefix = "/")]
+pub enum HelloPlugin {
+    #[plugin(handler = "handle_hello", description = "打招呼")]
+    Hello,
+
+    #[plugin(handler = "handle_echo", description = "复读机")]
+    Echo,
 }
 ```
 
-### 4. 注册并运行
+### 2. 编写处理函数
+
+编写普通的 async 函数，参数会自动注入（依赖注入）：
 
 ```rust
-use ayiou::prelude::*;
+// 自动注入 Context 和 UserID
+async fn handle_hello(ctx: Ctx, user: UserId) -> Result<()> {
+    ctx.reply_text(format!("你好，用户 {}！", user.0)).await?;
+    Ok(())
+}
 
+// 自动注入剩余的参数文本
+async fn handle_echo(ctx: Ctx, text: String) -> Result<()> {
+    ctx.reply_text(format!("你说的是：{}", text)).await?;
+    Ok(())
+}
+```
+
+### 3. 注册并运行
+
+```rust
 #[tokio::main]
 async fn main() {
     let bot = AyiouBot::new()
-        .plugin(BotCommands::default());
+        .plugin::<HelloPlugin>(); // 注册插件
 
+    // 连接到 OneBot 适配器
     bot.run("ws://127.0.0.1:8080").await;
 }
 ```
 
-## 完整示例
+## 传统用法 (结构体模式)
+
+如果你需要更复杂的参数解析（例如使用 clap 风格的参数），可以使用结构体模式。
+
+### 1. 定义参数结构
+
+使用 `#[derive(Args)]` 定义命令参数：
 
 ```rust
 use ayiou::prelude::*;
 
-// 定义 Ping 命令
 #[derive(Args)]
-pub struct Ping;
+pub struct BanArgs {
+    pub user_id: i64,
+    pub duration: i64,
+}
 
-impl Ping {
+// 为结构体实现处理逻辑
+impl BanArgs {
     pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        ctx.reply_text("pong").await?;
+        ctx.set_group_ban(ctx.group_id().unwrap(), self.user_id, self.duration).await?;
+        ctx.reply_text("已禁言").await?;
         Ok(())
     }
-}
-
-// 定义 Echo 命令
-#[derive(Args)]
-pub struct Echo {
-    pub message: String,
-}
-
-impl Echo {
-    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        ctx.reply_text(&self.message).await?;
-        Ok(())
-    }
-}
-
-// 组织成插件
-#[derive(Plugin)]
-#[plugin(name = "basic", prefix = "/", description = "基础命令")]
-pub enum BasicCommands {
-    #[plugin(description = "ping测试")]
-    Ping(Ping),
-
-    #[plugin(description = "复读消息")]
-    Echo(Echo),
-}
-
-#[tokio::main]
-async fn main() {
-    let bot = AyiouBot::new()
-        .plugin(BasicCommands::default());
-
-    bot.run("ws://127.0.0.1:8080").await;
 }
 ```
 
-用户发送 `/ping` 会收到 `pong`，发送 `/echo hello` 会收到 `hello`。
+### 2. 在插件中使用
+
+```rust
+#[derive(Plugin)]
+#[plugin(name = "admin", prefix = "/")]
+pub enum AdminPlugin {
+    #[plugin(description = "禁言用户")]
+    Ban(BanArgs),
+}
+```

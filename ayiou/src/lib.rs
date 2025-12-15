@@ -14,6 +14,7 @@ use tracing::{error, info};
 use crate::{
     adapter::onebot::v11::{adapter::OneBotV11Adapter, ctx::Ctx, model::OneBotEvent},
     core::plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
+    core::session::SessionManager,
 };
 
 pub mod adapter;
@@ -23,6 +24,7 @@ pub mod prelude;
 
 pub struct AyiouBot {
     plugin_manager: PluginManager,
+    session_manager: Arc<SessionManager>,
     event_tx: mpsc::Sender<OneBotEvent>,
     event_rx: mpsc::Receiver<OneBotEvent>,
 }
@@ -38,6 +40,7 @@ impl AyiouBot {
         let (event_tx, event_rx) = mpsc::channel(100);
         Self {
             plugin_manager: PluginManager::new(),
+            session_manager: Arc::new(SessionManager::new()),
             event_tx,
             event_rx,
         }
@@ -83,17 +86,32 @@ impl AyiouBot {
 
         // Event dispatch task
         let mut event_rx = self.event_rx;
+        let session_manager = self.session_manager.clone();
+
         tokio::spawn(async move {
             info!("Event dispatch started!");
             while let Some(msg) = event_rx.recv().await {
                 let event = Arc::new(msg);
                 let dispatcher = dispatcher.clone();
                 let outgoing = outgoing_tx.clone();
+                let session_manager = session_manager.clone();
 
                 tokio::spawn(async move {
-                    let Some(ctx) = Ctx::new(event, outgoing) else {
+                    let Some(ctx) = Ctx::new(event, outgoing, session_manager.clone()) else {
                         return;
                     };
+
+                    // Check for active session interception
+                    let key = (ctx.user_id(), ctx.group_id());
+                    if let Some(tx) = session_manager.get_waiter(&key) {
+                        // If we can send to the waiter, we skip normal dispatch
+                        // If the receiver dropped (timeout/closed), we fall back to normal dispatch
+                        if tx.send(ctx.clone()).await.is_ok() {
+                            return;
+                        }
+                        // Cleanup dead waiter if send failed
+                        session_manager.unregister(&key);
+                    }
 
                     if let Err(err) = dispatcher.dispatch(&ctx).await {
                         error!("Plugin dispatch error: {}", err);
