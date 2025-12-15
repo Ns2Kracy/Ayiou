@@ -5,41 +5,37 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::adapter::onebot::v11::model::{
-    GroupMessageEvent, Message, MessageEvent, MessageSegment, OneBotEvent, PrivateMessageEvent,
+    Message, MessageEvent, MessageSegment, OneBotEvent,
 };
 
-/// Message event type
-#[derive(Clone)]
-pub enum MsgEvent {
-    Private(Arc<PrivateMessageEvent>),
-    Group(Arc<GroupMessageEvent>),
-}
-
 /// Message context
+///
+/// Provides access to message data and API calls.
+/// Uses Arc internally for efficient cloning.
 #[derive(Clone)]
 pub struct Ctx {
     event: Arc<OneBotEvent>,
-    msg: MsgEvent,
     outgoing_tx: mpsc::Sender<String>,
 }
 
 impl Ctx {
     /// Create context from OneBot event
     pub fn new(event: Arc<OneBotEvent>, outgoing_tx: mpsc::Sender<String>) -> Option<Self> {
-        let OneBotEvent::Message(msg_event) = event.as_ref() else {
+        // Only accept message events
+        if !matches!(event.as_ref(), OneBotEvent::Message(_)) {
             return None;
-        };
+        }
 
-        let msg = match msg_event.as_ref() {
-            MessageEvent::Private(p) => MsgEvent::Private(Arc::new(p.clone())),
-            MessageEvent::Group(g) => MsgEvent::Group(Arc::new(g.clone())),
-        };
+        Some(Self { event, outgoing_tx })
+    }
 
-        Some(Self {
-            event,
-            msg,
-            outgoing_tx,
-        })
+    /// Get the message event reference
+    #[inline]
+    fn msg_event(&self) -> &MessageEvent {
+        match self.event.as_ref() {
+            OneBotEvent::Message(msg) => msg.as_ref(),
+            _ => unreachable!("Ctx only created for Message events"),
+        }
     }
 
     /// Get raw OneBot event
@@ -50,9 +46,9 @@ impl Ctx {
 
     /// Get plain text from message
     pub fn text(&self) -> String {
-        let message = match &self.msg {
-            MsgEvent::Private(p) => &p.message,
-            MsgEvent::Group(g) => &g.message,
+        let message = match self.msg_event() {
+            MessageEvent::Private(p) => &p.message,
+            MessageEvent::Group(g) => &g.message,
         };
 
         match message {
@@ -76,59 +72,59 @@ impl Ctx {
     /// Raw message string
     #[inline]
     pub fn raw_message(&self) -> &str {
-        match &self.msg {
-            MsgEvent::Private(p) => &p.raw_message,
-            MsgEvent::Group(g) => &g.raw_message,
+        match self.msg_event() {
+            MessageEvent::Private(p) => &p.raw_message,
+            MessageEvent::Group(g) => &g.raw_message,
         }
     }
 
     /// Sender user ID
     #[inline]
     pub fn user_id(&self) -> i64 {
-        match &self.msg {
-            MsgEvent::Private(p) => p.user_id,
-            MsgEvent::Group(g) => g.user_id,
+        match self.msg_event() {
+            MessageEvent::Private(p) => p.user_id,
+            MessageEvent::Group(g) => g.user_id,
         }
     }
 
     /// Group ID (None for private messages)
     #[inline]
     pub fn group_id(&self) -> Option<i64> {
-        match &self.msg {
-            MsgEvent::Private(_) => None,
-            MsgEvent::Group(g) => Some(g.group_id),
+        match self.msg_event() {
+            MessageEvent::Private(_) => None,
+            MessageEvent::Group(g) => Some(g.group_id),
         }
     }
 
     /// Check if private message
     #[inline]
     pub fn is_private(&self) -> bool {
-        matches!(self.msg, MsgEvent::Private(_))
+        matches!(self.msg_event(), MessageEvent::Private(_))
     }
 
     /// Check if group message
     #[inline]
     pub fn is_group(&self) -> bool {
-        matches!(self.msg, MsgEvent::Group(_))
+        matches!(self.msg_event(), MessageEvent::Group(_))
     }
 
     /// Sender nickname
     #[inline]
     pub fn nickname(&self) -> &str {
-        match &self.msg {
-            MsgEvent::Private(p) => &p.sender.nickname,
-            MsgEvent::Group(g) => &g.sender.nickname,
+        match self.msg_event() {
+            MessageEvent::Private(p) => &p.sender.nickname,
+            MessageEvent::Group(g) => &g.sender.nickname,
         }
     }
 
     /// Reply with message
     pub async fn reply(&self, message: impl Into<Message>) -> Result<()> {
         let msg = message.into();
-        match &self.msg {
-            MsgEvent::Private(p) => {
+        match self.msg_event() {
+            MessageEvent::Private(p) => {
                 self.send_private_msg(p.user_id, &msg).await?;
             }
-            MsgEvent::Group(g) => {
+            MessageEvent::Group(g) => {
                 self.send_group_msg(g.group_id, &msg).await?;
             }
         };

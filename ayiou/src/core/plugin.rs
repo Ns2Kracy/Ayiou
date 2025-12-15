@@ -173,6 +173,7 @@ pub struct PluginMetadata {
     pub name: String,
     pub description: String,
     pub version: String,
+    pub author: Option<String>,
 }
 
 impl PluginMetadata {
@@ -181,6 +182,7 @@ impl PluginMetadata {
             name: name.into(),
             description: String::new(),
             version: "0.0.0".to_string(),
+            author: None,
         }
     }
 
@@ -193,6 +195,11 @@ impl PluginMetadata {
         self.version = version.into();
         self
     }
+
+    pub fn author(mut self, author: impl Into<String>) -> Self {
+        self.author = Some(author.into());
+        self
+    }
 }
 
 impl Default for PluginMetadata {
@@ -201,30 +208,208 @@ impl Default for PluginMetadata {
             name: "unnamed".to_string(),
             description: String::new(),
             version: "0.0.0".to_string(),
+            author: None,
         }
     }
 }
 
-/// Plugin trait: main entry point for message handling
+// ============================================================================
+// Plugin dependency
+// ============================================================================
+
+/// Plugin dependency declaration
+#[derive(Clone, Debug)]
+pub struct PluginDependency {
+    /// Name of the required plugin
+    pub name: String,
+    /// Whether this dependency is optional
+    pub optional: bool,
+}
+
+impl PluginDependency {
+    /// Create a required dependency
+    pub fn required(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            optional: false,
+        }
+    }
+
+    /// Create an optional dependency
+    pub fn optional(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            optional: true,
+        }
+    }
+}
+
+// ============================================================================
+// Plugin trait with lifecycle
+// ============================================================================
+
+/// Plugin trait: main entry point for message handling with lifecycle support
+///
+/// # Lifecycle
+///
+/// Plugins go through the following lifecycle stages:
+///
+/// 1. **Registration**: Plugin is added to AppBuilder
+/// 2. **Build** (`build`): Initialize resources, register components
+/// 3. **Ready Check** (`ready`): Wait for async initialization to complete
+/// 4. **Finish** (`finish`): Post-initialization, all plugins are ready
+/// 5. **Running**: Handle events via `matches` and `handle`
+/// 6. **Cleanup** (`cleanup`): Graceful shutdown
+///
+/// # Example
+///
+/// ```ignore
+/// use ayiou::prelude::*;
+///
+/// pub struct MyPlugin;
+///
+/// #[async_trait]
+/// impl Plugin for MyPlugin {
+///     fn meta(&self) -> PluginMetadata {
+///         PluginMetadata::new("my-plugin")
+///             .description("My custom plugin")
+///             .version("1.0.0")
+///     }
+///
+///     fn dependencies(&self) -> Vec<PluginDependency> {
+///         vec![PluginDependency::required("database")]
+///     }
+///
+///     async fn build(&self, app: &mut AppBuilder) -> Result<()> {
+///         // Initialize resources
+///         Ok(())
+///     }
+///
+///     async fn handle(&self, ctx: &Ctx) -> Result<bool> {
+///         // Handle messages
+///         Ok(false)
+///     }
+/// }
+/// ```
 #[async_trait::async_trait]
 pub trait Plugin: Send + Sync + 'static {
-    /// Metadata (name/description/version)
+    // ========== Metadata ==========
+
+    /// Return plugin metadata (name, description, version)
     fn meta(&self) -> PluginMetadata {
         PluginMetadata::default()
     }
 
+    /// Plugin name for unique identification
+    ///
+    /// Defaults to the type name. Override for custom naming.
+    fn name(&self) -> &str {
+        std::any::type_name::<Self>()
+    }
+
+    /// Whether this plugin should be unique (only one instance allowed)
+    ///
+    /// Defaults to `true`. Set to `false` to allow multiple instances.
+    fn is_unique(&self) -> bool {
+        true
+    }
+
+    // ========== Lifecycle Hooks ==========
+
+    /// Build phase: register resources and configure the application
+    ///
+    /// Called after all plugins are registered, in dependency order.
+    /// Use this to:
+    /// - Read configuration
+    /// - Initialize connections (database, cache, etc.)
+    /// - Register shared resources
+    ///
+    /// # Arguments
+    /// * `app` - Mutable reference to AppBuilder for resource registration
+    async fn build(&self, _app: &mut crate::core::app::AppBuilder) -> Result<()> {
+        Ok(())
+    }
+
+    /// Ready check: return true when the plugin is fully initialized
+    ///
+    /// Called repeatedly until all plugins return `true`.
+    /// Use this for async initialization that may take time.
+    ///
+    /// # Arguments
+    /// * `app` - Reference to the App for checking resources
+    fn ready(&self, _app: &crate::core::app::App) -> bool {
+        true
+    }
+
+    /// Finish phase: called after all plugins are ready
+    ///
+    /// Use this for initialization that depends on other plugins being ready.
+    ///
+    /// # Arguments
+    /// * `app` - Mutable reference to App
+    async fn finish(&self, _app: &mut crate::core::app::App) -> Result<()> {
+        Ok(())
+    }
+
+    /// Cleanup phase: called during graceful shutdown
+    ///
+    /// Use this to:
+    /// - Close connections
+    /// - Flush buffers
+    /// - Release resources
+    ///
+    /// Called in reverse dependency order.
+    ///
+    /// # Arguments
+    /// * `app` - Mutable reference to App
+    async fn cleanup(&self, _app: &mut crate::core::app::App) -> Result<()> {
+        Ok(())
+    }
+
+    // ========== Dependency Management ==========
+
+    /// Declare plugin dependencies
+    ///
+    /// Dependencies are loaded before this plugin.
+    /// Use `PluginDependency::required()` for mandatory dependencies
+    /// and `PluginDependency::optional()` for optional ones.
+    ///
+    /// # Example
+    /// ```ignore
+    /// fn dependencies(&self) -> Vec<PluginDependency> {
+    ///     vec![
+    ///         PluginDependency::required("database"),
+    ///         PluginDependency::optional("cache"),
+    ///     ]
+    /// }
+    /// ```
+    fn dependencies(&self) -> Vec<PluginDependency> {
+        vec![]
+    }
+
+    // ========== Event Handling ==========
+
     /// Check if this plugin matches the context (default: always match)
+    ///
+    /// Return `true` to have `handle` called for this event.
     fn matches(&self, _ctx: &Ctx) -> bool {
         true
     }
 
     /// Handle the message, return Ok(true) to block subsequent handlers
+    ///
+    /// This is the main event processing method.
+    ///
+    /// # Returns
+    /// - `Ok(true)` - Event handled, block subsequent plugins
+    /// - `Ok(false)` - Event handled, continue to next plugin
+    /// - `Err(_)` - Error occurred during handling
     async fn handle(&self, ctx: &Ctx) -> Result<bool>;
 }
 
 pub type PluginBox = Box<dyn Plugin>;
 
-type PluginList = Arc<[Arc<dyn Plugin>]>;
+pub type PluginList = Arc<[Arc<dyn Plugin>]>;
 
 #[derive(Clone)]
 pub struct PluginManager {
@@ -328,10 +513,16 @@ impl Dispatcher {
                 continue;
             }
 
-            if let Ok(block) = plugin.handle(ctx).await
-                && block
-            {
-                break; // Block subsequent handlers
+            match plugin.handle(ctx).await {
+                Ok(true) => break, // Block subsequent handlers
+                Ok(false) => continue,
+                Err(e) => {
+                    tracing::warn!(
+                        plugin = %plugin.meta().name,
+                        error = %e,
+                        "Plugin handle error"
+                    );
+                }
             }
         }
         Ok(())

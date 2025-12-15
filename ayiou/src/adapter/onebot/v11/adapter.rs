@@ -23,7 +23,13 @@ impl OneBotV11Adapter {
         let (raw_tx, mut raw_rx) = mpsc::channel::<String>(100);
 
         tokio::spawn(async move {
-            let driver = WsDriver::new(&url, raw_tx, outgoing_rx);
+            let driver = match WsDriver::new(&url, raw_tx, outgoing_rx) {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to create WebSocket driver: {}", e);
+                    return;
+                }
+            };
             let driver_handle = tokio::spawn(async move {
                 if let Err(e) = Box::new(driver).run().await {
                     error!("Driver error: {}", e);
