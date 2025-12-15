@@ -1,0 +1,37 @@
+# Ayiou Bot Configuration
+# See: https://github.com/user/ayiou
+
+# Bot core configuration
+[bot]
+# OneBot WebSocket URL (default: ws://127.0.0.1:8080)
+ws_url = "ws://127.0.0.1:3001"
+# Access token for OneBot authentication (optional)
+access_token = "your-access-token"
+# Optional bot name for logging
+name = "ayiou"
+
+# External plugin bridge configuration
+[external-plugin-bridge]
+# Set to true to enable external plugins
+enabled = true
+
+# Python Demo Plugin
+# Available commands: /ping, /echo, /time, /help
+[external-plugin-bridge.plugins.py-demo]
+command = "python3"  # Use "python" on Windows
+args = ["-u", "./examples/external_plugin.py"]
+auto_restart = true
+
+# Example: Node.js plugin (uncomment to use)
+# [external-plugin-bridge.plugins.node-demo]
+# command = "node"
+# args = ["./plugins/demo.js"]
+# auto_restart = true
+# [external-plugin-bridge.plugins.node-demo.env]
+# NODE_ENV = "production"
+
+# Example: Go plugin (uncomment to use)
+# [external-plugin-bridge.plugins.go-demo]
+# command = "./plugins/go-demo"
+# args = []
+# auto_restart = true
