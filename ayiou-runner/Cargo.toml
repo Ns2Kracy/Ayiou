@@ -1,0 +1,16 @@
+[package]
+name = "ayiou-runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ayiou = { path = "../ayiou" }
+ayiou-plugin-bridge = { path = "../ayiou-plugin-bridge" }
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+
+[[bin]]
+name = "ayiou-bot"
+path = "src/main.rs"
