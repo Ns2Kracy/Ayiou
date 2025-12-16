@@ -1,9 +1,19 @@
 use darling::{FromDeriveInput, ast::Style};
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, Result};
+use syn::{DeriveInput, Result, Type};
 
 use crate::attrs::{PluginAttrs, RenameRule, VariantAttrs};
+
+/// Check if a type is Box<T> and return true if so
+fn is_box_type(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "Box";
+    }
+    false
+}
 
 pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
     let plugin =
@@ -52,10 +62,8 @@ impl<'a> GenContext<'a> {
 
         let default_impl = self.gen_default();
         let parse_arms = self.gen_parse_arms();
-        let handle_arms = self.gen_handle_arms();
         let descriptions = self.gen_descriptions();
         let commands_method = self.gen_commands_method();
-
         let try_parse_arms = self.gen_try_parse_arms();
 
         quote! {
@@ -134,10 +142,9 @@ impl<'a> GenContext<'a> {
                         }
                     };
 
-                    // Dispatch to the parsed command
-                    match parsed {
-                        #handle_arms
-                    }
+                    // Call user-implemented execute method
+                    parsed.execute(ctx.clone()).await?;
+                    Ok(true)
                 }
             }
         }
@@ -205,15 +212,56 @@ impl<'a> GenContext<'a> {
             let construction = match v.fields.style {
                 Style::Unit => quote! { Ok(#enum_name::#ident) },
                 Style::Tuple if v.fields.len() == 1 => {
-                    let ty = &v.fields.fields[0].ty;
-                    // Use Args trait parse which returns Result
-                    quote! {
-                        <#ty as ayiou::core::Args>::parse(args)
-                            .map(|inner| #enum_name::#ident(inner))
+                    let field = &v.fields.fields[0];
+                    let ty = &field.ty;
+
+                    // Check for embedded field attributes
+                    if field.cron {
+                        let error_msg = field.error.as_deref().unwrap_or("Invalid cron expression");
+                        quote! {
+                            ayiou::core::CronSchedule::parse(args.trim())
+                                .map(|inner| #enum_name::#ident(inner))
+                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))
+                        }
+                    } else if let Some(ref pattern) = field.regex {
+                        let error_msg = field.error.clone().unwrap_or_else(|| {
+                            format!("Value does not match pattern '{}'", pattern)
+                        });
+                        quote! {
+                            ayiou::core::RegexValidated::validate(args.trim(), #pattern)
+                                .map(|inner| #enum_name::#ident(inner))
+                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))
+                        }
+                    } else if field.rest {
+                        quote! {
+                            Ok(#enum_name::#ident(args.trim().to_string()))
+                        }
+                    } else {
+                        // Fallback to Args trait parse
+                        quote! {
+                            <#ty as ayiou::core::Args>::parse(args)
+                                .map(|inner| #enum_name::#ident(inner))
+                        }
                     }
                 }
                 Style::Tuple => quote! { Ok(#enum_name::#ident(args.into())) },
-                Style::Struct => quote! { Ok(#enum_name::#ident { text: args.into() }) },
+                Style::Struct => {
+                    // Generate inline parsing for struct fields
+                    let field_count = v.fields.len();
+                    if field_count == 0 {
+                        quote! { Ok(#enum_name::#ident {}) }
+                    } else {
+                        let assignments = self.gen_struct_field_assignments(v);
+                        quote! {
+                            (|| -> std::result::Result<#enum_name, ayiou::core::ArgsParseError> {
+                                let parts: Vec<&str> = args.split_whitespace().collect();
+                                Ok(#enum_name::#ident {
+                                    #assignments
+                                })
+                            })()
+                        }
+                    }
+                }
             };
 
             if aliases.is_empty() {
@@ -226,71 +274,125 @@ impl<'a> GenContext<'a> {
         quote! { #(#arms)* }
     }
 
-    fn gen_handle_arms(&self) -> TokenStream {
-        let enum_name = self.enum_name;
-        let arms = self.variants.iter().map(|v| {
-            let ident = &v.ident;
+    /// Generate field assignments for struct variants with embedded parsing
+    fn gen_struct_field_assignments(&self, v: &VariantAttrs) -> TokenStream {
+        let field_count = v.fields.len();
+        let mut has_rest = false;
 
-            if let Some(handler_path) = &v.handler {
-                let handler: syn::Path = syn::parse_str(handler_path).expect("Invalid handler path");
-                match v.fields.style {
-                    Style::Unit => {
+        let assignments = v.fields.iter().enumerate().map(|(i, field)| {
+            let field_name = field.ident.as_ref().unwrap();
+
+            if field.rest {
+                has_rest = true;
+                if i == 0 {
+                    quote! { #field_name: args.trim().to_string() }
+                } else {
+                    quote! { #field_name: parts[#i..].join(" ") }
+                }
+            } else if field.cron {
+                let error_msg = field.error.as_deref().unwrap_or("Invalid cron expression");
+                let needs_box = is_box_type(&field.ty);
+                if field_count == 1 {
+                    if needs_box {
                         quote! {
-                            #enum_name::#ident => {
-                                ayiou::core::handler::call_handler(#handler, ctx.clone()).await?;
-                                Ok(true)
+                            #field_name: Box::new(ayiou::core::CronSchedule::parse(args.trim())
+                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?)
+                        }
+                    } else {
+                        quote! {
+                            #field_name: ayiou::core::CronSchedule::parse(args.trim())
+                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
+                        }
+                    }
+                } else if needs_box {
+                    quote! {
+                        #field_name: Box::new(ayiou::core::CronSchedule::parse(
+                            parts.get(#i).copied().unwrap_or("")
+                        ).map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?)
+                    }
+                } else {
+                    quote! {
+                        #field_name: ayiou::core::CronSchedule::parse(
+                            parts.get(#i).copied().unwrap_or("")
+                        ).map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
+                    }
+                }
+            } else if let Some(ref pattern) = field.regex {
+                let error_msg = field.error.clone().unwrap_or_else(||
+                    format!("Field '{}' does not match pattern '{}'", field_name, pattern)
+                );
+                let needs_box = is_box_type(&field.ty);
+                if field_count == 1 {
+                    if needs_box {
+                        quote! {
+                            #field_name: Box::new(ayiou::core::RegexValidated::validate(args.trim(), #pattern)
+                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?)
+                        }
+                    } else {
+                        quote! {
+                            #field_name: ayiou::core::RegexValidated::validate(args.trim(), #pattern)
+                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
+                        }
+                    }
+                } else if needs_box {
+                    quote! {
+                        #field_name: Box::new(ayiou::core::RegexValidated::validate(
+                            parts.get(#i).copied().unwrap_or(""), #pattern
+                        ).map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?)
+                    }
+                } else {
+                    quote! {
+                        #field_name: ayiou::core::RegexValidated::validate(
+                            parts.get(#i).copied().unwrap_or(""), #pattern
+                        ).map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
+                    }
+                }
+            } else if field.optional {
+                if field_count == 1 {
+                    quote! {
+                        #field_name: {
+                            let value = args.trim();
+                            if value.is_empty() { None } else {
+                                Some(value.parse().map_err(|e| ayiou::core::ArgsParseError::new(
+                                    format!("Invalid argument {}: {}", stringify!(#field_name), e)
+                                ))?)
                             }
                         }
                     }
-                    Style::Tuple if v.fields.len() == 1 => {
-                        quote! {
-                            #enum_name::#ident(args) => {
-                                ayiou::core::handler::call_command_handler(#handler, ctx.clone(), args).await?;
-                                Ok(true)
-                            }
-                        }
-                    }
-                    _ => {
-                        // Struct or multi-tuple not supported for handler yet
-                        quote! {
-                            #enum_name::#ident { .. } => {
-                                log::error!("Handler attribute only supports Unit or Single-Tuple variants");
-                                Ok(true)
-                            }
+                } else {
+                    quote! {
+                        #field_name: match parts.get(#i) {
+                            Some(s) if !s.is_empty() => Some(s.parse().map_err(|e|
+                                ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#field_name), e))
+                            )?),
+                            _ => None,
                         }
                     }
                 }
             } else {
-                // No explicit handler, assume the inner type implements Command trait
-                match v.fields.style {
-                    Style::Tuple if v.fields.len() == 1 => {
-                        quote! {
-                            #enum_name::#ident(inner) => {
-                                use ayiou::core::plugin::Command;
-                                inner.run(ctx).await?;
-                                Ok(true)
-                            }
-                        }
+                // Regular field (use FromStr)
+                if field_count == 1 {
+                    quote! {
+                        #field_name: args.trim().parse().map_err(|e|
+                            ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#field_name), e))
+                        )?
                     }
-                    Style::Unit => {
-                         // For Unit variants without handler, we can't do much automatically
-                         // unless we enforce a trait on the Enum itself, but that's complex.
-                         // Just return Ok(true) as "handled but nothing done" or maybe error?
-                         // Let's keep it as "no-op" for backward compat, but log a warning if debug
-                         quote! { 
-                             #enum_name::#ident => {
-                                 Ok(true) 
-                             } 
-                         }
-                    }
-                    _ => {
-                        quote! { #enum_name::#ident { .. } => Ok(true), }
+                } else {
+                    quote! {
+                        #field_name: parts.get(#i)
+                            .ok_or_else(|| ayiou::core::ArgsParseError::new(
+                                format!("Missing argument: {}", stringify!(#field_name))
+                            ))?
+                            .parse()
+                            .map_err(|e| ayiou::core::ArgsParseError::new(
+                                format!("Invalid argument {}: {}", stringify!(#field_name), e)
+                            ))?
                     }
                 }
             }
         });
 
-        quote! { #(#arms)* }
+        quote! { #(#assignments),* }
     }
 
     fn gen_descriptions(&self) -> TokenStream {
@@ -304,15 +406,19 @@ impl<'a> GenContext<'a> {
     }
 
     fn gen_commands_method(&self) -> TokenStream {
-        let cmds: Vec<String> = self.variants.iter().flat_map(|v| {
-            let cmd_name = self.command_name(v);
-            let cmd = format!("{}{}", self.prefix, cmd_name);
-            let mut list = vec![cmd];
-            for a in v.aliases.iter().chain(v.alias.iter()) {
-                list.push(format!("{}{}", self.prefix, a));
-            }
-            list
-        }).collect();
+        let cmds: Vec<String> = self
+            .variants
+            .iter()
+            .flat_map(|v| {
+                let cmd_name = self.command_name(v);
+                let cmd = format!("{}{}", self.prefix, cmd_name);
+                let mut list = vec![cmd];
+                for a in v.aliases.iter().chain(v.alias.iter()) {
+                    list.push(format!("{}{}", self.prefix, a));
+                }
+                list
+            })
+            .collect();
 
         quote! {
             fn commands(&self) -> Vec<String> {

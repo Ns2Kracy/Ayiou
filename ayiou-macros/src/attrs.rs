@@ -1,4 +1,4 @@
-use darling::{FromDeriveInput, FromMeta, FromVariant};
+use darling::{FromDeriveInput, FromField, FromMeta, FromVariant};
 
 #[derive(Debug, Clone, Copy, Default, FromMeta)]
 pub enum RenameRule {
@@ -81,12 +81,40 @@ pub struct PluginAttrs {
     pub version: Option<String>,
 }
 
+/// Field-level attributes from #[plugin(...)] on struct variant fields
+#[derive(Debug, FromField)]
+#[darling(attributes(plugin))]
+pub struct FieldAttrs {
+    pub ident: Option<syn::Ident>,
+    pub ty: syn::Type,
+
+    /// Regex pattern to validate the field value
+    #[darling(default)]
+    pub regex: Option<String>,
+
+    /// Mark this field as a cron expression
+    #[darling(default)]
+    pub cron: bool,
+
+    /// Mark this field to consume the rest of the input
+    #[darling(default)]
+    pub rest: bool,
+
+    /// Mark this field as optional
+    #[darling(default)]
+    pub optional: bool,
+
+    /// Custom error message for validation failure
+    #[darling(default)]
+    pub error: Option<String>,
+}
+
 /// Variant-level attributes from #[plugin(...)]
 #[derive(Debug, FromVariant)]
 #[darling(attributes(plugin))]
 pub struct VariantAttrs {
     pub ident: syn::Ident,
-    pub fields: darling::ast::Fields<syn::Field>,
+    pub fields: darling::ast::Fields<FieldAttrs>,
 
     #[darling(default)]
     pub description: Option<String>,
@@ -98,6 +126,4 @@ pub struct VariantAttrs {
     pub rename: Option<String>,
     #[darling(default)]
     pub hide: bool,
-    #[darling(default)]
-    pub handler: Option<String>,
 }
