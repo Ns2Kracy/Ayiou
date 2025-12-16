@@ -162,9 +162,9 @@ pub enum OneBotEvent {
 #[serde(tag = "message_type")]
 pub enum MessageEvent {
     #[serde(rename = "private")]
-    Private(PrivateMessageEvent),
+    Private(Box<PrivateMessageEvent>),
     #[serde(rename = "group")]
-    Group(GroupMessageEvent),
+    Group(Box<GroupMessageEvent>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -186,6 +186,7 @@ pub struct GroupMessageEvent {
     pub self_id: i64,
     pub sub_type: String, // "normal", "anonymous", "notice"
     pub message_id: i32,
+    pub group_name: String,
     pub group_id: i64,
     pub user_id: i64,
     pub anonymous: Option<Anonymous>,

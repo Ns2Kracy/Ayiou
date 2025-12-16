@@ -8,7 +8,7 @@ use plugin::DemoPlugin;
 
 #[tokio::main]
 async fn main() {
-    pretty_env_logger::init();
+    pretty_env_logger::try_init().ok();
     info!("Starting Ayiou Full Feature Demo Bot...");
 
     let onebot_ws_url =

@@ -38,8 +38,8 @@ impl Ctx {
         };
 
         let msg = match msg_event.as_ref() {
-            MessageEvent::Private(p) => MsgEvent::Private(Arc::new(p.clone())),
-            MessageEvent::Group(g) => MsgEvent::Group(Arc::new(g.clone())),
+            MessageEvent::Private(p) => MsgEvent::Private(Arc::new(*p.clone())),
+            MessageEvent::Group(g) => MsgEvent::Group(Arc::new(*g.clone())),
         };
 
         Some(Self {

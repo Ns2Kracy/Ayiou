@@ -65,7 +65,8 @@ impl OneBotV11Adapter {
             }
             MessageEvent::Group(g) => {
                 info!(
-                    "群聊 [{}] [{}({})] {}",
+                    "群聊 [{}({})] [{}({})] {}",
+                    g.group_name,
                     g.group_id,
                     g.sender.card.as_deref().unwrap_or(&g.sender.nickname),
                     g.user_id,
