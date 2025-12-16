@@ -114,8 +114,6 @@ pub fn expand_args(input: DeriveInput) -> Result<TokenStream> {
                             let value = args.trim();
                             ayiou::core::RegexValidated::validate(value, #pattern)
                                 .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
-                                .value()
-                                .to_string()
                         }
                     });
                 } else {
@@ -124,8 +122,6 @@ pub fn expand_args(input: DeriveInput) -> Result<TokenStream> {
                             let value = parts.get(#i).copied().unwrap_or("");
                             ayiou::core::RegexValidated::validate(value, #pattern)
                                 .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
-                                .value()
-                                .to_string()
                         }
                     });
                 }
@@ -135,23 +131,31 @@ pub fn expand_args(input: DeriveInput) -> Result<TokenStream> {
                     assignments.push(quote! {
                         #field_name: {
                             let value = args.trim();
-                            if value.is_empty() { None } else { Some(value.to_string()) }
+                            if value.is_empty() { None } else {
+                                Some(value.parse().map_err(|e| ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#field_name), e)))?)
+                            }
                         }
                     });
                 } else {
                     assignments.push(quote! {
-                        #field_name: parts.get(#i).filter(|s| !s.is_empty()).map(|s| s.to_string())
+                        #field_name: match parts.get(#i) {
+                            Some(s) if !s.is_empty() => Some(s.parse().map_err(|e| ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#field_name), e)))?),
+                            _ => None,
+                        }
                     });
                 }
             } else {
-                // Regular string field
+                // Regular field (use FromStr)
                 if field_count == 1 {
                     assignments.push(quote! {
-                        #field_name: args.trim().to_string()
+                        #field_name: args.trim().parse().map_err(|e| ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#field_name), e)))?
                     });
                 } else {
                     assignments.push(quote! {
-                        #field_name: parts.get(#i).map(|s| s.to_string()).unwrap_or_default()
+                        #field_name: parts.get(#i)
+                            .ok_or_else(|| ayiou::core::ArgsParseError::new(format!("Missing argument: {}", stringify!(#field_name))))?
+                            .parse()
+                            .map_err(|e| ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#field_name), e)))?
                     });
                 }
             }

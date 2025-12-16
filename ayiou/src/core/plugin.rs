@@ -1,6 +1,7 @@
-use anyhow::Result;
 use std::sync::Arc;
-use tracing::info;
+
+use anyhow::Result;
+use log::info;
 
 use crate::adapter::onebot::v11::ctx::Ctx;
 
@@ -53,6 +54,30 @@ pub trait Args: Sized + Default {
     /// Get usage/help text for this args type (optional)
     fn usage() -> Option<&'static str> {
         None
+    }
+}
+
+impl<T: Args> Args for Box<T> {
+    fn parse(args: &str) -> std::result::Result<Self, ArgsParseError> {
+        Ok(Box::new(T::parse(args)?))
+    }
+
+    fn usage() -> Option<&'static str> {
+        T::usage()
+    }
+}
+
+/// Trait for self-contained command execution
+/// Implement this for your Args struct to avoid specifying a handler manually
+#[async_trait::async_trait]
+pub trait Command: Args + Send + Sync + 'static {
+    async fn run(self, ctx: Ctx) -> Result<()>;
+}
+
+#[async_trait::async_trait]
+impl<T: Command> Command for Box<T> {
+    async fn run(self, ctx: Ctx) -> Result<()> {
+        (*self).run(ctx).await
     }
 }
 
@@ -213,6 +238,13 @@ pub trait Plugin: Send + Sync + 'static {
         PluginMetadata::default()
     }
 
+    /// Get list of commands this plugin handles (optimization)
+    /// If empty, plugin is considered a "wildcard" and checked for every message.
+    /// Commands are matched against the first word of the message (whitespace separated).
+    fn commands(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Check if this plugin matches the context (default: always match)
     fn matches(&self, _ctx: &Ctx) -> bool {
         true
@@ -316,20 +348,120 @@ impl PluginManager {
     }
 }
 
+use std::collections::HashMap;
+
+#[derive(Default, Clone)]
+struct TrieNode {
+    children: HashMap<char, TrieNode>,
+    handlers: Vec<Arc<dyn Plugin>>,
+}
+
+impl TrieNode {
+    fn insert(&mut self, cmd: &str, plugin: Arc<dyn Plugin>) {
+        let mut node = self;
+        for c in cmd.chars() {
+            node = node.children.entry(c).or_default();
+        }
+        node.handlers.push(plugin);
+    }
+
+    /// Find the longest matching command.
+    /// Enforces that the match must be a full word (followed by whitespace or end of string).
+    fn match_command(&self, text: &str) -> Option<&Vec<Arc<dyn Plugin>>> {
+        let mut node = self;
+        let mut last_match = None;
+        let mut chars = text.chars().peekable();
+
+        // Check root matches (e.g. empty command? unlikely but possible)
+        if !node.handlers.is_empty() {
+            // If text is empty or starts with whitespace, root is a match
+            if text.is_empty() || text.starts_with(char::is_whitespace) {
+                last_match = Some(&node.handlers);
+            }
+        }
+
+        while let Some(c) = chars.next() {
+            match node.children.get(&c) {
+                Some(child) => {
+                    node = child;
+                    // potential match found
+                    if !node.handlers.is_empty() {
+                        // Check boundary: End of string OR next char is whitespace
+                        match chars.peek() {
+                            None => last_match = Some(&node.handlers),
+                            Some(&next_char) if next_char.is_whitespace() => {
+                                last_match = Some(&node.handlers)
+                            }
+                            _ => {} // Not a boundary, continue
+                        }
+                    }
+                }
+                None => break,
+            }
+        }
+        last_match
+    }
+}
+
 #[derive(Clone)]
 pub struct Dispatcher {
-    plugins: PluginList,
+    /// Plugins that don't declare specific commands (always checked)
+    wildcards: Arc<Vec<Arc<dyn Plugin>>>,
+    /// Trie root for command lookup
+    root: Arc<TrieNode>,
 }
 
 impl Dispatcher {
     /// Create dispatcher from plugin list
     pub fn new(plugins: PluginList) -> Self {
-        Self { plugins }
+        let mut root = TrieNode::default();
+        let mut wildcards = Vec::new();
+
+        for plugin in plugins.iter() {
+            let cmds = plugin.commands();
+            if cmds.is_empty() {
+                wildcards.push(plugin.clone());
+            } else {
+                for cmd in cmds {
+                    root.insert(&cmd, plugin.clone());
+                }
+            }
+        }
+
+        Self {
+            wildcards: Arc::new(wildcards),
+            root: Arc::new(root),
+        }
     }
 
-    /// Dispatch event to all matching plugins (sequential, supports blocking)
+    /// Dispatch event to all matching plugins
+    /// Note: Command-specific plugins are prioritized over wildcards
     pub async fn dispatch(&self, ctx: &Ctx) -> Result<()> {
-        for plugin in self.plugins.iter() {
+        let text = ctx.text();
+        let mut handled = false;
+
+        // 1. Try to match specific commands using Trie (Longest Prefix Match)
+        if let Some(plugins) = self.root.match_command(&text) {
+            for plugin in plugins {
+                if !plugin.matches(ctx) {
+                    continue;
+                }
+
+                if let Ok(block) = plugin.handle(ctx).await
+                    && block
+                {
+                    handled = true;
+                    break;
+                }
+            }
+        }
+
+        if handled {
+            return Ok(());
+        }
+
+        // 2. Check wildcards (or if command handlers didn't block)
+        for plugin in self.wildcards.iter() {
             if !plugin.matches(ctx) {
                 continue;
             }
@@ -337,7 +469,7 @@ impl Dispatcher {
             if let Ok(block) = plugin.handle(ctx).await
                 && block
             {
-                break; // Block subsequent handlers
+                break;
             }
         }
         Ok(())

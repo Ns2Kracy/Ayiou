@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use futures::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt};
+use log::{info, warn};
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::{info, warn};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use url::Url;
 
 use crate::core::Driver;

@@ -1,10 +1,11 @@
-use crate::adapter::onebot::v11::ctx::Ctx;
-use crate::core::extract::FromEvent;
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use std::sync::Arc;
 use tokio::sync::mpsc;
+
+use crate::{adapter::onebot::v11::ctx::Ctx, core::extract::FromEvent};
 
 type SessionKey = (i64, Option<i64>); // user_id, group_id
 

@@ -1,6 +1,7 @@
-use crate::adapter::onebot::v11::ctx::Ctx;
 use anyhow::Result;
 use async_trait::async_trait;
+
+use crate::adapter::onebot::v11::ctx::Ctx;
 
 /// Trait for types that can be extracted from a context
 #[async_trait]

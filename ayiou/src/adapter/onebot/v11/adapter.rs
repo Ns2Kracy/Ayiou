@@ -1,5 +1,5 @@
+use log::{error, info, warn};
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
 
 use crate::{
     adapter::onebot::v11::model::{Message, MessageEvent, OneBotEvent},

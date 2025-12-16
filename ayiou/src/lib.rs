@@ -9,7 +9,7 @@ macro_rules! plugins {
 }
 
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use log::{error, info};
 
 use crate::{
     adapter::onebot::v11::{adapter::OneBotV11Adapter, ctx::Ctx, model::OneBotEvent},
@@ -76,6 +76,7 @@ impl AyiouBot {
 
     /// Start the bot and connect to OneBot via WebSocket
     pub async fn run(mut self, url: impl Into<String>) {
+        pretty_env_logger::try_init().ok();
         info!("Connecting to OneBot via WebSocket");
 
         let outgoing_tx = OneBotV11Adapter::start(url, self.event_tx.clone());

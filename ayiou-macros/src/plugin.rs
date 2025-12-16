@@ -54,6 +54,7 @@ impl<'a> GenContext<'a> {
         let parse_arms = self.gen_parse_arms();
         let handle_arms = self.gen_handle_arms();
         let descriptions = self.gen_descriptions();
+        let commands_method = self.gen_commands_method();
 
         let try_parse_arms = self.gen_try_parse_arms();
 
@@ -110,6 +111,8 @@ impl<'a> GenContext<'a> {
                         .description(#plugin_description)
                         .version(#plugin_version)
                 }
+
+                #commands_method
 
                 fn matches(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> bool {
                     Self::matches_cmd(&ctx.text())
@@ -251,29 +254,36 @@ impl<'a> GenContext<'a> {
                         // Struct or multi-tuple not supported for handler yet
                         quote! {
                             #enum_name::#ident { .. } => {
-                                tracing::error!("Handler attribute only supports Unit or Single-Tuple variants");
+                                log::error!("Handler attribute only supports Unit or Single-Tuple variants");
                                 Ok(true)
                             }
                         }
                     }
                 }
             } else {
+                // No explicit handler, assume the inner type implements Command trait
                 match v.fields.style {
-                    Style::Unit => {
-                        quote! { #enum_name::#ident => Ok(true), }
-                    }
                     Style::Tuple if v.fields.len() == 1 => {
                         quote! {
                             #enum_name::#ident(inner) => {
-                                inner.handle(ctx).await?;
+                                use ayiou::core::plugin::Command;
+                                inner.run(ctx).await?;
                                 Ok(true)
                             }
                         }
                     }
-                    Style::Tuple => {
-                        quote! { #enum_name::#ident(..) => Ok(true), }
+                    Style::Unit => {
+                         // For Unit variants without handler, we can't do much automatically
+                         // unless we enforce a trait on the Enum itself, but that's complex.
+                         // Just return Ok(true) as "handled but nothing done" or maybe error?
+                         // Let's keep it as "no-op" for backward compat, but log a warning if debug
+                         quote! { 
+                             #enum_name::#ident => {
+                                 Ok(true) 
+                             } 
+                         }
                     }
-                    Style::Struct => {
+                    _ => {
                         quote! { #enum_name::#ident { .. } => Ok(true), }
                     }
                 }
@@ -291,6 +301,24 @@ impl<'a> GenContext<'a> {
         });
 
         quote! { #(#items),* }
+    }
+
+    fn gen_commands_method(&self) -> TokenStream {
+        let cmds: Vec<String> = self.variants.iter().flat_map(|v| {
+            let cmd_name = self.command_name(v);
+            let cmd = format!("{}{}", self.prefix, cmd_name);
+            let mut list = vec![cmd];
+            for a in v.aliases.iter().chain(v.alias.iter()) {
+                list.push(format!("{}{}", self.prefix, a));
+            }
+            list
+        }).collect();
+
+        quote! {
+            fn commands(&self) -> Vec<String> {
+                vec![#(#cmds.to_string()),*]
+            }
+        }
     }
 
     fn command_name(&self, v: &VariantAttrs) -> String {

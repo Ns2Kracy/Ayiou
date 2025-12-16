@@ -1,9 +1,9 @@
-use crate::adapter::onebot::v11::ctx::Ctx;
-use crate::core::extract::FromEvent;
-use anyhow::Result;
-use futures::FutureExt;
-use futures::future::BoxFuture;
 use std::future::Future;
+
+use anyhow::Result;
+use futures::{FutureExt, future::BoxFuture};
+
+use crate::{adapter::onebot::v11::ctx::Ctx, core::extract::FromEvent};
 
 /// A trait for async functions that can handle events
 pub trait Handler<Args>: Clone + Send + Sync + 'static {
