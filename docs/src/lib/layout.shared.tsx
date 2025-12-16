@@ -1,5 +1,5 @@
-import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
-import Image from 'next/image';
+import type { BaseLayoutProps } from "fumadocs-ui/layouts/shared";
+import Image from "next/image";
 
 export function baseOptions(): BaseLayoutProps {
   return {
@@ -19,11 +19,11 @@ export function baseOptions(): BaseLayoutProps {
     },
     links: [
       {
-        text: 'Documentation',
-        url: '/docs',
-        active: 'nested-url',
+        text: "Documentation",
+        url: "/docs",
+        active: "nested-url",
       },
     ],
-    githubUrl: 'https://github.com/Ns2Kracy/Ayiou',
+    githubUrl: "https://github.com/Ns2Kracy/Ayiou",
   };
 }

@@ -1,6 +1,6 @@
-import Link from 'next/link';
-import Image from 'next/image';
-import { ArrowRight, Box, Shield, Puzzle } from 'lucide-react';
+import { ArrowRight, Box, Puzzle, Shield } from "lucide-react";
+import Image from "next/image";
+import Link from "next/link";
 
 export default function HomePage() {
   return (
@@ -23,8 +23,8 @@ export default function HomePage() {
             Ayiou
           </h1>
           <p className="mx-auto max-w-[700px] text-muted-foreground md:text-xl/relaxed lg:text-base/relaxed xl:text-xl/relaxed">
-            A modular, type-safe chat bot framework written in Rust.
-            Designed for flexibility and reliability.
+            A modular, type-safe chat bot framework written in Rust. Designed
+            for flexibility and reliability.
           </p>
         </div>
 
@@ -55,7 +55,8 @@ export default function HomePage() {
             </div>
             <h3 className="text-xl font-bold">Type Safe</h3>
             <p className="text-sm text-muted-foreground">
-              Leveraging Rust's type system for maximum reliability and correctness.
+              Leveraging Rust's type system for maximum reliability and
+              correctness.
             </p>
           </div>
           <div className="flex flex-col items-center gap-2 rounded-xl border bg-card p-6 text-card-foreground shadow-sm">
@@ -64,7 +65,8 @@ export default function HomePage() {
             </div>
             <h3 className="text-xl font-bold">Modular Core</h3>
             <p className="text-sm text-muted-foreground">
-              Separated core, drivers, and adapters architecture for maximum flexibility.
+              Separated core, drivers, and adapters architecture for maximum
+              flexibility.
             </p>
           </div>
           <div className="flex flex-col items-center gap-2 rounded-xl border bg-card p-6 text-card-foreground shadow-sm">
@@ -73,7 +75,8 @@ export default function HomePage() {
             </div>
             <h3 className="text-xl font-bold">OneBot V11</h3>
             <p className="text-sm text-muted-foreground">
-              Native support for the OneBot V11 protocol standard out of the box.
+              Native support for the OneBot V11 protocol standard out of the
+              box.
             </p>
           </div>
         </div>
