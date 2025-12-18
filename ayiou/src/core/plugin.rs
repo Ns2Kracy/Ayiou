@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use log::info;
 
-use crate::adapter::onebot::v11::ctx::Ctx;
+use crate::{adapter::onebot::v11::ctx::Ctx, core::session::SessionManager};
 
 // ============================================================================
 // Args parsing types
@@ -458,11 +458,49 @@ impl Dispatcher {
 
     /// Dispatch event to all matching plugins
     /// Note: Command-specific plugins are prioritized over wildcards
-    pub async fn dispatch(&self, ctx: &Ctx) -> Result<()> {
-        let text = ctx.text();
-        let mut handled = false;
+    /// Dispatch event to all matching plugins
+    /// Priority: Commands > Session > Wildcards
+    pub async fn dispatch(&self, ctx: &Ctx, session_manager: &SessionManager) -> Result<()> {
+        // 1. explicit commands
+        if self.dispatch_commands(ctx).await? {
+            return Ok(());
+        }
 
-        // 1. Try to match specific commands using Trie (Longest Prefix Match)
+        // 2. active session
+        if self.dispatch_session(ctx, session_manager).await? {
+            return Ok(());
+        }
+
+        // 3. wildcards
+        if self.dispatch_wildcards(ctx).await? {
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    /// Check and dispatch to active session
+    async fn dispatch_session(&self, ctx: &Ctx, session_manager: &SessionManager) -> Result<bool> {
+        let key = (ctx.user_id(), ctx.group_id());
+        if let Some((tx, filter)) = session_manager.get_waiter(&key) {
+            // Check filter if present
+            let matches = filter.map(|f| f(ctx)).unwrap_or(true);
+
+            if matches {
+                // If we can send to the waiter, we skip normal dispatch
+                // If the receiver dropped (timeout/closed), we fall back but consume the waiter
+                if tx.send(ctx.clone()).await.is_ok() {
+                    return Ok(true);
+                }
+                // Cleanup dead waiter if send failed
+                session_manager.unregister(&key);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Dispatch only to matching commands
+    pub async fn dispatch_commands(&self, ctx: &Ctx) -> Result<bool> {
+        let text = ctx.text();
         if let Some(plugins) = self.root.match_command(&text) {
             for plugin in plugins {
                 if !plugin.matches(ctx) {
@@ -472,17 +510,15 @@ impl Dispatcher {
                 if let Ok(block) = plugin.handle(ctx).await
                     && block
                 {
-                    handled = true;
-                    break;
+                    return Ok(true);
                 }
             }
         }
+        Ok(false)
+    }
 
-        if handled {
-            return Ok(());
-        }
-
-        // 2. Check wildcards (or if command handlers didn't block)
+    /// Dispatch only to wildcard plugins
+    pub async fn dispatch_wildcards(&self, ctx: &Ctx) -> Result<bool> {
         for plugin in self.wildcards.iter() {
             if !plugin.matches(ctx) {
                 continue;
@@ -491,9 +527,9 @@ impl Dispatcher {
             if let Ok(block) = plugin.handle(ctx).await
                 && block
             {
-                break;
+                return Ok(true);
             }
         }
-        Ok(())
+        Ok(false)
     }
 }

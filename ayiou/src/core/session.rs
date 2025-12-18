@@ -8,10 +8,11 @@ use tokio::sync::mpsc;
 use crate::{adapter::onebot::v11::ctx::Ctx, core::extract::FromEvent};
 
 type SessionKey = (i64, Option<i64>); // user_id, group_id
+pub type Filter = Arc<dyn Fn(&Ctx) -> bool + Send + Sync>;
 
 /// Manages conversation sessions and message interception
 pub struct SessionManager {
-    waiters: DashMap<SessionKey, mpsc::Sender<Ctx>>,
+    waiters: DashMap<SessionKey, (mpsc::Sender<Ctx>, Option<Filter>)>,
 }
 
 impl Default for SessionManager {
@@ -27,9 +28,9 @@ impl SessionManager {
         }
     }
 
-    /// Register a waiter for a specific user/group
-    pub fn register(&self, key: SessionKey, tx: mpsc::Sender<Ctx>) {
-        self.waiters.insert(key, tx);
+    /// Register a waiter for a specific user/group with an optional filter
+    pub fn register(&self, key: SessionKey, tx: mpsc::Sender<Ctx>, filter: Option<Filter>) {
+        self.waiters.insert(key, (tx, filter));
     }
 
     /// Remove a waiter
@@ -37,8 +38,8 @@ impl SessionManager {
         self.waiters.remove(key);
     }
 
-    /// Get the waiter channel if it exists
-    pub fn get_waiter(&self, key: &SessionKey) -> Option<mpsc::Sender<Ctx>> {
+    /// Get the waiter channel and filter if it exists
+    pub fn get_waiter(&self, key: &SessionKey) -> Option<(mpsc::Sender<Ctx>, Option<Filter>)> {
         self.waiters.get(key).map(|v| v.value().clone())
     }
 }
@@ -62,8 +63,16 @@ impl Session {
     /// This function intercepts the next message that would normally be dispatched to plugins
     /// and returns it here instead.
     pub async fn wait_next(&self) -> Option<Ctx> {
+        self.wait_for(|_| true).await
+    }
+
+    /// Wait for the next message that matches the filter
+    pub async fn wait_for(
+        &self,
+        filter: impl Fn(&Ctx) -> bool + Send + Sync + 'static,
+    ) -> Option<Ctx> {
         let (tx, mut rx) = mpsc::channel(1);
-        self.manager.register(self.key, tx);
+        self.manager.register(self.key, tx, Some(Arc::new(filter)));
 
         let result = rx.recv().await;
 

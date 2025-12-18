@@ -8,8 +8,8 @@ macro_rules! plugins {
     };
 }
 
-use tokio::sync::mpsc;
 use log::{error, info};
+use tokio::sync::mpsc;
 
 use crate::{
     adapter::onebot::v11::{adapter::OneBotV11Adapter, ctx::Ctx, model::OneBotEvent},
@@ -102,19 +102,7 @@ impl AyiouBot {
                         return;
                     };
 
-                    // Check for active session interception
-                    let key = (ctx.user_id(), ctx.group_id());
-                    if let Some(tx) = session_manager.get_waiter(&key) {
-                        // If we can send to the waiter, we skip normal dispatch
-                        // If the receiver dropped (timeout/closed), we fall back to normal dispatch
-                        if tx.send(ctx.clone()).await.is_ok() {
-                            return;
-                        }
-                        // Cleanup dead waiter if send failed
-                        session_manager.unregister(&key);
-                    }
-
-                    if let Err(err) = dispatcher.dispatch(&ctx).await {
+                    if let Err(err) = dispatcher.dispatch(&ctx, &session_manager).await {
                         error!("Plugin dispatch error: {}", err);
                     }
                 });

@@ -6,21 +6,21 @@ use ayiou::prelude::*;
 // ============================================================================
 
 /// Echo command - repeats what you say
-#[plugin(name = "echo", description = "Repeats what you say")]
+#[plugin(prefix = "/", name = "echo", description = "Repeats what you say")]
 pub async fn echo(ctx: Ctx, #[rest] content: String) -> anyhow::Result<()> {
     ctx.reply_text(format!("Echo: {}", content)).await?;
     Ok(())
 }
 
 /// Add command - adds two numbers
-#[plugin(name = "add", description = "Adds two numbers")]
+#[plugin(prefix = "/", name = "add", description = "Adds two numbers")]
 pub async fn add(ctx: Ctx, a: i32, b: i32) -> anyhow::Result<()> {
     ctx.reply_text(format!("{} + {} = {}", a, b, a + b)).await?;
     Ok(())
 }
 
 /// WhoAmI command - shows user info
-#[plugin(name = "whoami", description = "Shows user info")]
+#[plugin(prefix = "/", name = "whoami", description = "Shows user info")]
 pub async fn whoami(ctx: Ctx) -> anyhow::Result<()> {
     let user_id = ctx.user_id();
     let nickname = ctx.nickname();
@@ -35,7 +35,7 @@ pub async fn whoami(ctx: Ctx) -> anyhow::Result<()> {
 }
 
 /// Guess command - guessing game
-#[plugin(name = "guess", description = "Guessing game")]
+#[plugin(prefix = "/", name = "guess", description = "Guessing game")]
 pub async fn guess(ctx: Ctx) -> anyhow::Result<()> {
     let secret_number = 42;
     ctx.reply_text(
