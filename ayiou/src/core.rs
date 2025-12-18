@@ -8,7 +8,7 @@ pub use driver::Driver;
 pub use extract::FromEvent;
 pub use handler::{CommandHandlerFn, Handler};
 pub use plugin::{
-    Args, ArgsParseError, CronSchedule, Dispatcher, Plugin, PluginManager, PluginMetadata,
+    Args, ArgsParseError, Command, CronSchedule, Dispatcher, Plugin, PluginManager, PluginMetadata,
     RegexValidated,
 };
 pub use session::{Session, SessionManager};

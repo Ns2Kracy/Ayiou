@@ -47,8 +47,8 @@ impl AyiouBot {
     }
 
     /// Register a plugin instance
-    pub fn register_plugin<P: Plugin>(mut self, plugin: P) -> Self {
-        self.plugin_manager.register(plugin);
+    pub fn register_plugin<P: Plugin>(mut self, plugin: fn() -> P) -> Self {
+        self.plugin_manager.register(plugin());
         self
     }
 

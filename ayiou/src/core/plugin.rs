@@ -262,6 +262,28 @@ pub trait CommandHandler: Send + Sync + 'static {
 
 pub type PluginBox = Box<dyn Plugin>;
 
+pub trait IntoPluginBox {
+    fn into_plugin_box(self) -> PluginBox;
+}
+
+impl<P> IntoPluginBox for P
+where
+    P: Plugin,
+{
+    fn into_plugin_box(self) -> PluginBox {
+        Box::new(self)
+    }
+}
+
+impl<P> IntoPluginBox for fn() -> P
+where
+    P: Plugin,
+{
+    fn into_plugin_box(self) -> PluginBox {
+        Box::new(self())
+    }
+}
+
 type PluginList = Arc<[Arc<dyn Plugin>]>;
 
 #[derive(Clone)]

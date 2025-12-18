@@ -1,11 +1,91 @@
-use darling::{FromDeriveInput, ast::Style};
 use proc_macro2::TokenStream;
-use quote::quote;
-use syn::{DeriveInput, Result, Type};
+use quote::{format_ident, quote};
+use syn::{
+    Attribute, FnArg, Ident, ItemFn, Pat, PatType, Result, Token, Type,
+    parse::{Parse, ParseStream},
+    punctuated::Punctuated,
+    spanned::Spanned,
+};
 
-use crate::attrs::{PluginAttrs, RenameRule, VariantAttrs};
+/// Attributes for #[command(...)]
+#[derive(Default)]
+pub struct PluginAttrs {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub prefix: Option<String>,
+    pub alias: Option<String>,
+    pub aliases: Vec<String>,
+}
 
-/// Check if a type is Box<T> and return true if so
+impl Parse for PluginAttrs {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let mut attrs = PluginAttrs::default();
+
+        let pairs: Punctuated<syn::MetaNameValue, Token![,]> = Punctuated::parse_terminated(input)?;
+
+        for pair in pairs {
+            let key = pair
+                .path
+                .get_ident()
+                .ok_or_else(|| syn::Error::new(pair.path.span(), "expected identifier"))?
+                .to_string();
+
+            let value = match &pair.value {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }) => s.value(),
+                _ => {
+                    return Err(syn::Error::new(
+                        pair.value.span(),
+                        "expected string literal",
+                    ));
+                }
+            };
+
+            match key.as_str() {
+                "name" => attrs.name = Some(value),
+                "description" => attrs.description = Some(value),
+                "prefix" => attrs.prefix = Some(value),
+                "alias" => attrs.alias = Some(value),
+                "aliases" => {
+                    attrs.aliases = value.split(',').map(|s| s.trim().to_string()).collect()
+                }
+                _ => {
+                    return Err(syn::Error::new(
+                        pair.path.span(),
+                        format!("unknown attribute: {}", key),
+                    ));
+                }
+            }
+        }
+
+        Ok(attrs)
+    }
+}
+
+/// Field info extracted from function parameter
+struct FieldInfo {
+    name: Ident,
+    ty: Type,
+    is_rest: bool,
+    is_optional: bool,
+    is_cron: bool,
+    regex: Option<String>,
+    error: Option<String>,
+}
+
+/// Check if type is Ctx
+fn is_ctx_type(ty: &Type) -> bool {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        return segment.ident == "Ctx";
+    }
+    false
+}
+
+/// Check if type is Box<T>
 fn is_box_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()
@@ -15,421 +95,381 @@ fn is_box_type(ty: &Type) -> bool {
     false
 }
 
-pub fn expand_plugin(input: DeriveInput) -> Result<TokenStream> {
-    let plugin =
-        PluginAttrs::from_derive_input(&input).map_err(|e| syn::Error::new_spanned(&input, e))?;
+/// Parse parameter attributes like #[rest], #[optional], #[regex("...")]
+fn parse_param_attrs(attrs: &[Attribute]) -> (bool, bool, bool, Option<String>, Option<String>) {
+    let mut is_rest = false;
+    let mut is_optional = false;
+    let mut is_cron = false;
+    let mut regex = None;
+    let mut error = None;
 
-    let variants =
-        plugin.data.as_ref().take_enum().ok_or_else(|| {
-            syn::Error::new_spanned(&input, "Plugin can only be derived for enums")
-        })?;
+    for attr in attrs {
+        if attr.path().is_ident("rest") {
+            is_rest = true;
+        } else if attr.path().is_ident("optional") {
+            is_optional = true;
+        } else if attr.path().is_ident("cron") {
+            is_cron = true;
+        } else if attr.path().is_ident("regex") {
+            if let syn::Meta::List(meta_list) = &attr.meta
+                && let Ok(lit) = meta_list.parse_args::<syn::LitStr>()
+            {
+                regex = Some(lit.value());
+            }
+        } else if attr.path().is_ident("error")
+            && let syn::Meta::List(meta_list) = &attr.meta
+            && let Ok(lit) = meta_list.parse_args::<syn::LitStr>()
+        {
+            error = Some(lit.value());
+        }
+    }
 
-    let ctx = GenContext::new(&plugin, variants);
-    Ok(ctx.generate())
+    (is_rest, is_optional, is_cron, regex, error)
 }
 
-struct GenContext<'a> {
-    enum_name: &'a syn::Ident,
-    plugin_name: String,
-    plugin_description: String,
-    plugin_version: String,
-    prefix: String,
-    rename_rule: RenameRule,
-    variants: Vec<&'a VariantAttrs>,
-}
+/// Extract fields from function parameters (excluding Ctx)
+fn extract_fields(func: &ItemFn) -> Result<Vec<FieldInfo>> {
+    let mut fields = Vec::new();
 
-impl<'a> GenContext<'a> {
-    fn new(plugin: &'a PluginAttrs, variants: Vec<&'a VariantAttrs>) -> Self {
-        Self {
-            enum_name: &plugin.ident,
-            plugin_name: plugin
-                .name
-                .clone()
-                .unwrap_or_else(|| plugin.ident.to_string()),
-            plugin_description: plugin.description.clone().unwrap_or_default(),
-            plugin_version: plugin.version.clone().unwrap_or_else(|| "0.1.0".into()),
-            prefix: plugin.prefix.clone().unwrap_or_else(|| "/".into()),
-            rename_rule: plugin.rename_rule.unwrap_or_default(),
-            variants,
-        }
-    }
-
-    fn generate(&self) -> TokenStream {
-        let enum_name = self.enum_name;
-        let plugin_name = &self.plugin_name;
-        let plugin_description = &self.plugin_description;
-        let plugin_version = &self.plugin_version;
-
-        let default_impl = self.gen_default();
-        let parse_arms = self.gen_parse_arms();
-        let descriptions = self.gen_descriptions();
-        let commands_method = self.gen_commands_method();
-        let try_parse_arms = self.gen_try_parse_arms();
-
-        quote! {
-            #default_impl
-
-            impl #enum_name {
-                /// Check if text matches a command (for matches())
-                pub fn matches_cmd(text: &str) -> bool {
-                    let text = text.trim();
-                    let (cmd, _args) = text.split_once(char::is_whitespace)
-                        .map(|(c, a)| (c, a.trim()))
-                        .unwrap_or((text, ""));
-                    match cmd {
-                        #parse_arms
-                        _ => false,
-                    }
-                }
-
-                /// Try to parse text into a command, returning error on args parse failure
-                pub fn try_parse(text: &str) -> std::result::Result<Self, ayiou::core::ArgsParseError> {
-                    let text = text.trim();
-                    let (cmd, args) = text.split_once(char::is_whitespace)
-                        .map(|(c, a)| (c, a.trim()))
-                        .unwrap_or((text, ""));
-                    match cmd {
-                        #try_parse_arms
-                        _ => Err(ayiou::core::ArgsParseError::new("Unknown command")),
-                    }
-                }
-
-                pub fn descriptions() -> &'static [(&'static str, &'static str)] {
-                    &[#descriptions]
-                }
-
-                pub fn help_text() -> String {
-                    let mut help = String::new();
-                    let desc = #plugin_description;
-                    if !desc.is_empty() {
-                        help.push_str(desc);
-                        help.push_str("\n\n");
-                    }
-                    for (cmd, desc) in Self::descriptions() {
-                        help.push_str(&format!("{} - {}\n", cmd, desc));
-                    }
-                    help.trim_end().to_string()
-                }
+    for arg in &func.sig.inputs {
+        if let FnArg::Typed(PatType { pat, ty, attrs, .. }) = arg {
+            // Skip Ctx parameter
+            if is_ctx_type(ty) {
+                continue;
             }
 
-            #[async_trait::async_trait]
-            impl ayiou::core::Plugin for #enum_name {
-                fn meta(&self) -> ayiou::core::PluginMetadata {
-                    ayiou::core::PluginMetadata::new(#plugin_name)
-                        .description(#plugin_description)
-                        .version(#plugin_version)
-                }
-
-                #commands_method
-
-                fn matches(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> bool {
-                    Self::matches_cmd(&ctx.text())
-                }
-
-                async fn handle(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<bool> {
-                    // Try to parse the command with args validation
-                    let parsed = match Self::try_parse(&ctx.text()) {
-                        Ok(cmd) => cmd,
-                        Err(e) => {
-                            // Auto-reply with error message
-                            let msg = if let Some(help) = e.help() {
-                                format!("❌ {}\n\n{}", e.message(), help)
-                            } else {
-                                format!("❌ {}", e.message())
-                            };
-                            ctx.reply_text(msg).await?;
-                            return Ok(true); // Block subsequent handlers
-                        }
-                    };
-
-                    // Call user-implemented execute method
-                    parsed.execute(ctx.clone()).await?;
-                    Ok(true)
-                }
-            }
-        }
-    }
-
-    fn gen_default(&self) -> TokenStream {
-        let enum_name = self.enum_name;
-        let first = &self.variants[0];
-        let ident = &first.ident;
-
-        let construction = match first.fields.style {
-            Style::Unit => quote! { Self::#ident },
-            Style::Tuple => quote! { Self::#ident(Default::default()) },
-            Style::Struct => {
-                let fields = first.fields.iter().map(|f| &f.ident);
-                quote! { Self::#ident { #(#fields: Default::default()),* } }
-            }
-        };
-
-        quote! {
-            impl Default for #enum_name {
-                fn default() -> Self { #construction }
-            }
-        }
-    }
-
-    /// Generate match arms for matches_cmd (returns bool)
-    fn gen_parse_arms(&self) -> TokenStream {
-        let arms = self.variants.iter().map(|v| {
-            let cmd_name = self.command_name(v);
-            let cmd = format!("{}{}", self.prefix, cmd_name);
-
-            let aliases: Vec<_> = v
-                .aliases
-                .iter()
-                .chain(v.alias.iter())
-                .map(|a| format!("{}{}", self.prefix, a))
-                .collect();
-
-            if aliases.is_empty() {
-                quote! { #cmd => true, }
+            let name = if let Pat::Ident(pat_ident) = pat.as_ref() {
+                pat_ident.ident.clone()
             } else {
-                quote! { #cmd #(| #aliases)* => true, }
-            }
-        });
-
-        quote! { #(#arms)* }
-    }
-
-    /// Generate match arms for try_parse (returns Result<Self, ArgsParseError>)
-    fn gen_try_parse_arms(&self) -> TokenStream {
-        let enum_name = self.enum_name;
-        let arms = self.variants.iter().map(|v| {
-            let ident = &v.ident;
-            let cmd_name = self.command_name(v);
-            let cmd = format!("{}{}", self.prefix, cmd_name);
-
-            let aliases: Vec<_> = v
-                .aliases
-                .iter()
-                .chain(v.alias.iter())
-                .map(|a| format!("{}{}", self.prefix, a))
-                .collect();
-
-            let construction = match v.fields.style {
-                Style::Unit => quote! { Ok(#enum_name::#ident) },
-                Style::Tuple if v.fields.len() == 1 => {
-                    let field = &v.fields.fields[0];
-                    let ty = &field.ty;
-
-                    // Check for embedded field attributes
-                    if field.cron {
-                        let error_msg = field.error.as_deref().unwrap_or("Invalid cron expression");
-                        quote! {
-                            ayiou::core::CronSchedule::parse(args.trim())
-                                .map(|inner| #enum_name::#ident(inner))
-                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))
-                        }
-                    } else if let Some(ref pattern) = field.regex {
-                        let error_msg = field.error.clone().unwrap_or_else(|| {
-                            format!("Value does not match pattern '{}'", pattern)
-                        });
-                        quote! {
-                            ayiou::core::RegexValidated::validate(args.trim(), #pattern)
-                                .map(|inner| #enum_name::#ident(inner))
-                                .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))
-                        }
-                    } else if field.rest {
-                        quote! {
-                            Ok(#enum_name::#ident(args.trim().to_string()))
-                        }
-                    } else {
-                        // Fallback to Args trait parse
-                        quote! {
-                            <#ty as ayiou::core::Args>::parse(args)
-                                .map(|inner| #enum_name::#ident(inner))
-                        }
-                    }
-                }
-                Style::Tuple => quote! { Ok(#enum_name::#ident(args.into())) },
-                Style::Struct => {
-                    // Generate inline parsing for struct fields
-                    let field_count = v.fields.len();
-                    if field_count == 0 {
-                        quote! { Ok(#enum_name::#ident {}) }
-                    } else {
-                        let assignments = self.gen_struct_field_assignments(v);
-                        quote! {
-                            (|| -> std::result::Result<#enum_name, ayiou::core::ArgsParseError> {
-                                let parts: Vec<&str> = args.split_whitespace().collect();
-                                Ok(#enum_name::#ident {
-                                    #assignments
-                                })
-                            })()
-                        }
-                    }
-                }
+                return Err(syn::Error::new(pat.span(), "expected identifier pattern"));
             };
 
-            if aliases.is_empty() {
-                quote! { #cmd => #construction, }
-            } else {
-                quote! { #cmd #(| #aliases)* => #construction, }
-            }
-        });
+            let (is_rest, is_optional, is_cron, regex, error) = parse_param_attrs(attrs);
 
-        quote! { #(#arms)* }
+            fields.push(FieldInfo {
+                name,
+                ty: ty.as_ref().clone(),
+                is_rest,
+                is_optional,
+                is_cron,
+                regex,
+                error,
+            });
+        }
     }
 
-    /// Generate field assignments for struct variants with embedded parsing
-    fn gen_struct_field_assignments(&self, v: &VariantAttrs) -> TokenStream {
-        let field_count = v.fields.len();
-        let mut has_rest = false;
+    Ok(fields)
+}
 
-        let assignments = v.fields.iter().enumerate().map(|(i, field)| {
-            let field_name = field.ident.as_ref().unwrap();
+/// Generate struct name from function name (snake_case -> PascalCase + "Command")
+fn generate_struct_name(fn_name: &Ident) -> Ident {
+    let name = fn_name.to_string();
+    let pascal = name
+        .split('_')
+        .map(|s| {
+            let mut chars = s.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<String>();
+    format_ident!("{}Command", pascal)
+}
 
-            if field.rest {
-                has_rest = true;
+/// Strip custom attributes from function parameters
+fn strip_param_attrs(func: &ItemFn) -> ItemFn {
+    let mut func = func.clone();
+    for arg in &mut func.sig.inputs {
+        if let FnArg::Typed(pat_type) = arg {
+            // Remove our custom attributes (rest, optional, cron, regex, error)
+            pat_type.attrs.retain(|attr| {
+                !attr.path().is_ident("rest")
+                    && !attr.path().is_ident("optional")
+                    && !attr.path().is_ident("cron")
+                    && !attr.path().is_ident("regex")
+                    && !attr.path().is_ident("error")
+            });
+        }
+    }
+    func
+}
+
+/// Main expansion function
+pub fn expand_plugin(attrs: PluginAttrs, func: ItemFn) -> Result<TokenStream> {
+    let fn_name = &func.sig.ident;
+    let fn_vis = &func.vis;
+    let struct_name = generate_struct_name(fn_name);
+
+    // Extract fields from function parameters (before stripping attrs)
+    let fields = extract_fields(&func)?;
+
+    // Strip custom attributes from the function for output
+    let clean_func = strip_param_attrs(&func);
+
+    // Command name (default to function name)
+    let command_name = attrs.name.unwrap_or_else(|| fn_name.to_string());
+    let prefix = attrs.prefix.unwrap_or_else(|| "/".to_string());
+    let full_cmd = format!("{}{}", prefix, command_name);
+    let description = attrs.description.unwrap_or_default();
+
+    // Generate struct fields
+    let struct_fields = fields.iter().map(|f| {
+        let name = &f.name;
+        let ty = &f.ty;
+        quote! { pub #name: #ty }
+    });
+
+    // Generate Args::parse implementation
+    let args_parse = generate_args_parse(&fields);
+
+    // Generate function call arguments
+    let call_args = fields.iter().map(|f| {
+        let name = &f.name;
+        quote! { self.#name }
+    });
+
+    // Generate commands method
+    let aliases: Vec<String> = attrs
+        .aliases
+        .iter()
+        .chain(attrs.alias.iter())
+        .map(|a| format!("{}{}", prefix, a))
+        .collect();
+
+    let commands_method = if aliases.is_empty() {
+        quote! {
+            fn commands(&self) -> Vec<String> {
+                vec![#full_cmd.to_string()]
+            }
+        }
+    } else {
+        quote! {
+            fn commands(&self) -> Vec<String> {
+                vec![#full_cmd.to_string(), #(#aliases.to_string()),*]
+            }
+        }
+    };
+
+    // Use a private inner function name
+    let inner_fn_name = format_ident!("__{}_inner", fn_name);
+
+    // Rename the original function to inner
+    let mut inner_func = clean_func.clone();
+    inner_func.sig.ident = inner_fn_name.clone();
+
+    // Generate the output
+    let output = quote! {
+        // The original function renamed to inner (private)
+        #[doc(hidden)]
+        #inner_func
+
+        // Generate struct with same name as function (PascalCase)
+        // Users can use this for type-based registration: plugin::<Echo>()
+        #[derive(Default)]
+        #fn_vis struct #struct_name {
+            #(#struct_fields),*
+        }
+
+        // Also create a function that returns the plugin instance
+        // Users can use this for value-based registration: plugin(echo())
+        #fn_vis fn #fn_name() -> #struct_name {
+            #struct_name::default()
+        }
+
+        // Implement Args
+        impl ayiou::core::Args for #struct_name {
+            fn parse(args: &str) -> std::result::Result<Self, ayiou::core::ArgsParseError> {
+                let parts: Vec<&str> = args.split_whitespace().collect();
+                #args_parse
+            }
+        }
+
+        // Implement Command
+        #[async_trait::async_trait]
+        impl ayiou::core::Command for #struct_name {
+            async fn run(self, ctx: ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<()> {
+                #inner_fn_name(ctx, #(#call_args),*).await
+            }
+        }
+
+        // Implement Plugin
+        #[async_trait::async_trait]
+        impl ayiou::core::Plugin for #struct_name {
+            fn meta(&self) -> ayiou::core::PluginMetadata {
+                ayiou::core::PluginMetadata::new(stringify!(#struct_name))
+                    .description(#description)
+            }
+
+            #commands_method
+
+            fn matches(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> bool {
+                let text = ctx.text();
+                let text = text.trim();
+                let (cmd, _) = text.split_once(char::is_whitespace)
+                    .map(|(c, a)| (c, a.trim()))
+                    .unwrap_or((text, ""));
+                #full_cmd == cmd || self.commands().iter().any(|c| c == cmd)
+            }
+
+            async fn handle(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<bool> {
+                let text = ctx.text();
+                let text = text.trim();
+                let (_, args) = text.split_once(char::is_whitespace)
+                    .map(|(c, a)| (c, a.trim()))
+                    .unwrap_or((text, ""));
+
+                let parsed = match <Self as ayiou::core::Args>::parse(args) {
+                    Ok(cmd) => cmd,
+                    Err(e) => {
+                        let msg = if let Some(help) = e.help() {
+                            format!("❌ {}\n\n{}", e.message(), help)
+                        } else {
+                            format!("❌ {}", e.message())
+                        };
+                        ctx.reply_text(msg).await?;
+                        return Ok(true);
+                    }
+                };
+
+                parsed.run(ctx.clone()).await?;
+                Ok(true)
+            }
+        }
+    };
+
+    Ok(output)
+}
+
+/// Generate Args::parse body based on fields
+fn generate_args_parse(fields: &[FieldInfo]) -> TokenStream {
+    if fields.is_empty() {
+        return quote! { Ok(Self {}) };
+    }
+
+    let field_count = fields.len();
+    let assignments: Vec<TokenStream> = fields
+        .iter()
+        .enumerate()
+        .map(|(i, field)| {
+            let name = &field.name;
+
+            if field.is_rest {
                 if i == 0 {
-                    quote! { #field_name: args.trim().to_string() }
+                    quote! { #name: args.trim().to_string() }
                 } else {
-                    quote! { #field_name: parts[#i..].join(" ") }
+                    quote! { #name: parts[#i..].join(" ") }
                 }
-            } else if field.cron {
-                let error_msg = field.error.as_deref().unwrap_or("Invalid cron expression");
+            } else if field.is_cron {
+                let error_msg = field
+                    .error
+                    .as_deref()
+                    .unwrap_or("Invalid cron expression");
                 let needs_box = is_box_type(&field.ty);
                 if field_count == 1 {
                     if needs_box {
                         quote! {
-                            #field_name: Box::new(ayiou::core::CronSchedule::parse(args.trim())
+                            #name: Box::new(ayiou::core::CronSchedule::parse(args.trim())
                                 .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?)
                         }
                     } else {
                         quote! {
-                            #field_name: ayiou::core::CronSchedule::parse(args.trim())
+                            #name: ayiou::core::CronSchedule::parse(args.trim())
                                 .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
                         }
                     }
                 } else if needs_box {
                     quote! {
-                        #field_name: Box::new(ayiou::core::CronSchedule::parse(
+                        #name: Box::new(ayiou::core::CronSchedule::parse(
                             parts.get(#i).copied().unwrap_or("")
                         ).map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?)
                     }
                 } else {
                     quote! {
-                        #field_name: ayiou::core::CronSchedule::parse(
+                        #name: ayiou::core::CronSchedule::parse(
                             parts.get(#i).copied().unwrap_or("")
                         ).map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
                     }
                 }
             } else if let Some(ref pattern) = field.regex {
-                let error_msg = field.error.clone().unwrap_or_else(||
-                    format!("Field '{}' does not match pattern '{}'", field_name, pattern)
-                );
+                let error_msg = field.error.clone().unwrap_or_else(|| {
+                    format!("Field '{}' does not match pattern '{}'", name, pattern)
+                });
                 let needs_box = is_box_type(&field.ty);
                 if field_count == 1 {
                     if needs_box {
                         quote! {
-                            #field_name: Box::new(ayiou::core::RegexValidated::validate(args.trim(), #pattern)
+                            #name: Box::new(ayiou::core::RegexValidated::validate(args.trim(), #pattern)
                                 .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?)
                         }
                     } else {
                         quote! {
-                            #field_name: ayiou::core::RegexValidated::validate(args.trim(), #pattern)
+                            #name: ayiou::core::RegexValidated::validate(args.trim(), #pattern)
                                 .map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
                         }
                     }
                 } else if needs_box {
                     quote! {
-                        #field_name: Box::new(ayiou::core::RegexValidated::validate(
+                        #name: Box::new(ayiou::core::RegexValidated::validate(
                             parts.get(#i).copied().unwrap_or(""), #pattern
                         ).map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?)
                     }
                 } else {
                     quote! {
-                        #field_name: ayiou::core::RegexValidated::validate(
+                        #name: ayiou::core::RegexValidated::validate(
                             parts.get(#i).copied().unwrap_or(""), #pattern
                         ).map_err(|_| ayiou::core::ArgsParseError::new(#error_msg))?
                     }
                 }
-            } else if field.optional {
+            } else if field.is_optional {
                 if field_count == 1 {
                     quote! {
-                        #field_name: {
+                        #name: {
                             let value = args.trim();
                             if value.is_empty() { None } else {
                                 Some(value.parse().map_err(|e| ayiou::core::ArgsParseError::new(
-                                    format!("Invalid argument {}: {}", stringify!(#field_name), e)
+                                    format!("Invalid argument {}: {}", stringify!(#name), e)
                                 ))?)
                             }
                         }
                     }
                 } else {
                     quote! {
-                        #field_name: match parts.get(#i) {
+                        #name: match parts.get(#i) {
                             Some(s) if !s.is_empty() => Some(s.parse().map_err(|e|
-                                ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#field_name), e))
+                                ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#name), e))
                             )?),
                             _ => None,
                         }
                     }
                 }
             } else {
-                // Regular field (use FromStr)
+                // Regular field
                 if field_count == 1 {
                     quote! {
-                        #field_name: args.trim().parse().map_err(|e|
-                            ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#field_name), e))
+                        #name: args.trim().parse().map_err(|e|
+                            ayiou::core::ArgsParseError::new(format!("Invalid argument {}: {}", stringify!(#name), e))
                         )?
                     }
                 } else {
                     quote! {
-                        #field_name: parts.get(#i)
+                        #name: parts.get(#i)
                             .ok_or_else(|| ayiou::core::ArgsParseError::new(
-                                format!("Missing argument: {}", stringify!(#field_name))
+                                format!("Missing argument: {}", stringify!(#name))
                             ))?
                             .parse()
                             .map_err(|e| ayiou::core::ArgsParseError::new(
-                                format!("Invalid argument {}: {}", stringify!(#field_name), e)
+                                format!("Invalid argument {}: {}", stringify!(#name), e)
                             ))?
                     }
                 }
             }
-        });
+        })
+        .collect();
 
-        quote! { #(#assignments),* }
-    }
-
-    fn gen_descriptions(&self) -> TokenStream {
-        let items = self.variants.iter().filter(|v| !v.hide).map(|v| {
-            let cmd = format!("{}{}", self.prefix, self.command_name(v));
-            let desc = v.description.as_deref().unwrap_or("");
-            quote! { (#cmd, #desc) }
-        });
-
-        quote! { #(#items),* }
-    }
-
-    fn gen_commands_method(&self) -> TokenStream {
-        let cmds: Vec<String> = self
-            .variants
-            .iter()
-            .flat_map(|v| {
-                let cmd_name = self.command_name(v);
-                let cmd = format!("{}{}", self.prefix, cmd_name);
-                let mut list = vec![cmd];
-                for a in v.aliases.iter().chain(v.alias.iter()) {
-                    list.push(format!("{}{}", self.prefix, a));
-                }
-                list
-            })
-            .collect();
-
-        quote! {
-            fn commands(&self) -> Vec<String> {
-                vec![#(#cmds.to_string()),*]
-            }
-        }
-    }
-
-    fn command_name(&self, v: &VariantAttrs) -> String {
-        v.rename
-            .clone()
-            .unwrap_or_else(|| self.rename_rule.apply(&v.ident.to_string()))
+    quote! {
+        Ok(Self {
+            #(#assignments),*
+        })
     }
 }

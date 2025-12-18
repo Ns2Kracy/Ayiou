@@ -1,82 +1,62 @@
 use proc_macro::TokenStream;
-use syn::{DeriveInput, parse_macro_input};
+use syn::{ItemFn, parse_macro_input};
 
-mod args;
-mod attrs;
 mod plugin;
 
-use args::expand_args;
 use plugin::expand_plugin;
 
-/// Derive macro for defining bot plugins with commands.
+/// Attribute macro for defining command handlers as simple functions.
+///
+/// This macro transforms an async function into a full plugin, automatically generating:
+/// - A struct with function parameters as fields
+/// - `Args` trait implementation for argument parsing
+/// - `Command` trait implementation that calls the original function
+/// - `Plugin` trait implementation for bot registration
 ///
 /// # Example
 ///
 /// ```ignore
 /// use ayiou::prelude::*;
 ///
-/// #[derive(Plugin)]
-/// #[plugin(prefix = "/", description = "可用命令列表:")]
-/// pub enum ExamplePlugins {
-///     #[plugin(description = "显示帮助")]
-///     Help,
-///
-///     #[plugin(description = "ping测试", alias = "p")]
-///     Ping,
-///
-///     #[plugin(description = "回显消息")]
-///     Echo { text: String },
+/// #[plugin(name = "echo", description = "Repeats what you say")]
+/// async fn echo(ctx: Ctx, #[rest] content: String) -> Result<()> {
+///     ctx.reply_text(format!("Echo: {}", content)).await?;
+///     Ok(())
 /// }
 ///
-/// #[async_trait]
-/// impl ayiou::core::Plugin for ExamplePlugins {
-///     async fn handle(&self, ctx: &Ctx) -> anyhow::Result<bool> {
-///         if let Some(cmd) = Self::parse(&ctx.text()) {
-///             match cmd {
-///                 Self::Help => ctx.reply_text(Self::help_text()).await?,
-///                 Self::Ping => ctx.reply_text("pong!").await?,
-///                 Self::Echo { text } => ctx.reply_text(format!("Echo: {}", text)).await?,
-///             }
-///             return Ok(true);
-///         }
-///         Ok(false)
-///     }
+/// #[plugin(name = "add", description = "Adds two numbers")]
+/// async fn add(ctx: Ctx, a: i32, b: i32) -> Result<()> {
+///     ctx.reply_text(format!("{} + {} = {}", a, b, a + b)).await?;
+///     Ok(())
 /// }
 ///
-/// // Register with bot
-/// AyiouBot::new().plugin::<ExamplePlugins>().run("ws://...").await;
+/// // Register with bot - the macro generates EchoCommand and AddCommand structs
+/// AyiouBot::new()
+///     .plugin::<EchoCommand>()
+///     .plugin::<AddCommand>()
+///     .run("ws://...").await;
 /// ```
-#[proc_macro_derive(Plugin, attributes(plugin))]
-pub fn derive_plugin(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    expand_plugin(input)
-        .unwrap_or_else(|err| err.to_compile_error())
-        .into()
-}
-
-/// Derive macro for defining command arguments (similar to clap's Args).
 ///
-/// # Example
+/// # Attributes
 ///
-/// ```ignore
-/// use ayiou::prelude::*;
+/// - `name`: Command name (defaults to function name)
+/// - `description`: Command description
+/// - `prefix`: Command prefix (defaults to "/")
+/// - `alias`: Single alias for the command
+/// - `aliases`: Comma-separated list of aliases
 ///
-/// #[derive(Args)]
-/// pub struct EchoArgs {
-///     pub text: String,
-/// }
+/// # Parameter Attributes
 ///
-/// impl EchoArgs {
-///     pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-///         ctx.reply_text(format!("Echo: {}", self.text)).await?;
-///         Ok(())
-///     }
-/// }
-/// ```
-#[proc_macro_derive(Args, attributes(arg))]
-pub fn derive_args(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    expand_args(input)
+/// - `#[rest]`: Consume the rest of the input as a single string
+/// - `#[optional]`: Make the parameter optional (wrap in Option<T>)
+/// - `#[cron]`: Parse as cron expression
+/// - `#[regex("pattern")]`: Validate against regex pattern
+/// - `#[error("message")]`: Custom error message for validation failure
+#[proc_macro_attribute]
+pub fn plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attrs = parse_macro_input!(attr);
+    let func = parse_macro_input!(item as ItemFn);
+    expand_plugin(attrs, func)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
