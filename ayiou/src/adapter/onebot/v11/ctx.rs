@@ -15,7 +15,7 @@ pub enum MsgEvent {
     Group(Arc<GroupMessageEvent>),
 }
 
-use crate::core::session::SessionManager;
+use crate::core::adapter::MsgContext;
 
 /// Message context
 #[derive(Clone)]
@@ -23,16 +23,25 @@ pub struct Ctx {
     event: Arc<OneBotEvent>,
     msg: MsgEvent,
     outgoing_tx: mpsc::Sender<String>,
-    pub session_manager: Arc<SessionManager>,
+}
+
+impl MsgContext for Ctx {
+    fn text(&self) -> String {
+        self.text()
+    }
+
+    fn user_id(&self) -> String {
+        self.user_id().to_string()
+    }
+
+    fn group_id(&self) -> Option<String> {
+        self.group_id().map(|id| id.to_string())
+    }
 }
 
 impl Ctx {
     /// Create context from OneBot event
-    pub fn new(
-        event: Arc<OneBotEvent>,
-        outgoing_tx: mpsc::Sender<String>,
-        session_manager: Arc<SessionManager>,
-    ) -> Option<Self> {
+    pub fn new(event: Arc<OneBotEvent>, outgoing_tx: mpsc::Sender<String>) -> Option<Self> {
         let OneBotEvent::Message(msg_event) = event.as_ref() else {
             return None;
         };
@@ -46,7 +55,6 @@ impl Ctx {
             event,
             msg,
             outgoing_tx,
-            session_manager,
         })
     }
 

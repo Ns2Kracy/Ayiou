@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use log::info;
 
-use crate::{adapter::onebot::v11::ctx::Ctx, core::session::SessionManager};
+use crate::core::adapter::MsgContext;
 
 // ============================================================================
 // Args parsing types
@@ -70,13 +70,16 @@ impl<T: Args> Args for Box<T> {
 /// Trait for self-contained command execution
 /// Implement this for your Args struct to avoid specifying a handler manually
 #[async_trait::async_trait]
-pub trait Command: Args + Send + Sync + 'static {
-    async fn run(self, ctx: Ctx) -> Result<()>;
+pub trait Command<C>: Args + Send + Sync + 'static {
+    async fn run(self, ctx: C) -> Result<()>;
 }
 
 #[async_trait::async_trait]
-impl<T: Command> Command for Box<T> {
-    async fn run(self, ctx: Ctx) -> Result<()> {
+impl<C, T: Command<C>> Command<C> for Box<T>
+where
+    C: Send + 'static,
+{
+    async fn run(self, ctx: C) -> Result<()> {
         (*self).run(ctx).await
     }
 }
@@ -232,7 +235,7 @@ impl Default for PluginMetadata {
 
 /// Plugin trait: main entry point for message handling
 #[async_trait::async_trait]
-pub trait Plugin: Send + Sync + 'static {
+pub trait Plugin<C>: Send + Sync + 'static {
     /// Metadata (name/description/version)
     fn meta(&self) -> PluginMetadata {
         PluginMetadata::default()
@@ -246,61 +249,56 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     /// Check if this plugin matches the context (default: always match)
-    fn matches(&self, _ctx: &Ctx) -> bool {
+    fn matches(&self, _ctx: &C) -> bool {
         true
     }
 
     /// Handle the message, return Ok(true) to block subsequent handlers
-    async fn handle(&self, ctx: &Ctx) -> Result<bool>;
+    async fn handle(&self, ctx: &C) -> Result<bool>;
 }
 
 /// Trait for individual commands
 #[async_trait::async_trait]
-pub trait CommandHandler: Send + Sync + 'static {
-    async fn handle(self, ctx: &Ctx) -> Result<()>;
+pub trait CommandHandler<C>: Send + Sync + 'static {
+    async fn handle(self, ctx: &C) -> Result<()>;
 }
 
-pub type PluginBox = Box<dyn Plugin>;
+pub type PluginBox<C> = Box<dyn Plugin<C>>;
 
-pub trait IntoPluginBox {
-    fn into_plugin_box(self) -> PluginBox;
+pub trait IntoPluginBox<C> {
+    fn into_plugin_box(self) -> PluginBox<C>;
 }
 
-impl<P> IntoPluginBox for P
+impl<P, C> IntoPluginBox<C> for P
 where
-    P: Plugin,
+    P: Plugin<C>,
+    C: 'static,
 {
-    fn into_plugin_box(self) -> PluginBox {
+    fn into_plugin_box(self) -> PluginBox<C> {
         Box::new(self)
     }
 }
 
-impl<P> IntoPluginBox for fn() -> P
-where
-    P: Plugin,
-{
-    fn into_plugin_box(self) -> PluginBox {
-        Box::new(self())
-    }
-}
-
-type PluginList = Arc<[Arc<dyn Plugin>]>;
+type PluginList<C> = Arc<[Arc<dyn Plugin<C>>]>;
 
 #[derive(Clone)]
-pub struct PluginManager {
+pub struct PluginManager<C> {
     /// Plugins pending registration (build phase)
-    pending: Vec<Arc<dyn Plugin>>,
+    pending: Vec<Arc<dyn Plugin<C>>>,
     /// Runtime plugin snapshot (immutable after build)
-    snapshot: Option<PluginList>,
+    snapshot: Option<PluginList<C>>,
 }
 
-impl Default for PluginManager {
+impl<C: MsgContext> Default for PluginManager<C> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PluginManager {
+impl<C> PluginManager<C>
+where
+    C: MsgContext,
+{
     pub fn new() -> Self {
         Self {
             pending: Vec::new(),
@@ -309,7 +307,7 @@ impl PluginManager {
     }
 
     /// Register a plugin (build phase)
-    pub fn register<P: Plugin>(&mut self, plugin: P) {
+    pub fn register<P: Plugin<C>>(&mut self, plugin: P) {
         let meta = plugin.meta();
         info!(
             "Registering plugin: {} v{} - {}",
@@ -319,7 +317,7 @@ impl PluginManager {
     }
 
     /// Register multiple plugins (supports different plugin types)
-    pub fn register_all(&mut self, plugins: impl IntoIterator<Item = PluginBox>) {
+    pub fn register_all(&mut self, plugins: impl IntoIterator<Item = PluginBox<C>>) {
         for plugin in plugins {
             let meta = plugin.meta();
             info!(
@@ -331,14 +329,14 @@ impl PluginManager {
     }
 
     /// Build snapshot (plugin list becomes immutable after this)
-    pub fn build(&mut self) -> PluginList {
-        let snapshot: PluginList = self.pending.drain(..).collect();
+    pub fn build(&mut self) -> PluginList<C> {
+        let snapshot: PluginList<C> = self.pending.drain(..).collect();
         self.snapshot = Some(snapshot.clone());
         snapshot
     }
 
     /// Get snapshot (if built)
-    pub fn snapshot(&self) -> Option<PluginList> {
+    pub fn snapshot(&self) -> Option<PluginList<C>> {
         self.snapshot.clone()
     }
 
@@ -372,14 +370,23 @@ impl PluginManager {
 
 use std::collections::HashMap;
 
-#[derive(Default, Clone)]
-struct TrieNode {
-    children: HashMap<char, TrieNode>,
-    handlers: Vec<Arc<dyn Plugin>>,
+#[derive(Clone)]
+struct TrieNode<C> {
+    children: HashMap<char, TrieNode<C>>,
+    handlers: Vec<Arc<dyn Plugin<C>>>,
 }
 
-impl TrieNode {
-    fn insert(&mut self, cmd: &str, plugin: Arc<dyn Plugin>) {
+impl<C> Default for TrieNode<C> {
+    fn default() -> Self {
+        Self {
+            children: HashMap::new(),
+            handlers: Vec::new(),
+        }
+    }
+}
+
+impl<C> TrieNode<C> {
+    fn insert(&mut self, cmd: &str, plugin: Arc<dyn Plugin<C>>) {
         let mut node = self;
         for c in cmd.chars() {
             node = node.children.entry(c).or_default();
@@ -389,7 +396,7 @@ impl TrieNode {
 
     /// Find the longest matching command.
     /// Enforces that the match must be a full word (followed by whitespace or end of string).
-    fn match_command(&self, text: &str) -> Option<&Vec<Arc<dyn Plugin>>> {
+    fn match_command(&self, text: &str) -> Option<&Vec<Arc<dyn Plugin<C>>>> {
         let mut node = self;
         let mut last_match = None;
         let mut chars = text.chars().peekable();
@@ -426,16 +433,16 @@ impl TrieNode {
 }
 
 #[derive(Clone)]
-pub struct Dispatcher {
+pub struct Dispatcher<C> {
     /// Plugins that don't declare specific commands (always checked)
-    wildcards: Arc<Vec<Arc<dyn Plugin>>>,
+    wildcards: Arc<Vec<Arc<dyn Plugin<C>>>>,
     /// Trie root for command lookup
-    root: Arc<TrieNode>,
+    root: Arc<TrieNode<C>>,
 }
 
-impl Dispatcher {
+impl<C: MsgContext> Dispatcher<C> {
     /// Create dispatcher from plugin list
-    pub fn new(plugins: PluginList) -> Self {
+    pub fn new(plugins: PluginList<C>) -> Self {
         let mut root = TrieNode::default();
         let mut wildcards = Vec::new();
 
@@ -459,47 +466,22 @@ impl Dispatcher {
     /// Dispatch event to all matching plugins
     /// Note: Command-specific plugins are prioritized over wildcards
     /// Dispatch event to all matching plugins
-    /// Priority: Commands > Session > Wildcards
-    pub async fn dispatch(&self, ctx: &Ctx, session_manager: &SessionManager) -> Result<()> {
+    /// Priority: Commands > Wildcards
+    pub async fn dispatch(&self, ctx: &C) -> Result<()> {
         // 1. explicit commands
         if self.dispatch_commands(ctx).await? {
             return Ok(());
         }
 
-        // 2. active session
-        if self.dispatch_session(ctx, session_manager).await? {
-            return Ok(());
-        }
-
-        // 3. wildcards
+        // 2. wildcards
         if self.dispatch_wildcards(ctx).await? {
             return Ok(());
         }
         Ok(())
     }
 
-    /// Check and dispatch to active session
-    async fn dispatch_session(&self, ctx: &Ctx, session_manager: &SessionManager) -> Result<bool> {
-        let key = (ctx.user_id(), ctx.group_id());
-        if let Some((tx, filter)) = session_manager.get_waiter(&key) {
-            // Check filter if present
-            let matches = filter.map(|f| f(ctx)).unwrap_or(true);
-
-            if matches {
-                // If we can send to the waiter, we skip normal dispatch
-                // If the receiver dropped (timeout/closed), we fall back but consume the waiter
-                if tx.send(ctx.clone()).await.is_ok() {
-                    return Ok(true);
-                }
-                // Cleanup dead waiter if send failed
-                session_manager.unregister(&key);
-            }
-        }
-        Ok(false)
-    }
-
     /// Dispatch only to matching commands
-    pub async fn dispatch_commands(&self, ctx: &Ctx) -> Result<bool> {
+    pub async fn dispatch_commands(&self, ctx: &C) -> Result<bool> {
         let text = ctx.text();
         if let Some(plugins) = self.root.match_command(&text) {
             for plugin in plugins {
@@ -518,7 +500,7 @@ impl Dispatcher {
     }
 
     /// Dispatch only to wildcard plugins
-    pub async fn dispatch_wildcards(&self, ctx: &Ctx) -> Result<bool> {
+    pub async fn dispatch_wildcards(&self, ctx: &C) -> Result<bool> {
         for plugin in self.wildcards.iter() {
             if !plugin.matches(ctx) {
                 continue;

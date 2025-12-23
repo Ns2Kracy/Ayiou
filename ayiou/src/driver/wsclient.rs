@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use url::Url;
 
-use crate::core::Driver;
+use crate::core::driver::Driver;
 
 /// WebSocket driver
 ///

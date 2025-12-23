@@ -15,7 +15,7 @@ async fn main() {
     info!("Starting Ayiou Full Feature Demo Bot...");
 
     let onebot_ws_url =
-        std::env::var("ONEBOT_WS_URL").unwrap_or_else(|_| "ws://127.0.0.1:6700".to_string());
+        std::env::var("ONEBOT_WS_URL").unwrap_or_else(|_| "ws://10.126.126.1:3001".to_string());
 
     // Register plugins using factory functions - more intuitive!
     let bot = AyiouBot::new()

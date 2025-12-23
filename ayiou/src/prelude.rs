@@ -1,7 +1,8 @@
 // Convenience re-exports: use ayiou::prelude::*;
 pub use crate::AyiouBot;
 
-pub use crate::core::{
+pub use crate::core::driver::Driver;
+pub use crate::core::plugin::{
     Args, ArgsParseError, Command, CronSchedule, Dispatcher, Plugin, PluginManager, PluginMetadata,
     RegexValidated,
 };

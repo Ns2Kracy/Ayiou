@@ -75,14 +75,33 @@ struct FieldInfo {
     error: Option<String>,
 }
 
-/// Check if type is Ctx
-fn is_ctx_type(ty: &Type) -> bool {
+/// Check if type matches any generic parameter
+fn is_generic_type(ty: &Type, generics: &syn::Generics) -> bool {
     if let Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()
     {
-        return segment.ident == "Ctx";
+        for param in &generics.params {
+            if let syn::GenericParam::Type(type_param) = param
+                && type_param.ident == segment.ident
+            {
+                return true;
+            }
+        }
     }
     false
+}
+
+/// Check if type is Ctx (legacy or generic)
+fn is_context_type(ty: &Type, generics: &syn::Generics) -> bool {
+    // Check legacy "Ctx" name
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Ctx"
+    {
+        return true;
+    }
+    // Check if it's a generic parameter
+    is_generic_type(ty, generics)
 }
 
 /// Check if type is Box<T>
@@ -127,14 +146,26 @@ fn parse_param_attrs(attrs: &[Attribute]) -> (bool, bool, bool, Option<String>, 
     (is_rest, is_optional, is_cron, regex, error)
 }
 
-/// Extract fields from function parameters (excluding Ctx)
-fn extract_fields(func: &ItemFn) -> Result<Vec<FieldInfo>> {
+/// Extract fields from function parameters and identify context type
+fn extract_fields(func: &ItemFn) -> Result<(Vec<FieldInfo>, Type)> {
     let mut fields = Vec::new();
+    let mut ctx_type = None;
+
+    // Default context type (backward compatibility)
+    let default_ctx: Type = syn::parse_str("ayiou::adapter::onebot::v11::ctx::Ctx").unwrap();
 
     for arg in &func.sig.inputs {
         if let FnArg::Typed(PatType { pat, ty, attrs, .. }) = arg {
-            // Skip Ctx parameter
-            if is_ctx_type(ty) {
+            // Check if this is a context parameter
+            // We consider it context if it matches "Ctx" or a generic param
+            if is_context_type(ty, &func.sig.generics) {
+                if ctx_type.is_some() {
+                    return Err(syn::Error::new(
+                        pat.span(),
+                        "multiple context parameters found",
+                    ));
+                }
+                ctx_type = Some(ty.as_ref().clone());
                 continue;
             }
 
@@ -158,7 +189,7 @@ fn extract_fields(func: &ItemFn) -> Result<Vec<FieldInfo>> {
         }
     }
 
-    Ok(fields)
+    Ok((fields, ctx_type.unwrap_or(default_ctx)))
 }
 
 /// Generate struct name from function name (snake_case -> PascalCase + "Command")
@@ -201,8 +232,8 @@ pub fn expand_plugin(attrs: PluginAttrs, func: ItemFn) -> Result<TokenStream> {
     let fn_vis = &func.vis;
     let struct_name = generate_struct_name(fn_name);
 
-    // Extract fields from function parameters (before stripping attrs)
-    let fields = extract_fields(&func)?;
+    // Extract fields and context type
+    let (fields, ctx_type) = extract_fields(&func)?;
 
     // Strip custom attributes from the function for output
     let clean_func = strip_param_attrs(&func);
@@ -258,6 +289,9 @@ pub fn expand_plugin(attrs: PluginAttrs, func: ItemFn) -> Result<TokenStream> {
     let mut inner_func = clean_func.clone();
     inner_func.sig.ident = inner_fn_name.clone();
 
+    // Split generics for impl block
+    let (impl_generics, _ty_generics, where_clause) = func.sig.generics.split_for_impl();
+
     // Generate the output
     let output = quote! {
         // The original function renamed to inner (private)
@@ -287,15 +321,15 @@ pub fn expand_plugin(attrs: PluginAttrs, func: ItemFn) -> Result<TokenStream> {
 
         // Implement Command
         #[async_trait::async_trait]
-        impl ayiou::core::Command for #struct_name {
-            async fn run(self, ctx: ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<()> {
+        impl #impl_generics ayiou::core::Command<#ctx_type> for #struct_name #where_clause {
+            async fn run(self, ctx: #ctx_type) -> anyhow::Result<()> {
                 #inner_fn_name(ctx, #(#call_args),*).await
             }
         }
 
         // Implement Plugin
         #[async_trait::async_trait]
-        impl ayiou::core::Plugin for #struct_name {
+        impl #impl_generics ayiou::core::Plugin<#ctx_type> for #struct_name #where_clause {
             fn meta(&self) -> ayiou::core::PluginMetadata {
                 ayiou::core::PluginMetadata::new(stringify!(#struct_name))
                     .description(#description)
@@ -303,7 +337,7 @@ pub fn expand_plugin(attrs: PluginAttrs, func: ItemFn) -> Result<TokenStream> {
 
             #commands_method
 
-            fn matches(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> bool {
+            fn matches(&self, ctx: &#ctx_type) -> bool {
                 let text = ctx.text();
                 let text = text.trim();
                 let (cmd, _) = text.split_once(char::is_whitespace)
@@ -312,7 +346,7 @@ pub fn expand_plugin(attrs: PluginAttrs, func: ItemFn) -> Result<TokenStream> {
                 #full_cmd == cmd || self.commands().iter().any(|c| c == cmd)
             }
 
-            async fn handle(&self, ctx: &ayiou::adapter::onebot::v11::ctx::Ctx) -> anyhow::Result<bool> {
+            async fn handle(&self, ctx: &#ctx_type) -> anyhow::Result<bool> {
                 let text = ctx.text();
                 let text = text.trim();
                 let (_, args) = text.split_once(char::is_whitespace)

@@ -1,20 +1,11 @@
-use std::sync::Arc;
-
-/// Macro to create a list of plugins, auto-boxed as `PluginBox`
-#[macro_export]
-macro_rules! plugins {
-    ($($plugin:expr),* $(,)?) => {
-        vec![$(Box::new($plugin) as $crate::core::plugin::PluginBox),*]
-    };
-}
-
 use log::{error, info};
-use tokio::sync::mpsc;
 
 use crate::{
-    adapter::onebot::v11::{adapter::OneBotV11Adapter, ctx::Ctx, model::OneBotEvent},
-    core::plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
-    core::session::SessionManager,
+    adapter::onebot::v11::adapter::OneBotV11Adapter,
+    core::{
+        adapter::Adapter,
+        plugin::{Dispatcher, Plugin, PluginBox, PluginManager},
+    },
 };
 
 pub mod adapter;
@@ -22,95 +13,102 @@ pub mod core;
 pub mod driver;
 pub mod prelude;
 
-pub struct AyiouBot {
-    plugin_manager: PluginManager,
-    session_manager: Arc<SessionManager>,
-    event_tx: mpsc::Sender<OneBotEvent>,
-    event_rx: mpsc::Receiver<OneBotEvent>,
+pub struct Bot<A: Adapter> {
+    plugin_manager: PluginManager<A::Ctx>,
 }
 
-impl Default for AyiouBot {
+impl<A: Adapter> Default for Bot<A> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AyiouBot {
+impl<A: Adapter> Bot<A> {
     pub fn new() -> Self {
-        let (event_tx, event_rx) = mpsc::channel(100);
         Self {
             plugin_manager: PluginManager::new(),
-            session_manager: Arc::new(SessionManager::new()),
-            event_tx,
-            event_rx,
         }
     }
 
     /// Register a plugin instance
-    pub fn register_plugin<P: Plugin>(mut self, plugin: fn() -> P) -> Self {
+    pub fn register_plugin<P: Plugin<A::Ctx>>(mut self, plugin: fn() -> P) -> Self {
         self.plugin_manager.register(plugin());
         self
     }
 
     /// Register a plugin by type (requires Default)
-    pub fn plugin<P: Plugin + Default>(mut self) -> Self {
+    pub fn plugin<P: Plugin<A::Ctx> + Default>(mut self) -> Self {
         self.plugin_manager.register(P::default());
         self
     }
 
     /// Register a command handler (alias for plugin, more semantic for Command enums)
-    pub fn command<C: Plugin + Default>(self) -> Self {
+    pub fn command<C: Plugin<A::Ctx> + Default>(self) -> Self {
         self.plugin::<C>()
     }
 
     /// Register multiple plugins
-    pub fn register_plugins(mut self, plugins: impl IntoIterator<Item = PluginBox>) -> Self {
+    pub fn register_plugins(
+        mut self,
+        plugins: impl IntoIterator<Item = PluginBox<A::Ctx>>,
+    ) -> Self {
         self.plugin_manager.register_all(plugins);
         self
     }
 
     /// Get plugin manager
-    pub fn plugin_manager(&self) -> &PluginManager {
+    pub fn plugin_manager(&self) -> &PluginManager<A::Ctx> {
         &self.plugin_manager
     }
 
-    /// Start the bot and connect to OneBot via WebSocket
-    pub async fn run(mut self, url: impl Into<String>) {
+    /// Start the bot with a specific adapter
+    pub async fn run_adapter(mut self, adapter: A) {
         pretty_env_logger::try_init().ok();
-        info!("Connecting to OneBot via WebSocket");
+        info!("Starting Bot...");
 
-        let outgoing_tx = OneBotV11Adapter::start(url, self.event_tx.clone());
+        let mut event_rx = adapter.start().await;
 
         let plugins = self.plugin_manager.build();
         let dispatcher = Dispatcher::new(plugins);
         info!("Loaded {} plugins", self.plugin_manager.count());
 
-        // Event dispatch task
-        let mut event_rx = self.event_rx;
-        let session_manager = self.session_manager.clone();
+        // Event dispatch loop directly in main thread or spawn?
+        // Original spawned a task. Here we can just run loop.
+        // But main.rs calls await on run. So running loop here is fine.
 
-        tokio::spawn(async move {
-            info!("Event dispatch started!");
-            while let Some(msg) = event_rx.recv().await {
-                let event = Arc::new(msg);
-                let dispatcher = dispatcher.clone();
-                let outgoing = outgoing_tx.clone();
-                let session_manager = session_manager.clone();
+        // Wait, original code spawn a task for dispatch and then waited for ctrl_c.
+        // If I run loop here, it blocks.
+        // I should probably spawn the loop or run the loop combined with ctrl_c.
 
-                tokio::spawn(async move {
-                    let Some(ctx) = Ctx::new(event, outgoing, session_manager.clone()) else {
-                        return;
-                    };
+        info!("Bot is running, press Ctrl+C to exit.");
 
-                    if let Err(err) = dispatcher.dispatch(&ctx, &session_manager).await {
-                        error!("Plugin dispatch error: {}", err);
-                    }
-                });
+        loop {
+            tokio::select! {
+                Some(ctx) = event_rx.recv() => {
+                    let dispatcher = dispatcher.clone();
+
+                    tokio::spawn(async move {
+                         // Dispatch takes generic Ctx now.
+                        if let Err(err) = dispatcher.dispatch(&ctx).await {
+                            error!("Plugin dispatch error: {}", err);
+                        }
+                    });
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Bot is shutting down.");
+                    break;
+                }
             }
-        });
+        }
+    }
+}
 
-        info!("Ayiou is running, press Ctrl+C to exit.");
-        tokio::signal::ctrl_c().await.unwrap();
-        info!("Ayiou is shutting down.");
+pub type AyiouBot = Bot<OneBotV11Adapter>;
+
+impl AyiouBot {
+    /// Start the bot and connect to OneBot via WebSocket
+    pub async fn run(self, url: impl Into<String>) {
+        let adapter = OneBotV11Adapter::new(url);
+        self.run_adapter(adapter).await;
     }
 }

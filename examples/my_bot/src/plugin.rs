@@ -37,6 +37,9 @@ pub async fn whoami(ctx: Ctx) -> anyhow::Result<()> {
 /// Guess command - guessing game
 #[plugin(prefix = "/", name = "guess", description = "Guessing game")]
 pub async fn guess(ctx: Ctx) -> anyhow::Result<()> {
+    ctx.reply_text("Session functionality is currently disabled.")
+        .await?;
+    /*
     let secret_number = 42;
     ctx.reply_text(
         "I'm thinking of a number between 1 and 100. Try to guess it! (Type 'exit' to quit)",
@@ -44,8 +47,8 @@ pub async fn guess(ctx: Ctx) -> anyhow::Result<()> {
     .await?;
 
     let session = ayiou::core::session::Session::new(
-        ctx.user_id(),
-        ctx.group_id(),
+        ctx.user_id().to_string(),
+        ctx.group_id().map(|id| id.to_string()),
         ctx.session_manager.clone(),
     );
 
@@ -81,5 +84,6 @@ pub async fn guess(ctx: Ctx) -> anyhow::Result<()> {
             next_msg.reply_text("Please enter a valid number.").await?;
         }
     }
+    */
     Ok(())
 }
