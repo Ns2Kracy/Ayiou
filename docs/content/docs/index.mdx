@@ -7,34 +7,31 @@ Ayiou 是一个基于 Rust 的 Bot 框架，专注于简洁的 API 设计和强�
 
 ## 特性
 
-- **声明式插件定义** - 使用 `#[derive(Plugin)]` 宏快速定义命令
-- **灵活的参数解析** - 使用 `#[derive(Args)]` 宏自动解析命令参数
-- **正则验证** - 支持 `#[arg(regex = "...")]` 进行参数验证
-- **Cron 调度** - 支持 `#[arg(cron)]` 解析 cron 表达式
-- **自动错误处理** - 参数解析失败时自动回复错误消息
+- **声明式插件定义** - 使用 `#[derive(Plugin)]` 宏快速定义插件
+- **多种触发模式** - 支持命令触发、正则匹配触发和 Cron 定时触发
 - **OneBot v11 协议** - 兼容主流 Bot 平台
+- **轻量级** - 基于 async/await，高性能且易于扩展
 
-## 快速开始
+## 快速示例
 
 ```rust
 use ayiou::prelude::*;
 
 #[derive(Plugin)]
-#[plugin(name = "basic", prefix = "/")]
-pub enum Commands {
-    #[plugin(handler = "handle_ping", description = "ping测试")]
-    Ping,
-}
+#[plugin(name = "echo", command = "echo")]
+pub struct EchoPlugin;
 
-// 简单的 Async 函数处理器
-async fn handle_ping(ctx: Ctx) -> Result<()> {
-    ctx.reply_text("pong").await?;
-    Ok(())
+impl EchoPlugin {
+    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        let text = ctx.text();
+        ctx.reply_text(format!("Echo: {}", text)).await?;
+        Ok(())
+    }
 }
 ```
 
 <Cards>
   <Card title="快速开始" href="/docs/getting-started" />
   <Card title="Plugin 宏" href="/docs/plugin-macro" />
-  <Card title="Args 宏" href="/docs/args-macro" />
+  <Card title="Cron 调度" href="/docs/cron-scheduling" />
 </Cards>

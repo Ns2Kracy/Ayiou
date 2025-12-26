@@ -3,203 +3,117 @@ title: Plugin 宏
 description: 使用 #[derive(Plugin)] 宏定义插件
 ---
 
-`#[derive(Plugin)]` 宏用于将多个命令组织成一个插件，自动生成命令解析、匹配和分发逻辑。
+`#[derive(Plugin)]` 宏用于将结构体声明为 Bot 插件，自动生成必要的元数据和匹配逻辑。
 
 ## 基本用法
+
+Ayiou 目前仅支持**结构体 (Struct)** 形式的插件定义。
 
 ```rust
 use ayiou::prelude::*;
 
 #[derive(Plugin)]
-#[plugin(name = "my_plugin", prefix = "/")]
-pub enum MyCommands {
-    #[plugin(description = "ping测试")]
-    Ping(Ping),
+#[plugin(name = "my_plugin", command = "mycmd", description = "我的插件")]
+pub struct MyPlugin;
 
-    #[plugin(description = "帮助信息")]
-    Help(Help),
+impl MyPlugin {
+    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        ctx.reply_text("Hello Plugin").await?;
+        Ok(())
+    }
 }
 ```
 
-## 插件级属性
+## 插件属性
 
 在 `#[plugin(...)]` 中可以配置以下属性：
 
 | 属性 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `name` | `String` | 是 | 插件名称 |
-| `prefix` | `String` | 否 | 命令前缀，默认为空 |
+| `name` | `String` | 是 | 插件唯一名称 |
 | `description` | `String` | 否 | 插件描述，用于帮助信息 |
+| `command` | `String` | 否 | 触发命令 (不含前缀) |
 | `version` | `String` | 否 | 插件版本，默认 "0.1.0" |
-| `rename_all` | `String` | 否 | 命令名称转换规则 |
+| `regex` | `String` | 否 | 消息匹配正则 (用于非命令触发) |
+| `cron` | `String` | 否 | Cron 表达式 (用于定时触发) |
 
-### rename_all 规则
+### context 属性
 
-- `lowercase` - 全小写 (默认)
-- `UPPERCASE` - 全大写
-- `camelCase` - 驼峰
-- `snake_case` - 蛇形
-- `kebab-case` - 短横线
+如果你使用了自定义的 Context 类型，可以通过 `context` 属性指定：
 
 ```rust
 #[derive(Plugin)]
-#[plugin(name = "cmds", prefix = "/", rename_all = "lowercase")]
-pub enum Commands {
-    MyCommand(MyCommand), // 命令名: /mycommand
-}
+#[plugin(name = "custom", context = "MyContext")]
+pub struct CustomPlugin;
 ```
 
-## 变体级属性
+## 匹配模式
 
-每个枚举变体可以配置：
+插件支持三种触发模式，互斥使用：
 
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `description` | `String` | 命令描述 |
-| `alias` | `String` | 单个别名 |
-| `aliases` | `[String]` | 多个别名 |
-| `rename` | `String` | 重命名命令 |
-| `hide` | `bool` | 从帮助列表隐藏 |
+### 1. 命令触 (Command)
+
+最常用的模式。当消息以 `command` 开头时触发。
 
 ```rust
 #[derive(Plugin)]
-#[plugin(name = "cmds", prefix = "/")]
-pub enum Commands {
-    #[plugin(description = "ping测试", alias = "p")]
-    Ping(Ping),
-
-    #[plugin(description = "帮助", aliases = ["h", "?"])]
-    Help(Help),
-
-    #[plugin(rename = "info", description = "信息")]
-    About(About),
-
-    #[plugin(hide)]
-    Debug(Debug), // 不显示在帮助列表
-}
+#[plugin(name = "echo", command = "echo")]
+pub struct EchoPlugin;
 ```
 
-## Handler 模式 (推荐)
+### 2. 正则触发 (Regex)
 
-除了传统的结构体包装方式，现在支持直接绑定 async 函数作为处理器。这种方式利用了依赖注入（Extractor），代码更简洁。
+当消息匹配正则表达式时触发。宏会自动生成 `regex()` 方法。
 
 ```rust
-use ayiou::prelude::*;
-
 #[derive(Plugin)]
-#[plugin(name = "my_plugin", prefix = "/")]
-pub enum MyPlugin {
-    // 绑定到 handle_echo 函数
-    #[plugin(handler = "handle_echo", description = "回显")]
-    Echo,
+#[plugin(name = "url", regex = r"https?://\S+")]
+pub struct UrlPlugin;
 
-    // 绑定到 handle_greet 函数
-    #[plugin(handler = "handle_greet", description = "打招呼")]
-    Greet,
-}
-
-// 处理器函数：参数自动注入
-// Ctx: 上下文
-// String: 消息文本 (剩余参数)
-// UserId: 发送者ID
-async fn handle_echo(ctx: Ctx, text: String) -> Result<()> {
-    ctx.reply_text(text).await?;
-    Ok(())
-}
-
-async fn handle_greet(user: UserId, ctx: Ctx) -> Result<()> {
-    ctx.reply_text(format!("Hello, user {}!", user.0)).await?;
-    Ok(())
+impl UrlPlugin {
+    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        // self.regex() 返回 &'static Regex
+        if self.regex().is_match(&ctx.text()) {
+             // ...
+        }
+        Ok(())
+    }
 }
 ```
 
-### 支持的提取器 (Extractors)
+### 3. 定时触发 (Cron)
 
-处理器函数的参数可以是以下类型（顺序无关）：
-
-- `Ctx`: 完整的事件上下文
-- `String`: 消息内容（去除命令前缀后的部分）
-- `UserId`: 发送消息的用户 ID
-- `GroupId`: 群组 ID (`Option<i64>`)
-- `Session`: 会话对象（用于多轮对话，见 Session 文档）
-- 任何实现了 `FromEvent` trait 的类型
-
-## 生成的方法
-
-宏会为枚举生成以下方法：
-
-### `matches_cmd(text: &str) -> bool`
-
-检查文本是否匹配某个命令：
+根据时间表自动触发。宏会自动生成 `cron_expression()` 方法。
 
 ```rust
-if MyCommands::matches_cmd("/ping") {
-    println!("匹配到命令");
-}
+#[derive(Plugin)]
+#[plugin(name = "timer", cron = "0 0 * * * *")]
+pub struct TimerPlugin;
 ```
 
-### `try_parse(text: &str) -> Result<Self, ArgsParseError>`
+## 实现原理
 
-尝试解析文本为命令，包含参数验证：
-
-```rust
-match MyCommands::try_parse("/echo hello") {
-    Ok(cmd) => { /* 处理命令 */ }
-    Err(e) => println!("解析失败: {}", e),
-}
-```
-
-### `descriptions() -> &'static [(&'static str, &'static str)]`
-
-获取所有命令的描述列表：
-
-```rust
-for (cmd, desc) in MyCommands::descriptions() {
-    println!("{} - {}", cmd, desc);
-}
-```
-
-### `help_text() -> String`
-
-生成格式化的帮助文本：
-
-```rust
-let help = MyCommands::help_text();
-ctx.reply_text(help).await?;
-```
-
-## 自动错误处理
-
-当命令参数解析失败时，框架会自动：
-
-1. 调用 `ctx.reply_text()` 发送错误消息
-2. 返回 `Ok(true)` 阻断后续处理器
-
-错误消息格式：
-```
-❌ 错误信息
-
-帮助文本（如果有）
-```
-
-这意味着你不需要手动处理参数验证错误，框架会自动回复用户。
-
-## 实现 Plugin trait
-
-宏自动实现 `ayiou::core::Plugin` trait：
+`#[derive(Plugin)]` 会自动为你的结构体实现 `yiou::core::plugin::Plugin` trait。生成的代码大致如下：
 
 ```rust
 #[async_trait]
-impl Plugin for MyCommands {
-    fn meta(&self) -> PluginMetadata { ... }
-    fn matches(&self, ctx: &Ctx) -> bool { ... }
-    async fn handle(&self, ctx: &Ctx) -> Result<bool> { ... }
+impl Plugin<Ctx> for MyPlugin {
+    fn meta(&self) -> PluginMetadata {
+        PluginMetadata {
+             name: "my_plugin".to_string(),
+             // ...
+        }
+    }
+
+    fn commands(&self) -> Vec<String> {
+        vec!["mycmd".to_string()]
+    }
+
+    async fn handle(&self, ctx: &Ctx) -> anyhow::Result<bool> {
+        self.execute(ctx).await?;
+        Ok(true)
+    }
 }
 ```
 
-## 命令处理流程
-
-1. `matches()` 检查消息是否匹配任一命令
-2. `handle()` 调用 `try_parse()` 解析命令和参数
-3. 如果解析失败，自动回复错误并返回
-4. 如果解析成功，分发到对应变体的 `handle` 方法
+注意：宏生成的 `handle` 方法默认会调用你实现的 `execute` 方法。因此你必须在 `impl` 块中定义 `pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()>`。

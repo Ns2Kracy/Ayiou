@@ -3,22 +3,57 @@ title: Cron 调度
 description: 使用 cron 表达式进行定时任务调度
 ---
 
+# Cron 调度
+
 Ayiou 框架支持解析 cron 表达式，并提供计算下次触发时间等功能。
 
-## 基本用法
+## 定时任务插件
 
-使用 `#[arg(cron)]` 属性将字段标记为 cron 表达式：
+最常用的功能是创建定时触发的插件。使用 `#[plugin(cron = "...")]` 属性即可。
 
 ```rust
 use ayiou::prelude::*;
 
-#[derive(Args)]
-pub struct RemindArgs {
-    #[arg(cron, error = "无效的 cron 表达式")]
-    pub schedule: CronSchedule,
+#[derive(Plugin)]
+#[plugin(name = "hourly_report", cron = "0 0 * * * *")]
+pub struct HourlyReport;
 
-    #[arg(rest)]
-    pub message: String,
+impl HourlyReport {
+    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        // 每小时整点执行
+        // 注意：定时任务中的 ctx 可能不包含消息内容
+        println!("整点报时！");
+        Ok(())
+    }
+}
+```
+
+使用 `cron` 属性时：
+1. 插件不会响应普通消息
+2. 调度器会自动按计划调用 `execute` 方法
+3. 宏会自动生成 `pub fn cron_expression(&self) -> &'static str` 方法
+
+## 手动解析 Cron
+
+`CronSchedule` 类型提供了手动解析和计算功能，你可以在代码中使用它。
+
+```rust
+use ayiou::prelude::*;
+
+// 解析 Cron 表达式
+let schedule = CronSchedule::parse("0 0 8 * * *")?;
+
+// 获取原始表达式
+println!("表达式: {}", schedule.source());
+
+// 获取下次触发时间
+if let Some(next) = schedule.next_after(&chrono::Utc::now()) {
+    println!("下次触发时间: {}", next);
+}
+
+// 获取接下来 5 次触发时间
+for next in schedule.upcoming().take(5) {
+    println!("触发: {}", next);
 }
 ```
 
@@ -49,157 +84,6 @@ pub struct RemindArgs {
 | `0 0 0 1 * *` | 每月1号0点 |
 | `0 */5 * * * *` | 每5分钟 |
 | `0 0 12 * * ?` | 每天中午12点 |
-
-## CronSchedule 类型
-
-`CronSchedule` 是 cron 表达式的包装类型，提供以下方法：
-
-### `parse(expr: &str)`
-
-解析 cron 表达式：
-
-```rust
-use ayiou::prelude::*;
-
-let schedule = CronSchedule::parse("0 0 8 * * *")?;
-```
-
-### `upcoming()`
-
-获取从当前时间开始的触发时间迭代器：
-
-```rust
-let schedule = CronSchedule::parse("0 0 8 * * *")?;
-
-// 获取接下来5次触发时间
-for next in schedule.upcoming().take(5) {
-    println!("下次触发: {}", next);
-}
-```
-
-### `next_after(datetime)`
-
-获取指定时间之后的下次触发时间：
-
-```rust
-use chrono::Utc;
-
-let schedule = CronSchedule::parse("0 0 8 * * *")?;
-let now = Utc::now();
-
-if let Some(next) = schedule.next_after(&now) {
-    println!("下次触发: {}", next);
-}
-```
-
-### `includes(datetime)`
-
-检查指定时间是否匹配调度：
-
-```rust
-use chrono::Utc;
-
-let schedule = CronSchedule::parse("0 0 8 * * *")?;
-let now = Utc::now();
-
-if schedule.includes(now) {
-    println!("当前时间匹配调度");
-}
-```
-
-### `source()`
-
-获取原始 cron 表达式字符串：
-
-```rust
-let schedule = CronSchedule::parse("0 0 8 * * *")?;
-println!("表达式: {}", schedule.source()); // "0 0 8 * * *"
-```
-
-## 完整示例
-
-### 定时提醒命令
-
-```rust
-use ayiou::prelude::*;
-use chrono::Utc;
-
-#[derive(Args)]
-#[arg(usage = "/remind <cron表达式> <提醒内容>")]
-pub struct RemindArgs {
-    #[arg(cron, error = "无效的 cron 表达式，格式: 秒 分 时 日 月 周")]
-    pub schedule: CronSchedule,
-
-    #[arg(rest)]
-    pub message: String,
-}
-
-impl RemindArgs {
-    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        // 计算下次触发时间
-        let next = self.schedule
-            .next_after(&Utc::now())
-            .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
-            .unwrap_or_else(|| "无".to_string());
-
-        ctx.reply_text(format!(
-            "已设置提醒\n表达式: {}\n下次触发: {}\n内容: {}",
-            self.schedule.source(),
-            next,
-            self.message
-        )).await?;
-
-        Ok(())
-    }
-}
-
-#[derive(Plugin)]
-#[plugin(name = "scheduler", prefix = "/")]
-pub enum SchedulerCommands {
-    #[plugin(description = "设置定时提醒")]
-    Remind(RemindArgs),
-}
-```
-
-用户输入：
-```
-/remind 0 0 8 * * * 起床啦
-```
-
-Bot 回复：
-```
-已设置提醒
-表达式: 0 0 8 * * *
-下次触发: 2024-01-02 08:00:00
-内容: 起床啦
-```
-
-### 查询调度信息
-
-```rust
-#[derive(Args)]
-pub struct CronInfoArgs {
-    #[arg(cron, error = "无效的 cron 表达式")]
-    pub schedule: CronSchedule,
-}
-
-impl CronInfoArgs {
-    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        let mut info = format!("Cron: {}\n\n接下来5次触发:\n", self.schedule.source());
-
-        for (i, next) in self.schedule.upcoming().take(5).enumerate() {
-            info.push_str(&format!(
-                "{}. {}\n",
-                i + 1,
-                next.format("%Y-%m-%d %H:%M:%S")
-            ));
-        }
-
-        ctx.reply_text(info).await?;
-        Ok(())
-    }
-}
-```
 
 ## 注意事项
 

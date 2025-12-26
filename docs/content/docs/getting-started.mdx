@@ -15,93 +15,108 @@ anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
-## 基本用法 (Handler 模式)
+## 基本用法
 
-推荐使用新的 Handler 模式，通过 async 函数和依赖注入来处理命令。
+Ayiou 使用结构体 (**Struct**) 来定义插件。每个插件都需要实现 `execute` 方法来处理逻辑。
 
 ### 1. 定义插件
 
-使用 `#[derive(Plugin)]` 宏定义插件结构，并使用 `handler` 属性绑定处理函数：
+使用 `#[derive(Plugin)]` 宏定义插件结构：
 
 ```rust
 use ayiou::prelude::*;
 
 #[derive(Plugin)]
-#[plugin(name = "hello", prefix = "/")]
-pub enum HelloPlugin {
-    #[plugin(handler = "handle_hello", description = "打招呼")]
-    Hello,
+#[plugin(name = "hello", command = "hello", description = "打招呼")]
+pub struct HelloPlugin;
 
-    #[plugin(handler = "handle_echo", description = "复读机")]
-    Echo,
+impl HelloPlugin {
+    // 必须实现 execute 方法，接受 &Ctx
+    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        let user_id = ctx.user_id();
+        ctx.reply_text(format!("你好，用户 {}！", user_id)).await?;
+        Ok(())
+    }
 }
 ```
 
-### 2. 编写处理函数
+### 2. 处理参数
 
-编写普通的 async 函数，参数会自动注入（依赖注入）：
+目前框架不自动解析参数，你需要从 `ctx.text()` 手动解析。
 
 ```rust
-// 自动注入 Context 和 UserID
-async fn handle_hello(ctx: Ctx, user: UserId) -> Result<()> {
-    ctx.reply_text(format!("你好，用户 {}！", user.0)).await?;
-    Ok(())
-}
+#[derive(Plugin)]
+#[plugin(name = "echo", command = "echo", description = "复读机")]
+pub struct EchoPlugin;
 
-// 自动注入剩余的参数文本
-async fn handle_echo(ctx: Ctx, text: String) -> Result<()> {
-    ctx.reply_text(format!("你说的是：{}", text)).await?;
-    Ok(())
+impl EchoPlugin {
+    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        let text = ctx.text();
+
+        // 解析参数：除去命令本身
+        // 假设消息是 "/echo hello world"
+        // 简单的示例：
+        let content = text.split_whitespace()
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        if content.is_empty() {
+            ctx.reply_text("请输入要复读的内容").await?;
+            return Ok(());
+        }
+
+        ctx.reply_text(format!("你说的是：{}", content)).await?;
+        Ok(())
+    }
 }
 ```
 
-### 3. 注册并运行
+### 3. 正则匹配
+
+你也可以使用正则表达式来匹配消息：
+
+```rust
+#[derive(Plugin)]
+#[plugin(name = "url_detector", regex = r"https?://\S+")]
+pub struct UrlDetector;
+
+impl UrlDetector {
+    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        let text = ctx.text();
+        // 使用 self.regex() 获取编译好的正则
+        if let Some(mat) = self.regex().find(&text) {
+             ctx.reply_text(format!("发现链接: {}", mat.as_str())).await?;
+        }
+        Ok(())
+    }
+}
+```
+
+### 4. 注册并运行
+
+在 `main` 函数中注册插件：
 
 ```rust
 #[tokio::main]
 async fn main() {
     let bot = AyiouBot::new()
-        .plugin::<HelloPlugin>(); // 注册插件
+        .plugin::<HelloPlugin>()
+        .plugin::<EchoPlugin>()
+        .plugin::<UrlDetector>();
 
     // 连接到 OneBot 适配器
     bot.run("ws://127.0.0.1:8080").await;
 }
 ```
 
-## 传统用法 (结构体模式)
+## 常用 Context API
 
-如果你需要更复杂的参数解析（例如使用 clap 风格的参数），可以使用结构体模式。
+`Ctx` 对象提供了与平台交互的方法：
 
-### 1. 定义参数结构
-
-使用 `#[derive(Args)]` 定义命令参数：
-
-```rust
-use ayiou::prelude::*;
-
-#[derive(Args)]
-pub struct BanArgs {
-    pub user_id: i64,
-    pub duration: i64,
-}
-
-// 为结构体实现处理逻辑
-impl BanArgs {
-    pub async fn handle(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        ctx.set_group_ban(ctx.group_id().unwrap(), self.user_id, self.duration).await?;
-        ctx.reply_text("已禁言").await?;
-        Ok(())
-    }
-}
-```
-
-### 2. 在插件中使用
-
-```rust
-#[derive(Plugin)]
-#[plugin(name = "admin", prefix = "/")]
-pub enum AdminPlugin {
-    #[plugin(description = "禁言用户")]
-    Ban(BanArgs),
-}
-```
+- `ctx.text() -> String`: 获取消息文本
+- `ctx.user_id() -> i64`: 获取用户 ID
+- `ctx.group_id() -> Option<i64>`: 获取群组 ID
+- `ctx.reply_text("...")`: 回复文本
+- `ctx.send_group_msg(group_id, "...")`: 发送群消息
+- `ctx.set_group_ban(group_id, user_id, duration)`: 群禁言

@@ -1,62 +1,51 @@
 use proc_macro::TokenStream;
-use syn::{ItemFn, parse_macro_input};
+use syn::{DeriveInput, parse_macro_input};
 
-mod plugin;
+mod derive_plugin;
 
-use plugin::expand_plugin;
+use derive_plugin::expand_derive_plugin;
 
-/// Attribute macro for defining command handlers as simple functions.
+/// Derive macro for simple plugin definition.
 ///
-/// This macro transforms an async function into a full plugin, automatically generating:
-/// - A struct with function parameters as fields
-/// - `Args` trait implementation for argument parsing
-/// - `Command` trait implementation that calls the original function
-/// - `Plugin` trait implementation for bot registration
+/// This macro generates `Plugin` trait implementation from struct attributes.
+/// You must implement an `execute` method on your struct that handles the command.
 ///
 /// # Example
 ///
 /// ```ignore
 /// use ayiou::prelude::*;
 ///
-/// #[plugin(name = "echo", description = "Repeats what you say")]
-/// async fn echo(ctx: Ctx, #[rest] content: String) -> Result<()> {
-///     ctx.reply_text(format!("Echo: {}", content)).await?;
-///     Ok(())
+/// #[derive(Plugin)]
+/// #[plugin(name = "echo", command = "echo", description = "Repeats your message")]
+/// struct EchoPlugin;
+///
+/// impl EchoPlugin {
+///     async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+///         let text = ctx.text();
+///         ctx.reply_text(format!("Echo: {}", text)).await?;
+///         Ok(())
+///     }
 /// }
 ///
-/// #[plugin(name = "add", description = "Adds two numbers")]
-/// async fn add(ctx: Ctx, a: i32, b: i32) -> Result<()> {
-///     ctx.reply_text(format!("{} + {} = {}", a, b, a + b)).await?;
-///     Ok(())
-/// }
-///
-/// // Register with bot - the macro generates EchoCommand and AddCommand structs
+/// // Register with bot
 /// AyiouBot::new()
-///     .plugin::<EchoCommand>()
-///     .plugin::<AddCommand>()
+///     .register_plugin(EchoPlugin)
 ///     .run("ws://...").await;
 /// ```
 ///
 /// # Attributes
 ///
-/// - `name`: Command name (defaults to function name)
-/// - `description`: Command description
-/// - `prefix`: Command prefix (defaults to "/")
-/// - `alias`: Single alias for the command
-/// - `aliases`: Comma-separated list of aliases
-///
-/// # Parameter Attributes
-///
-/// - `#[rest]`: Consume the rest of the input as a single string
-/// - `#[optional]`: Make the parameter optional (wrap in Option<T>)
-/// - `#[cron]`: Parse as cron expression
-/// - `#[regex("pattern")]`: Validate against regex pattern
-/// - `#[error("message")]`: Custom error message for validation failure
-#[proc_macro_attribute]
-pub fn plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attrs = parse_macro_input!(attr);
-    let func = parse_macro_input!(item as ItemFn);
-    expand_plugin(attrs, func)
+/// - `name`: Plugin name (defaults to struct name in lowercase)
+/// - `description`: Plugin description
+/// - `version`: Plugin version (defaults to "0.1.0")
+/// - `command`: Command that triggers the plugin (defaults to name)
+/// - `regex`: Regex pattern for message matching
+/// - `cron`: Cron expression for scheduled execution
+/// - `context`: Custom context type (defaults to `Ctx` or generic `C`)
+#[proc_macro_derive(Plugin, attributes(plugin))]
+pub fn derive_plugin(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_derive_plugin(input)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }

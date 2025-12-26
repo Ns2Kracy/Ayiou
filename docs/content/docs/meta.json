@@ -6,11 +6,7 @@
     "getting-started",
     "---插件系统---",
     "plugin-macro",
-    "extractors",
-    "args-macro",
     "---高级功能---",
-    "session-management",
-    "regex-validation",
     "cron-scheduling"
   ]
 }

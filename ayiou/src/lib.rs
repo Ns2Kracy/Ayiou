@@ -31,8 +31,8 @@ impl<A: Adapter> Bot<A> {
     }
 
     /// Register a plugin instance
-    pub fn register_plugin<P: Plugin<A::Ctx>>(mut self, plugin: fn() -> P) -> Self {
-        self.plugin_manager.register(plugin());
+    pub fn register_plugin<P: Plugin<A::Ctx>>(mut self, plugin: P) -> Self {
+        self.plugin_manager.register(plugin);
         self
     }
 

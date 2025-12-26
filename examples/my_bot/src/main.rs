@@ -3,11 +3,7 @@ use log::info;
 
 mod plugin;
 
-// The #[plugin] macro generates:
-// - A struct (e.g., Echo) for type-based registration
-// - A factory function (e.g., echo()) for value-based registration
-use plugin::{add, echo, guess, whoami};
-// Or use the struct names: Echo, Add, Whoami, Guess
+use plugin::{AddPlugin, EchoPlugin, GuessPlugin, UrlDetectorPlugin, WhoamiPlugin};
 
 #[tokio::main]
 async fn main() {
@@ -17,12 +13,13 @@ async fn main() {
     let onebot_ws_url =
         std::env::var("ONEBOT_WS_URL").unwrap_or_else(|_| "ws://10.126.126.1:3001".to_string());
 
-    // Register plugins using factory functions - more intuitive!
+    // Register plugins using derive macro structs
     let bot = AyiouBot::new()
-        .register_plugin(echo)
-        .register_plugin(add)
-        .register_plugin(whoami)
-        .register_plugin(guess);
+        .register_plugin(EchoPlugin)
+        .register_plugin(AddPlugin)
+        .register_plugin(WhoamiPlugin)
+        .register_plugin(GuessPlugin)
+        .register_plugin(UrlDetectorPlugin);
 
     info!("Connecting to {}", onebot_ws_url);
     bot.run(onebot_ws_url).await;

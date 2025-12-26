@@ -47,7 +47,7 @@ impl std::fmt::Display for ArgsParseError {
 impl std::error::Error for ArgsParseError {}
 
 /// Trait for parsing command arguments
-pub trait Args: Sized + Default {
+pub trait ArgsParser: Sized + Default {
     /// Parse arguments from a string
     fn parse(args: &str) -> std::result::Result<Self, ArgsParseError>;
 
@@ -57,7 +57,7 @@ pub trait Args: Sized + Default {
     }
 }
 
-impl<T: Args> Args for Box<T> {
+impl<T: ArgsParser> ArgsParser for Box<T> {
     fn parse(args: &str) -> std::result::Result<Self, ArgsParseError> {
         Ok(Box::new(T::parse(args)?))
     }
@@ -70,7 +70,7 @@ impl<T: Args> Args for Box<T> {
 /// Trait for self-contained command execution
 /// Implement this for your Args struct to avoid specifying a handler manually
 #[async_trait::async_trait]
-pub trait Command<C>: Args + Send + Sync + 'static {
+pub trait Command<C>: ArgsParser + Send + Sync + 'static {
     async fn run(self, ctx: C) -> Result<()>;
 }
 
@@ -255,12 +255,6 @@ pub trait Plugin<C>: Send + Sync + 'static {
 
     /// Handle the message, return Ok(true) to block subsequent handlers
     async fn handle(&self, ctx: &C) -> Result<bool>;
-}
-
-/// Trait for individual commands
-#[async_trait::async_trait]
-pub trait CommandHandler<C>: Send + Sync + 'static {
-    async fn handle(self, ctx: &C) -> Result<()>;
 }
 
 pub type PluginBox<C> = Box<dyn Plugin<C>>;
@@ -515,3 +509,5 @@ impl<C: MsgContext> Dispatcher<C> {
         Ok(false)
     }
 }
+
+// ============================================================================
