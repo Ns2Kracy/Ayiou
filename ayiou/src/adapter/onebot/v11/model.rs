@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use anyhow::anyhow;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 // Message
 
@@ -521,4 +522,221 @@ pub struct ApiResponse {
     #[serde(default)]
     pub data: serde_json::Value,
     pub echo: Option<String>,
+}
+
+impl ApiResponse {
+    pub fn is_ok(&self) -> bool {
+        self.status == "ok" && self.retcode == 0
+    }
+
+    pub fn ensure_ok(&self, action: &str) -> anyhow::Result<()> {
+        if self.is_ok() {
+            Ok(())
+        } else {
+            Err(anyhow!(
+                "OneBot action `{}` failed: status={}, retcode={}, data={}",
+                action,
+                self.status,
+                self.retcode,
+                self.data
+            ))
+        }
+    }
+
+    pub fn data_as<T: DeserializeOwned>(&self) -> anyhow::Result<T> {
+        serde_json::from_value(self.data.clone())
+            .map_err(|e| anyhow!("Failed to decode OneBot response data: {}", e))
+    }
+
+    pub fn data_as_checked<T: DeserializeOwned>(&self, action: &str) -> anyhow::Result<T> {
+        self.ensure_ok(action)?;
+        self.data_as()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SendMessageData {
+    pub message_id: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoginInfoData {
+    pub user_id: i64,
+    pub nickname: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupInfoData {
+    pub group_id: i64,
+    pub group_name: String,
+    pub member_count: Option<i32>,
+    pub max_member_count: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupMemberInfoData {
+    pub group_id: i64,
+    pub user_id: i64,
+    pub nickname: String,
+    pub card: Option<String>,
+    pub sex: Option<String>,
+    pub age: Option<i32>,
+    pub area: Option<String>,
+    pub join_time: Option<i64>,
+    pub last_sent_time: Option<i64>,
+    pub level: Option<String>,
+    pub role: Option<String>,
+    pub unfriendly: Option<bool>,
+    pub title: Option<String>,
+    pub title_expire_time: Option<i64>,
+    pub card_changeable: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub enum OneBotAction {
+    SendPrivateMsg {
+        user_id: i64,
+        message: Message,
+    },
+    SendGroupMsg {
+        group_id: i64,
+        message: Message,
+    },
+    SetGroupKick {
+        group_id: i64,
+        user_id: i64,
+        reject_add_request: bool,
+    },
+    DeleteMsg {
+        message_id: i32,
+    },
+    GetLoginInfo,
+    GetGroupInfo {
+        group_id: i64,
+        no_cache: bool,
+    },
+    GetGroupMemberInfo {
+        group_id: i64,
+        user_id: i64,
+        no_cache: bool,
+    },
+    SetGroupBan {
+        group_id: i64,
+        user_id: i64,
+        duration: i64,
+    },
+}
+
+impl OneBotAction {
+    pub fn into_request(self) -> ApiRequest {
+        use serde_json::json;
+
+        match self {
+            Self::SendPrivateMsg { user_id, message } => ApiRequest {
+                action: "send_private_msg".to_string(),
+                params: json!({
+                    "user_id": user_id,
+                    "message": message,
+                }),
+                echo: None,
+            },
+            Self::SendGroupMsg { group_id, message } => ApiRequest {
+                action: "send_group_msg".to_string(),
+                params: json!({
+                    "group_id": group_id,
+                    "message": message,
+                }),
+                echo: None,
+            },
+            Self::SetGroupKick {
+                group_id,
+                user_id,
+                reject_add_request,
+            } => ApiRequest {
+                action: "set_group_kick".to_string(),
+                params: json!({
+                    "group_id": group_id,
+                    "user_id": user_id,
+                    "reject_add_request": reject_add_request,
+                }),
+                echo: None,
+            },
+            Self::DeleteMsg { message_id } => ApiRequest {
+                action: "delete_msg".to_string(),
+                params: json!({ "message_id": message_id }),
+                echo: None,
+            },
+            Self::GetLoginInfo => ApiRequest {
+                action: "get_login_info".to_string(),
+                params: json!({}),
+                echo: None,
+            },
+            Self::GetGroupInfo { group_id, no_cache } => ApiRequest {
+                action: "get_group_info".to_string(),
+                params: json!({
+                    "group_id": group_id,
+                    "no_cache": no_cache,
+                }),
+                echo: None,
+            },
+            Self::GetGroupMemberInfo {
+                group_id,
+                user_id,
+                no_cache,
+            } => ApiRequest {
+                action: "get_group_member_info".to_string(),
+                params: json!({
+                    "group_id": group_id,
+                    "user_id": user_id,
+                    "no_cache": no_cache,
+                }),
+                echo: None,
+            },
+            Self::SetGroupBan {
+                group_id,
+                user_id,
+                duration,
+            } => ApiRequest {
+                action: "set_group_ban".to_string(),
+                params: json!({
+                    "group_id": group_id,
+                    "user_id": user_id,
+                    "duration": duration,
+                }),
+                echo: None,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_response_check_ok_and_decode() {
+        let resp = ApiResponse {
+            status: "ok".to_string(),
+            retcode: 0,
+            data: serde_json::json!({ "user_id": 1, "nickname": "bot" }),
+            echo: Some("x".to_string()),
+        };
+
+        let data: LoginInfoData = resp.data_as_checked("get_login_info").unwrap();
+        assert_eq!(data.user_id, 1);
+        assert_eq!(data.nickname, "bot");
+    }
+
+    #[test]
+    fn api_response_check_err() {
+        let resp = ApiResponse {
+            status: "failed".to_string(),
+            retcode: 1400,
+            data: serde_json::json!({ "msg": "bad request" }),
+            echo: None,
+        };
+
+        let err = resp.ensure_ok("send_group_msg").unwrap_err();
+        assert!(err.to_string().contains("send_group_msg"));
+    }
 }

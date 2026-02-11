@@ -9,6 +9,7 @@ pub struct PluginAttrs {
     pub description: Option<String>,
     pub version: Option<String>,
     pub commands: Vec<String>,
+    pub prefixes: Vec<String>,
     pub context_type: Option<syn::Type>,
     pub regex: Option<String>,
     pub cron: Option<String>,
@@ -61,6 +62,15 @@ impl PluginAttrs {
                         }) = value
                         {
                             result.commands.push(s.value());
+                        }
+                    }
+                    Some("prefix") => {
+                        let value: Expr = meta.value()?.parse()?;
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(s), ..
+                        }) = value
+                        {
+                            result.prefixes.push(s.value());
                         }
                     }
                     Some("context") => {
@@ -163,6 +173,21 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
         quote! { vec![#(#commands),*] }
     };
 
+    let prefixes: Vec<_> = attrs
+        .prefixes
+        .iter()
+        .map(|p| quote! { #p.to_string() })
+        .collect();
+    let command_prefixes_impl = if prefixes.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            fn command_prefixes(&self) -> Vec<String> {
+                vec![#(#prefixes),*]
+            }
+        }
+    };
+
     // Generate matches() implementation
     let matches_impl = if attrs.regex.is_some() {
         quote! {
@@ -233,6 +258,8 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
             fn commands(&self) -> Vec<String> {
                 #commands_impl
             }
+
+            #command_prefixes_impl
 
             #matches_impl
 

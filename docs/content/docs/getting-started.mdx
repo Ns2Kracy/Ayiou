@@ -42,7 +42,7 @@ impl HelloPlugin {
 
 ### 2. 处理参数
 
-目前框架不自动解析参数，你需要从 `ctx.text()` 手动解析。
+简单插件可以手动解析参数；复杂命令插件建议使用 `#[bot_plugin]` + `#[command]` 自动解析。
 
 ```rust
 #[derive(Plugin)]
@@ -100,13 +100,14 @@ impl UrlDetector {
 ```rust
 #[tokio::main]
 async fn main() {
-    let bot = AyiouBot::new()
+    let bot = Bot::<OneBotV11Adapter>::new()
+        .with_onebot_defaults()
         .plugin::<HelloPlugin>()
         .plugin::<EchoPlugin>()
         .plugin::<UrlDetector>();
 
     // 连接到 OneBot 适配器
-    bot.run("ws://127.0.0.1:8080").await;
+    bot.run_onebot_ws("ws://127.0.0.1:8080").await;
 }
 ```
 

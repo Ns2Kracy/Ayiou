@@ -9,29 +9,25 @@ use url::Url;
 
 use crate::core::driver::Driver;
 
-/// WebSocket driver
+/// WebSocket driver (raw text frames).
 ///
-/// Pure transport layer, no protocol parsing
+/// Pure transport layer, no protocol parsing.
 pub struct WsDriver {
     url: Url,
-    outgoing_rx: mpsc::Receiver<String>,
-    incoming_tx: mpsc::Sender<String>,
 }
 
 impl WsDriver {
-    pub fn new(
-        url: &str,
-        incoming_tx: mpsc::Sender<String>,
-        outgoing_rx: mpsc::Receiver<String>,
-    ) -> Self {
+    pub fn new(url: &str) -> Self {
         Self {
             url: url::Url::parse(url).expect("Invalid WebSocket URL"),
-            outgoing_rx,
-            incoming_tx,
         }
     }
 
-    async fn run_inner(mut self) -> Result<()> {
+    async fn run_inner(
+        self,
+        inbound_tx: mpsc::Sender<String>,
+        mut outbound_rx: mpsc::Receiver<String>,
+    ) -> Result<()> {
         let mut retry_delay = Duration::from_secs(1);
         let max_delay = Duration::from_secs(60);
 
@@ -49,14 +45,11 @@ impl WsDriver {
                                 match msg {
                                     Some(Ok(Message::Text(text))) => {
                                         let payload = text.to_string();
-                                        if self.incoming_tx.send(payload).await.is_err() {
+                                        if inbound_tx.send(payload).await.is_err() {
                                             return Ok(());
                                         }
                                     }
-                                    Some(Ok(Message::Binary(_))) => {
-                                        // ignore binary frames for OneBot
-                                        continue;
-                                    }
+                                    Some(Ok(Message::Binary(_))) => continue,
                                     Some(Ok(Message::Close(_))) => break,
                                     Some(Ok(_)) => continue,
                                     Some(Err(e)) => {
@@ -66,7 +59,7 @@ impl WsDriver {
                                     None => break,
                                 }
                             }
-                            msg = self.outgoing_rx.recv() => {
+                            msg = outbound_rx.recv() => {
                                 match msg {
                                     Some(data) => {
                                         if sink.send(Message::Text(data.into())).await.is_err() {
@@ -94,7 +87,14 @@ impl WsDriver {
 
 #[async_trait::async_trait]
 impl Driver for WsDriver {
-    async fn run(self: Box<Self>) -> Result<()> {
-        self.run_inner().await
+    type Inbound = String;
+    type Outbound = String;
+
+    async fn run(
+        self: Box<Self>,
+        inbound_tx: mpsc::Sender<Self::Inbound>,
+        outbound_rx: mpsc::Receiver<Self::Outbound>,
+    ) -> Result<()> {
+        self.run_inner(inbound_tx, outbound_rx).await
     }
 }

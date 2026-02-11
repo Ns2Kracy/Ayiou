@@ -1,0 +1,82 @@
+---
+title: 命令系统与 DX（v0.4）
+description: 使用 #[bot_plugin] + #[command] 快速构建可维护命令插件
+---
+
+v0.4 新增了一套面向命令插件的声明式 API：
+
+- 前缀命令路由（支持全局前缀 + 插件级前缀）
+- 命令别名
+- 自动参数解析（`FromStr`）
+- 属性宏：`#[bot_plugin]`、`#[command]`
+
+## 快速示例
+
+```rust
+use ayiou::prelude::*;
+
+#[derive(Default)]
+pub struct AdminPlugin;
+
+#[bot_plugin(name = "admin", prefix = "/", prefix = "!")]
+impl AdminPlugin {
+    #[command(name = "ban", aliases = ["block"]) ]
+    async fn ban(&self, ctx: &Ctx, user_id: i64, minutes: Option<u32>) -> anyhow::Result<()> {
+        let minutes = minutes.unwrap_or(10);
+        ctx.reply_text(format!("ban {} for {} minutes", user_id, minutes)).await?;
+        Ok(())
+    }
+
+    #[command]
+    async fn say(&self, ctx: &Ctx, content: String) -> anyhow::Result<()> {
+        ctx.reply_text(content).await?;
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let bot = Bot::<OneBotV11Adapter>::new()
+        .with_onebot_defaults().register_plugin(AdminPlugin::default());
+    bot.run_onebot_ws("ws://127.0.0.1:8080").await;
+}
+```
+
+## 参数解析规则
+
+`#[command]` 方法签名规则：
+
+1. 必须是 `async fn`
+2. 第一个参数必须是 `&self`
+3. 第二个参数必须是 `&Ctx`（或你在 `#[bot_plugin(context = "...")]` 指定的类型）
+4. 后续参数将自动从命令参数解析
+
+支持类型：
+
+- 任意实现 `FromStr` 的类型（如 `i64`、`u32`、`bool`）
+- `Option<T>`：可选参数
+- 末尾 `String`：吃掉剩余参数并按空格拼接
+- 末尾 `Vec<String>`：收集剩余 token
+
+## 命令匹配行为
+
+- `#[command(name = "kick", alias = "k")]` 会注册 `kick` 和 `k`
+- 框架会同时尝试解析默认前缀 `/, !, .` 与插件级前缀
+- 解析支持引号和转义，例如：
+
+```text
+/say "hello world" foo\ bar
+```
+
+会被解析为参数：
+
+```text
+["hello world", "foo bar"]
+```
+
+## 与 `#[derive(Plugin)]` 的关系
+
+- `#[derive(Plugin)]` 适合简单单命令插件
+- `#[bot_plugin]` 更适合多命令插件（集中管理、参数自动解析、别名支持）
+
+两者可以在同一个项目内混用。

@@ -117,3 +117,7 @@ impl Plugin<Ctx> for MyPlugin {
 ```
 
 注意：宏生成的 `handle` 方法默认会调用你实现的 `execute` 方法。因此你必须在 `impl` 块中定义 `pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()>`。
+
+## v0.4 多命令插件写法
+
+如果你需要一个插件同时管理多个命令，推荐使用 `#[bot_plugin]` + `#[command]`（见 `命令系统与 DX` 章节）。

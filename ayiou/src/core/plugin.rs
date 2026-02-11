@@ -57,6 +57,143 @@ pub trait ArgsParser: Sized + Default {
     }
 }
 
+/// Parsed command line components.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandLine {
+    command: String,
+    args: String,
+}
+
+impl CommandLine {
+    pub fn new(command: impl Into<String>, args: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            args: args.into(),
+        }
+    }
+
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    pub fn args(&self) -> &str {
+        &self.args
+    }
+}
+
+/// Parse command line from text.
+///
+/// `prefixes` will be stripped from the first token when matched.
+pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandLine> {
+    let trimmed = text.trim_start();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let token_end = trimmed
+        .char_indices()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map(|(idx, _)| idx)
+        .unwrap_or(trimmed.len());
+
+    let token = &trimmed[..token_end];
+    let args = trimmed[token_end..].trim_start();
+
+    let mut command = token;
+    for prefix in prefixes {
+        if let Some(stripped) = token.strip_prefix(prefix)
+            && !stripped.is_empty()
+        {
+            command = stripped;
+            break;
+        }
+    }
+
+    Some(CommandLine::new(command, args))
+}
+
+/// Split command arguments into tokens.
+///
+/// Supports both single and double quotes, and `\\` escape.
+pub fn tokenize_command_args(args: &str) -> std::result::Result<Vec<String>, ArgsParseError> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut chars = args.chars().peekable();
+    let mut quote: Option<char> = None;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    buf.push(next);
+                } else {
+                    return Err(ArgsParseError::new("Trailing escape in arguments"));
+                }
+            }
+            '\'' | '"' => {
+                if let Some(active) = quote {
+                    if active == ch {
+                        quote = None;
+                    } else {
+                        buf.push(ch);
+                    }
+                } else {
+                    quote = Some(ch);
+                }
+            }
+            c if c.is_whitespace() && quote.is_none() => {
+                if !buf.is_empty() {
+                    out.push(std::mem::take(&mut buf));
+                }
+            }
+            _ => buf.push(ch),
+        }
+    }
+
+    if quote.is_some() {
+        return Err(ArgsParseError::new("Unterminated quoted argument"));
+    }
+
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+
+    Ok(out)
+}
+
+pub fn parse_typed_arg<T>(
+    tokens: &[String],
+    index: &mut usize,
+    name: &str,
+) -> std::result::Result<T, ArgsParseError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let value = tokens
+        .get(*index)
+        .ok_or_else(|| ArgsParseError::new(format!("Missing argument: {}", name)))?;
+    *index += 1;
+
+    value
+        .parse::<T>()
+        .map_err(|err| ArgsParseError::new(format!("Failed to parse argument `{}`: {}", name, err)))
+}
+
+pub fn ensure_no_extra_args(
+    tokens: &[String],
+    index: usize,
+) -> std::result::Result<(), ArgsParseError> {
+    if let Some(extra) = tokens.get(index) {
+        return Err(ArgsParseError::new(format!(
+            "Unexpected extra argument: {}",
+            extra
+        )));
+    }
+
+    Ok(())
+}
+
 impl<T: ArgsParser> ArgsParser for Box<T> {
     fn parse(args: &str) -> std::result::Result<Self, ArgsParseError> {
         Ok(Box::new(T::parse(args)?))
@@ -248,6 +385,13 @@ pub trait Plugin<C>: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Optional command prefixes that this plugin accepts.
+    ///
+    /// Example: ["/", "!"] means command `echo` also matches `/echo` and `!echo`.
+    fn command_prefixes(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Check if this plugin matches the context (default: always match)
     fn matches(&self, _ctx: &C) -> bool {
         true
@@ -385,7 +529,10 @@ impl<C> TrieNode<C> {
         for c in cmd.chars() {
             node = node.children.entry(c).or_default();
         }
-        node.handlers.push(plugin);
+
+        if !node.handlers.iter().any(|p| Arc::ptr_eq(p, &plugin)) {
+            node.handlers.push(plugin);
+        }
     }
 
     /// Find the longest matching command.
@@ -427,16 +574,54 @@ impl<C> TrieNode<C> {
 }
 
 #[derive(Clone)]
+pub struct DispatchOptions {
+    command_prefixes: Arc<[String]>,
+}
+
+impl DispatchOptions {
+    pub fn new(command_prefixes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let mut prefixes: Vec<String> = command_prefixes
+            .into_iter()
+            .map(Into::into)
+            .filter(|p| !p.is_empty())
+            .collect();
+        prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
+        prefixes.dedup();
+
+        Self {
+            command_prefixes: prefixes.into(),
+        }
+    }
+
+    pub fn command_prefixes(&self) -> &[String] {
+        self.command_prefixes.as_ref()
+    }
+}
+
+impl Default for DispatchOptions {
+    fn default() -> Self {
+        Self {
+            command_prefixes: Arc::from([]),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Dispatcher<C> {
     /// Plugins that don't declare specific commands (always checked)
     wildcards: Arc<Vec<Arc<dyn Plugin<C>>>>,
     /// Trie root for command lookup
     root: Arc<TrieNode<C>>,
+    options: DispatchOptions,
 }
 
 impl<C: MsgContext> Dispatcher<C> {
     /// Create dispatcher from plugin list
     pub fn new(plugins: PluginList<C>) -> Self {
+        Self::with_options(plugins, DispatchOptions::default())
+    }
+
+    pub fn with_options(plugins: PluginList<C>, options: DispatchOptions) -> Self {
         let mut root = TrieNode::default();
         let mut wildcards = Vec::new();
 
@@ -445,8 +630,21 @@ impl<C: MsgContext> Dispatcher<C> {
             if cmds.is_empty() {
                 wildcards.push(plugin.clone());
             } else {
+                let prefixes: Vec<String> = plugin
+                    .command_prefixes()
+                    .into_iter()
+                    .filter(|p| !p.is_empty())
+                    .collect();
+
                 for cmd in cmds {
                     root.insert(&cmd, plugin.clone());
+
+                    for prefix in &prefixes {
+                        if cmd.starts_with(prefix) {
+                            continue;
+                        }
+                        root.insert(&format!("{}{}", prefix, cmd), plugin.clone());
+                    }
                 }
             }
         }
@@ -454,7 +652,36 @@ impl<C: MsgContext> Dispatcher<C> {
         Self {
             wildcards: Arc::new(wildcards),
             root: Arc::new(root),
+            options,
         }
+    }
+
+    fn normalize_command_text(&self, text: &str) -> Option<String> {
+        let trimmed = text.trim_start();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let token_len = trimmed
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(trimmed.len());
+
+        let (token, rest) = trimmed.split_at(token_len);
+
+        for prefix in self.options.command_prefixes() {
+            if let Some(stripped) = token.strip_prefix(prefix)
+                && !stripped.is_empty()
+            {
+                let mut normalized = String::with_capacity(stripped.len() + rest.len());
+                normalized.push_str(stripped);
+                normalized.push_str(rest);
+                return Some(normalized);
+            }
+        }
+
+        None
     }
 
     /// Dispatch event to all matching plugins
@@ -477,6 +704,8 @@ impl<C: MsgContext> Dispatcher<C> {
     /// Dispatch only to matching commands
     pub async fn dispatch_commands(&self, ctx: &C) -> Result<bool> {
         let text = ctx.text();
+        let normalized = self.normalize_command_text(&text);
+
         if let Some(plugins) = self.root.match_command(&text) {
             for plugin in plugins {
                 if !plugin.matches(ctx) {
@@ -490,6 +719,24 @@ impl<C: MsgContext> Dispatcher<C> {
                 }
             }
         }
+
+        if let Some(normalized_text) = normalized
+            && normalized_text != text
+            && let Some(plugins) = self.root.match_command(&normalized_text)
+        {
+            for plugin in plugins {
+                if !plugin.matches(ctx) {
+                    continue;
+                }
+
+                if let Ok(block) = plugin.handle(ctx).await
+                    && block
+                {
+                    return Ok(true);
+                }
+            }
+        }
+
         Ok(false)
     }
 
@@ -511,3 +758,134 @@ impl<C: MsgContext> Dispatcher<C> {
 }
 
 // ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Clone)]
+    struct TestCtx {
+        text: String,
+    }
+
+    impl MsgContext for TestCtx {
+        fn text(&self) -> String {
+            self.text.clone()
+        }
+
+        fn user_id(&self) -> String {
+            "u1".to_string()
+        }
+
+        fn group_id(&self) -> Option<String> {
+            Some("g1".to_string())
+        }
+    }
+
+    struct CounterPlugin {
+        hits: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin<TestCtx> for CounterPlugin {
+        fn commands(&self) -> Vec<String> {
+            vec!["echo".to_string()]
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<bool> {
+            self.hits.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_matches_prefixed_commands() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let plugins: Arc<[Arc<dyn Plugin<TestCtx>>]> =
+            vec![Arc::new(CounterPlugin { hits: hits.clone() }) as Arc<dyn Plugin<TestCtx>>].into();
+
+        let dispatcher = Dispatcher::with_options(plugins, DispatchOptions::new(["/", "!", "."]));
+
+        let ctx = TestCtx {
+            text: "/echo hello".to_string(),
+        };
+
+        dispatcher.dispatch(&ctx).await.unwrap();
+
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_ignores_unknown_commands() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let plugins: Arc<[Arc<dyn Plugin<TestCtx>>]> =
+            vec![Arc::new(CounterPlugin { hits: hits.clone() }) as Arc<dyn Plugin<TestCtx>>].into();
+
+        let dispatcher = Dispatcher::with_options(plugins, DispatchOptions::new(["/"]));
+
+        let ctx = TestCtx {
+            text: "/unknown hello".to_string(),
+        };
+
+        dispatcher.dispatch(&ctx).await.unwrap();
+
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    struct PrefixedCounterPlugin {
+        hits: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin<TestCtx> for PrefixedCounterPlugin {
+        fn commands(&self) -> Vec<String> {
+            vec!["echo".to_string()]
+        }
+
+        fn command_prefixes(&self) -> Vec<String> {
+            vec!["/".to_string()]
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<bool> {
+            self.hits.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_supports_plugin_level_command_prefixes() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let plugins: Arc<[Arc<dyn Plugin<TestCtx>>]> = vec![Arc::new(PrefixedCounterPlugin {
+            hits: hits.clone(),
+        }) as Arc<dyn Plugin<TestCtx>>]
+        .into();
+
+        let dispatcher = Dispatcher::new(plugins);
+
+        let ctx = TestCtx {
+            text: "/echo hello".to_string(),
+        };
+
+        dispatcher.dispatch(&ctx).await.unwrap();
+
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn parse_command_line_strips_prefix_and_extracts_args() {
+        let line = parse_command_line("/echo hello world", &["/", "!"]).unwrap();
+        assert_eq!(line.command(), "echo");
+        assert_eq!(line.args(), "hello world");
+    }
+
+    #[test]
+    fn tokenize_command_args_supports_quotes_and_escape() {
+        let tokens =
+            tokenize_command_args("\"hello world\" 'x y' z\\ z").expect("tokenize should succeed");
+        assert_eq!(tokens, vec!["hello world", "x y", "z z"]);
+    }
+}

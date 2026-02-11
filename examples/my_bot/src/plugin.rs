@@ -5,18 +5,22 @@ use ayiou::prelude::*;
 // ============================================================================
 
 #[derive(Plugin)]
-#[plugin(name = "echo", command = "echo", description = "Repeats your message")]
+#[plugin(
+    name = "echo",
+    command = "echo",
+    prefix = "/",
+    description = "Repeats your message"
+)]
 pub struct EchoPlugin;
 
 impl EchoPlugin {
     pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        let text = ctx.text();
-        // Skip command word
-        let content = text
-            .split_whitespace()
-            .skip(1)
-            .collect::<Vec<_>>()
-            .join(" ");
+        let content = ctx.command_args().unwrap_or_default();
+        if content.is_empty() {
+            ctx.reply_text("Usage: /echo <text>").await?;
+            return Ok(());
+        }
+
         ctx.reply_text(format!("Echo: {}", content)).await?;
         Ok(())
     }
@@ -28,16 +32,16 @@ pub struct AddPlugin;
 
 impl AddPlugin {
     pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        let text = ctx.text();
-        let parts: Vec<&str> = text.split_whitespace().collect();
+        let args = ctx.command_args().unwrap_or_default();
+        let parts: Vec<&str> = args.split_whitespace().collect();
 
-        if parts.len() < 3 {
-            ctx.reply_text("Usage: add <a> <b>").await?;
+        if parts.len() < 2 {
+            ctx.reply_text("Usage: /add <a> <b>").await?;
             return Ok(());
         }
 
-        let a: i32 = parts[1].parse().unwrap_or(0);
-        let b: i32 = parts[2].parse().unwrap_or(0);
+        let a: i32 = parts[0].parse().unwrap_or(0);
+        let b: i32 = parts[1].parse().unwrap_or(0);
         ctx.reply_text(format!("{} + {} = {}", a, b, a + b)).await?;
         Ok(())
     }
@@ -97,6 +101,47 @@ impl UrlDetectorPlugin {
             ctx.reply_text(format!("Found URLs: {}", urls.join(", ")))
                 .await?;
         }
+        Ok(())
+    }
+}
+
+// ============================================================================
+// Attribute Macro Plugin (v0.4 command DX)
+// ============================================================================
+
+#[derive(Default)]
+pub struct ToolboxPlugin;
+
+#[bot_plugin(
+    name = "toolbox",
+    description = "Attribute macro command plugin",
+    prefix = "/"
+)]
+impl ToolboxPlugin {
+    #[command(name = "mul", alias = "times")]
+    pub async fn multiply(&self, ctx: &Ctx, a: i64, b: i64) -> anyhow::Result<()> {
+        ctx.reply_text(format!("{} * {} = {}", a, b, a * b)).await?;
+        Ok(())
+    }
+
+    #[command]
+    pub async fn ping(&self, ctx: &Ctx, target: Option<String>) -> anyhow::Result<()> {
+        if let Some(target) = target {
+            ctx.reply_text(format!("pong {}", target)).await?;
+        } else {
+            ctx.reply_text("pong").await?;
+        }
+        Ok(())
+    }
+
+    #[command(name = "say")]
+    pub async fn say(&self, ctx: &Ctx, content: String) -> anyhow::Result<()> {
+        if content.is_empty() {
+            ctx.reply_text("Usage: /say <content>").await?;
+            return Ok(());
+        }
+
+        ctx.reply_text(content).await?;
         Ok(())
     }
 }

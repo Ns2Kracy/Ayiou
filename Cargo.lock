@@ -133,6 +133,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "console_bot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "ayiou",
+ "tokio",
+]
+
+[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
