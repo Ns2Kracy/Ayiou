@@ -1,8 +1,12 @@
+use std::{sync::Arc, time::Instant};
+
 use log::{error, info};
 
 use crate::core::{
     adapter::Adapter,
+    observability::{MetricsSink, NoopMetrics, elapsed_ms},
     plugin::{DispatchOptions, Dispatcher, Plugin, PluginBox, PluginManager},
+    scheduler::{Scheduler, TokioScheduler},
 };
 
 pub mod adapter;
@@ -15,6 +19,8 @@ pub use ayiou_macros::{Plugin, bot_plugin, command};
 pub struct Bot<A: Adapter> {
     plugin_manager: PluginManager<A::Ctx>,
     dispatch_options: DispatchOptions,
+    metrics_sink: Arc<dyn MetricsSink>,
+    scheduler: Arc<dyn Scheduler>,
 }
 
 impl<A: Adapter> Default for Bot<A> {
@@ -28,7 +34,23 @@ impl<A: Adapter> Bot<A> {
         Self {
             plugin_manager: PluginManager::new(),
             dispatch_options: DispatchOptions::default(),
+            metrics_sink: Arc::new(NoopMetrics),
+            scheduler: Arc::new(TokioScheduler::new()),
         }
+    }
+
+    pub fn with_metrics_sink(mut self, metrics_sink: Arc<dyn MetricsSink>) -> Self {
+        self.metrics_sink = metrics_sink;
+        self
+    }
+
+    pub fn with_scheduler(mut self, scheduler: Arc<dyn Scheduler>) -> Self {
+        self.scheduler = scheduler;
+        self
+    }
+
+    pub fn scheduler(&self) -> Arc<dyn Scheduler> {
+        self.scheduler.clone()
     }
 
     pub fn command_prefix(mut self, prefix: impl Into<String>) -> Self {
@@ -85,16 +107,24 @@ impl<A: Adapter> Bot<A> {
         loop {
             tokio::select! {
                 Some(ctx) = event_rx.recv() => {
+                    self.metrics_sink.incr_counter("events_in_total", 1, &[]);
                     let dispatcher = dispatcher.clone();
+                    let metrics = self.metrics_sink.clone();
 
                     tokio::spawn(async move {
+                        let start = Instant::now();
                         if let Err(err) = dispatcher.dispatch(&ctx).await {
+                            metrics.incr_counter("plugin_errors_total", 1, &[]);
                             error!("Plugin dispatch error: {}", err);
                         }
+                        metrics.observe_duration_ms("plugin_handle_duration_ms", elapsed_ms(start), &[]);
                     });
                 }
                 _ = tokio::signal::ctrl_c() => {
                     info!("Bot is shutting down.");
+                    if let Err(err) = self.scheduler.shutdown().await {
+                        error!("Scheduler shutdown error: {}", err);
+                    }
                     break;
                 }
             }

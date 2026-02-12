@@ -1,92 +1,69 @@
 ---
-title: Cron 调度
-description: 使用 cron 表达式进行定时任务调度
+title: 调度器与 Cron
+description: 内置 Scheduler trait 与默认 TokioScheduler
 ---
 
-# Cron 调度
+Ayiou 现在内置了完整 runtime 调度抽象：
 
-Ayiou 框架支持解析 cron 表达式，并提供计算下次触发时间等功能。
+- `Scheduler` trait
+- 默认实现 `TokioScheduler`
+- 支持：`schedule_once`、`schedule_interval`、`schedule_cron`、`cancel`、`shutdown`
 
-## 定时任务插件
-
-最常用的功能是创建定时触发的插件。使用 `#[plugin(cron = "...")]` 属性即可。
-
-```rust
-use ayiou::prelude::*;
-
-#[derive(Plugin)]
-#[plugin(name = "hourly_report", cron = "0 0 * * * *")]
-pub struct HourlyReport;
-
-impl HourlyReport {
-    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        // 每小时整点执行
-        // 注意：定时任务中的 ctx 可能不包含消息内容
-        println!("整点报时！");
-        Ok(())
-    }
-}
-```
-
-使用 `cron` 属性时：
-1. 插件不会响应普通消息
-2. 调度器会自动按计划调用 `execute` 方法
-3. 宏会自动生成 `pub fn cron_expression(&self) -> &'static str` 方法
-
-## 手动解析 Cron
-
-`CronSchedule` 类型提供了手动解析和计算功能，你可以在代码中使用它。
+## 快速示例
 
 ```rust
 use ayiou::prelude::*;
+use std::{sync::Arc, time::Duration};
 
-// 解析 Cron 表达式
-let schedule = CronSchedule::parse("0 0 8 * * *")?;
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
 
-// 获取原始表达式
-println!("表达式: {}", schedule.source());
+    // 一次性任务
+    scheduler.schedule_once(
+        Duration::from_secs(1),
+        schedule_job(|| async {
+            println!("run once");
+        }),
+    )?;
 
-// 获取下次触发时间
-if let Some(next) = schedule.next_after(&chrono::Utc::now()) {
-    println!("下次触发时间: {}", next);
+    // 周期任务
+    let tick_id = scheduler.schedule_interval(
+        Duration::from_secs(5),
+        schedule_job(|| async {
+            println!("tick");
+        }),
+    )?;
+
+    // Cron 任务（每分钟）
+    scheduler.schedule_cron(
+        "0 * * * * *",
+        schedule_job(|| async {
+            println!("cron fired");
+        }),
+    )?;
+
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    let _ = scheduler.cancel(tick_id).await?;
+    scheduler.shutdown().await?;
+
+    Ok(())
 }
-
-// 获取接下来 5 次触发时间
-for next in schedule.upcoming().take(5) {
-    println!("触发: {}", next);
-}
 ```
 
-## Cron 表达式格式
+## 与 Bot 运行时集成
 
-支持标准的 6 字段 cron 表达式：
+`Bot` 支持注入 scheduler：
 
+```rust
+let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+let bot = Bot::<OneBotV11Adapter>::new().with_scheduler(scheduler);
 ```
-秒 分 时 日 月 周
-```
 
-| 字段 | 允许值 | 特殊字符 |
-|------|--------|----------|
-| 秒 | 0-59 | * , - / |
-| 分 | 0-59 | * , - / |
-| 时 | 0-23 | * , - / |
-| 日 | 1-31 | * , - / ? |
-| 月 | 1-12 | * , - / |
-| 周 | 0-6 (0=周日) | * , - / ? |
+在收到 Ctrl+C 退出时，`Bot` 会自动调用 `scheduler.shutdown()`。
 
-### 常用表达式
+## 设计建议
 
-| 表达式 | 说明 |
-|--------|------|
-| `0 0 * * * *` | 每小时整点 |
-| `0 0 8 * * *` | 每天早上8点 |
-| `0 30 9 * * 1-5` | 工作日9:30 |
-| `0 0 0 1 * *` | 每月1号0点 |
-| `0 */5 * * * *` | 每5分钟 |
-| `0 0 12 * * ?` | 每天中午12点 |
-
-## 注意事项
-
-1. **时区**: `CronSchedule` 使用 UTC 时区，如需本地时间请自行转换
-2. **表达式验证**: 无效的 cron 表达式会在解析时返回错误
-3. **字段数量**: 必须是 6 字段格式（包含秒）
+- 长流程插件：每步状态写入 `SessionStore`，超时检查交给 `schedule_once`
+- 业务轮询：用 `schedule_interval`
+- 固定时间点任务：用 `schedule_cron`

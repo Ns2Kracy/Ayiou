@@ -6,10 +6,17 @@ pub use crate::core::adapter::{
 };
 pub use crate::core::driver::Driver;
 pub use crate::core::extract::{Args, Rest, TupleArgs};
+pub use crate::core::observability::{
+    InMemoryMetrics, MetricsSink, NoopMetrics, spawn_metrics_log_reporter,
+};
 pub use crate::core::plugin::{
     ArgsParseError, ArgsParser, Command, CronSchedule, DispatchOptions, Dispatcher, Plugin,
     PluginManager, PluginMetadata, RegexValidated,
 };
+pub use crate::core::session::{
+    MemorySessionStore, SessionError, SessionKey, SessionRecord, SessionStore,
+};
+pub use crate::core::storage::{MemoryStore, Store, StoreSerdeExt};
 
 pub use crate::adapter::console::adapter::ConsoleAdapter;
 pub use crate::adapter::console::ctx::Ctx as ConsoleCtx;

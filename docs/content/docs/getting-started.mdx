@@ -1,123 +1,94 @@
 ---
 title: 快速开始
-description: 开始使用 Ayiou 框架构建你的 Bot
+description: 使用 Ayiou 构建你的第一个 Bot（OneBot / Console）
 ---
 
 ## 安装
 
-在你的 `Cargo.toml` 中添加依赖：
-
 ```toml
 [dependencies]
 ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git" }
-async-trait = "0.1"
 anyhow = "1.0"
 tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
 ```
 
-## 基本用法
+## 核心概念
 
-Ayiou 使用结构体 (**Struct**) 来定义插件。每个插件都需要实现 `execute` 方法来处理逻辑。
+- `Bot<A>`：平台无关的运行时
+- `Driver`：连接层
+- `Adapter / ProtocolAdapter`：协议转换层
+- `Plugin`：业务逻辑
 
-### 1. 定义插件
+## 示例 1：OneBot v11
 
-使用 `#[derive(Plugin)]` 宏定义插件结构：
+```rust
+use ayiou::prelude::*;
+use ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter;
+
+#[derive(Plugin)]
+#[plugin(name = "echo", command = "echo", prefix = "/")]
+struct EchoPlugin;
+
+impl EchoPlugin {
+    async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        let args = ctx.command_args().unwrap_or_default();
+        if args.is_empty() {
+            ctx.reply_text("Usage: /echo <text>").await?;
+            return Ok(());
+        }
+        ctx.reply_text(format!("echo: {}", args)).await?;
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let bot = Bot::<OneBotV11Adapter>::new()
+        .command_prefixes(["/", "!", "."])
+        .register_plugin(EchoPlugin);
+
+    bot.run(OneBotV11Adapter::new("ws://127.0.0.1:8080")).await;
+}
+```
+
+## 示例 2：Console（本地调试）
 
 ```rust
 use ayiou::prelude::*;
 
 #[derive(Plugin)]
-#[plugin(name = "hello", command = "hello", description = "打招呼")]
-pub struct HelloPlugin;
+#[plugin(
+    name = "help",
+    command = "help",
+    prefix = "/",
+    context = "ayiou::adapter::console::ctx::Ctx"
+)]
+struct HelpPlugin;
 
-impl HelloPlugin {
-    // 必须实现 execute 方法，接受 &Ctx
-    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        let user_id = ctx.user_id();
-        ctx.reply_text(format!("你好，用户 {}！", user_id)).await?;
-        Ok(())
+impl HelpPlugin {
+    async fn execute(&self, ctx: &ConsoleCtx) -> anyhow::Result<()> {
+        ctx.reply_text("Commands: /help").await
     }
 }
-```
 
-### 2. 处理参数
-
-简单插件可以手动解析参数；复杂命令插件建议使用 `#[bot_plugin]` + `#[command]` 自动解析。
-
-```rust
-#[derive(Plugin)]
-#[plugin(name = "echo", command = "echo", description = "复读机")]
-pub struct EchoPlugin;
-
-impl EchoPlugin {
-    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        let text = ctx.text();
-
-        // 解析参数：除去命令本身
-        // 假设消息是 "/echo hello world"
-        // 简单的示例：
-        let content = text.split_whitespace()
-            .skip(1)
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        if content.is_empty() {
-            ctx.reply_text("请输入要复读的内容").await?;
-            return Ok(());
-        }
-
-        ctx.reply_text(format!("你说的是：{}", content)).await?;
-        Ok(())
-    }
-}
-```
-
-### 3. 正则匹配
-
-你也可以使用正则表达式来匹配消息：
-
-```rust
-#[derive(Plugin)]
-#[plugin(name = "url_detector", regex = r"https?://\S+")]
-pub struct UrlDetector;
-
-impl UrlDetector {
-    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        let text = ctx.text();
-        // 使用 self.regex() 获取编译好的正则
-        if let Some(mat) = self.regex().find(&text) {
-             ctx.reply_text(format!("发现链接: {}", mat.as_str())).await?;
-        }
-        Ok(())
-    }
-}
-```
-
-### 4. 注册并运行
-
-在 `main` 函数中注册插件：
-
-```rust
 #[tokio::main]
 async fn main() {
-    let bot = Bot::<OneBotV11Adapter>::new()
-        .with_onebot_defaults()
-        .plugin::<HelloPlugin>()
-        .plugin::<EchoPlugin>()
-        .plugin::<UrlDetector>();
-
-    // 连接到 OneBot 适配器
-    bot.run_onebot_ws("ws://127.0.0.1:8080").await;
+    let bot = ConsoleBot::console().register_plugin(HelpPlugin);
+    bot.run_stdio().await;
 }
 ```
 
-## 常用 Context API
+## 常用 Context API（OneBot）
 
-`Ctx` 对象提供了与平台交互的方法：
+- `ctx.text() -> String`
+- `ctx.user_id() -> i64`
+- `ctx.group_id() -> Option<i64>`
+- `ctx.reply_text("...")`
+- `ctx.command_name()` / `ctx.command_args()`
 
-- `ctx.text() -> String`: 获取消息文本
-- `ctx.user_id() -> i64`: 获取用户 ID
-- `ctx.group_id() -> Option<i64>`: 获取群组 ID
-- `ctx.reply_text("...")`: 回复文本
-- `ctx.send_group_msg(group_id, "...")`: 发送群消息
-- `ctx.set_group_ban(group_id, user_id, duration)`: 群禁言
+## 下一步
+
+- 多命令插件：见「命令系统与 DX」
+- 可持久化状态与会话：见「存储与会话」
+- 可观测接入：见「可观测能力」

@@ -1,37 +1,35 @@
 ---
 title: Ayiou 框架
-description: 一个简洁高效的 Rust Bot 框架
+description: 一个面向多平台的 Rust Bot 框架（Driver + Adapter + Plugin）
 ---
 
-Ayiou 是一个基于 Rust 的 Bot 框架，专注于简洁的 API 设计和强大的宏支持。
+Ayiou 是一个 Rust Bot 框架，核心目标是：
 
-## 特性
+- 平台无关的插件开发体验
+- 明确的 Driver / Adapter 分层
+- 强类型命令系统与可扩展运行时能力
 
-- **声明式插件定义** - 使用 `#[derive(Plugin)]` 宏快速定义插件
-- **多种触发模式** - 支持命令触发、正则匹配触发和 Cron 定时触发
-- **OneBot v11 协议** - 兼容主流 Bot 平台
-- **轻量级** - 基于 async/await，高性能且易于扩展
+## 架构分层
 
-## 快速示例
+- `Driver`：连接层（WebSocket/HTTP/Console 等）
+- `ProtocolAdapter`：协议转换层（OneBot/Discord/...）
+- `Bot` Runtime：分发事件、执行插件
 
-```rust
-use ayiou::prelude::*;
+## 当前能力
 
-#[derive(Plugin)]
-#[plugin(name = "echo", command = "echo")]
-pub struct EchoPlugin;
+- `#[derive(Plugin)]`：快速单命令插件
+- `#[bot_plugin] + #[command]`：多命令插件与自动参数解析
+- OneBot v11 适配
+- Console 适配（便于本地调试）
+- 存储与会话抽象（开发者自定义后端实现）
+- 轻量可观测（`MetricsSink` + 内存聚合 + 周期日志）
 
-impl EchoPlugin {
-    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        let text = ctx.text();
-        ctx.reply_text(format!("Echo: {}", text)).await?;
-        Ok(())
-    }
-}
-```
+## 推荐阅读
 
 <Cards>
   <Card title="快速开始" href="/docs/getting-started" />
   <Card title="Plugin 宏" href="/docs/plugin-macro" />
-  <Card title="Cron 调度" href="/docs/cron-scheduling" />
+  <Card title="命令系统与 DX" href="/docs/command-system-dx" />
+  <Card title="存储与会话" href="/docs/storage-session" />
+  <Card title="可观测能力" href="/docs/observability" />
 </Cards>

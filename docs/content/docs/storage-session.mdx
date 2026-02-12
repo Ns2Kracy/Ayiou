@@ -1,0 +1,78 @@
+---
+title: 存储与会话
+description: 为插件提供可持久化数据和长流程交互控制
+---
+
+## 设计目标
+
+- 框架只定义抽象，不绑定具体数据库
+- 开发者可自行实现 SQLite / Redis / Postgres 等后端
+- 支持长流程插件（多轮对话、状态机）
+
+## 存储抽象
+
+核心 trait：
+
+- `Store`（字节级接口）
+  - `get_raw/set_raw/delete/list_prefix`
+- `StoreCodec`（可插拔编解码）
+- `StoreSerdeExt`（`get_with/set_with` + `get_json/set_json` 便捷接口）
+
+默认实现：
+
+- `MemoryStore`
+- `JsonCodec`
+
+> 你可以只实现 `Store`，然后使用自己定义的 `StoreCodec`。
+
+## Session 抽象（长流程）
+
+核心 trait：
+
+- `SessionStore`
+  - `load/save/delete`
+  - `update_if_revision`（乐观并发控制）
+  - `cleanup_expired`
+  - `acquire_lock`（同一会话互斥）
+
+核心类型：
+
+- `SessionKey`（platform/plugin/user/channel）
+- `SessionRecord`（state/revision/ttl）
+- `SessionError`（NotFound/Expired/RevisionConflict）
+
+默认实现：
+
+- `MemorySessionStore`
+
+## 最小示例
+
+```rust
+use ayiou::prelude::*;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let store = Arc::new(MemoryStore::new());
+    store.set_json("plugin:counter:u1", &1_i64).await?;
+
+    let session_store = Arc::new(MemorySessionStore::new());
+    let key = SessionKey::new("onebot", "wizard", "u1", Some("g1"));
+
+    let rec = session_store
+        .save(key.clone(), serde_json::json!({"step": 1}), None)
+        .await?;
+
+    let _updated = session_store
+        .update_if_revision(&key, rec.revision, serde_json::json!({"step": 2}), None)
+        .await?;
+
+    Ok(())
+}
+```
+
+## 推荐实践
+
+- key 前缀规范化：`plugin:{plugin_name}:{scope}:{id}`
+- 每个长流程步骤都使用 revision 校验
+- 写操作前先 `acquire_lock`，避免并发覆盖

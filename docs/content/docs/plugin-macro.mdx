@@ -1,123 +1,52 @@
 ---
 title: Plugin 宏
-description: 使用 #[derive(Plugin)] 宏定义插件
+description: 使用 #[derive(Plugin)] 快速定义插件
 ---
 
-`#[derive(Plugin)]` 宏用于将结构体声明为 Bot 插件，自动生成必要的元数据和匹配逻辑。
+`#[derive(Plugin)]` 会为你的结构体自动实现 `ayiou::core::plugin::Plugin`。
 
 ## 基本用法
-
-Ayiou 目前仅支持**结构体 (Struct)** 形式的插件定义。
 
 ```rust
 use ayiou::prelude::*;
 
 #[derive(Plugin)]
-#[plugin(name = "my_plugin", command = "mycmd", description = "我的插件")]
-pub struct MyPlugin;
+#[plugin(name = "my_plugin", command = "hello", prefix = "/")]
+struct MyPlugin;
 
 impl MyPlugin {
-    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        ctx.reply_text("Hello Plugin").await?;
+    async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        ctx.reply_text("hello").await?;
         Ok(())
     }
 }
 ```
 
-## 插件属性
+## 属性说明
 
-在 `#[plugin(...)]` 中可以配置以下属性：
+| 属性 | 说明 |
+|---|---|
+| `name` | 插件名（默认 struct 名小写） |
+| `description` | 描述 |
+| `version` | 版本（默认 `0.1.0`） |
+| `command` | 命令名（可重复） |
+| `prefix` | 插件命令前缀（可重复） |
+| `regex` | 正则匹配模式 |
+| `cron` | cron 表达式（仅表达元数据，不等于自动调度） |
+| `context` | 自定义上下文类型 |
 
-| 属性 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | `String` | 是 | 插件唯一名称 |
-| `description` | `String` | 否 | 插件描述，用于帮助信息 |
-| `command` | `String` | 否 | 触发命令 (不含前缀) |
-| `version` | `String` | 否 | 插件版本，默认 "0.1.0" |
-| `regex` | `String` | 否 | 消息匹配正则 (用于非命令触发) |
-| `cron` | `String` | 否 | Cron 表达式 (用于定时触发) |
-
-### context 属性
-
-如果你使用了自定义的 Context 类型，可以通过 `context` 属性指定：
+## context 示例
 
 ```rust
 #[derive(Plugin)]
-#[plugin(name = "custom", context = "MyContext")]
-pub struct CustomPlugin;
+#[plugin(
+    name = "console_help",
+    command = "help",
+    context = "ayiou::adapter::console::ctx::Ctx"
+)]
+struct ConsoleHelp;
 ```
 
-## 匹配模式
+## 何时用 #[bot_plugin]
 
-插件支持三种触发模式，互斥使用：
-
-### 1. 命令触 (Command)
-
-最常用的模式。当消息以 `command` 开头时触发。
-
-```rust
-#[derive(Plugin)]
-#[plugin(name = "echo", command = "echo")]
-pub struct EchoPlugin;
-```
-
-### 2. 正则触发 (Regex)
-
-当消息匹配正则表达式时触发。宏会自动生成 `regex()` 方法。
-
-```rust
-#[derive(Plugin)]
-#[plugin(name = "url", regex = r"https?://\S+")]
-pub struct UrlPlugin;
-
-impl UrlPlugin {
-    pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-        // self.regex() 返回 &'static Regex
-        if self.regex().is_match(&ctx.text()) {
-             // ...
-        }
-        Ok(())
-    }
-}
-```
-
-### 3. 定时触发 (Cron)
-
-根据时间表自动触发。宏会自动生成 `cron_expression()` 方法。
-
-```rust
-#[derive(Plugin)]
-#[plugin(name = "timer", cron = "0 0 * * * *")]
-pub struct TimerPlugin;
-```
-
-## 实现原理
-
-`#[derive(Plugin)]` 会自动为你的结构体实现 `yiou::core::plugin::Plugin` trait。生成的代码大致如下：
-
-```rust
-#[async_trait]
-impl Plugin<Ctx> for MyPlugin {
-    fn meta(&self) -> PluginMetadata {
-        PluginMetadata {
-             name: "my_plugin".to_string(),
-             // ...
-        }
-    }
-
-    fn commands(&self) -> Vec<String> {
-        vec!["mycmd".to_string()]
-    }
-
-    async fn handle(&self, ctx: &Ctx) -> anyhow::Result<bool> {
-        self.execute(ctx).await?;
-        Ok(true)
-    }
-}
-```
-
-注意：宏生成的 `handle` 方法默认会调用你实现的 `execute` 方法。因此你必须在 `impl` 块中定义 `pub async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()>`。
-
-## v0.4 多命令插件写法
-
-如果你需要一个插件同时管理多个命令，推荐使用 `#[bot_plugin]` + `#[command]`（见 `命令系统与 DX` 章节）。
+`#[derive(Plugin)]` 适合简单插件。若一个插件管理多个命令，推荐使用 `#[bot_plugin] + #[command]`（见「命令系统与 DX」）。

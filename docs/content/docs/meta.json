@@ -7,7 +7,9 @@
     "---插件系统---",
     "plugin-macro",
     "command-system-dx",
-    "---高级功能---",
+    "---运行时能力---",
+    "storage-session",
+    "observability",
     "cron-scheduling"
   ]
 }

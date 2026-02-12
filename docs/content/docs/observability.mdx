@@ -1,0 +1,46 @@
+---
+title: 可观测能力
+description: 轻量 metrics + tracing，不强绑定 Prometheus
+---
+
+## 设计原则
+
+- 不强制 Prometheus
+- 提供统一 `MetricsSink` 抽象
+- 默认走“内存聚合 + 周期日志输出”
+
+## 核心组件
+
+- `MetricsSink`
+  - `incr_counter(name, value, labels)`
+  - `observe_duration_ms(name, ms, labels)`
+- `NoopMetrics`（默认）
+- `InMemoryMetrics`
+- `spawn_metrics_log_reporter(metrics, interval)`
+
+## Runtime 已内置指标
+
+- `events_in_total`
+- `plugin_errors_total`
+- `plugin_handle_duration_ms`
+
+## 快速接入
+
+```rust
+use ayiou::prelude::*;
+use std::{sync::Arc, time::Duration};
+
+#[tokio::main]
+async fn main() {
+    let metrics = Arc::new(InMemoryMetrics::new());
+    spawn_metrics_log_reporter(metrics.clone(), Duration::from_secs(30));
+
+    // 以 OneBot 为例
+    // let bot = Bot::<OneBotV11Adapter>::new().with_metrics_sink(metrics);
+    // ...
+}
+```
+
+## 扩展方式
+
+如果你未来需要对接 OTel / 第三方系统，只需实现 `MetricsSink` 即可，不需要改插件层代码。
