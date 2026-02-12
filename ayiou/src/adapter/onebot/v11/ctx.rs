@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::adapter::onebot::v11::model::{
     ApiRequest, ApiResponse, GroupInfoData, GroupMemberInfoData, GroupMessageEvent, LoginInfoData,
     Message, MessageEvent, MessageSegment, OneBotAction, OneBotEvent, PrivateMessageEvent,
-    SendMessageData,
+    SendMessageData, echo_key,
 };
 use crate::core::plugin::parse_command_line;
 
@@ -116,6 +116,10 @@ impl Ctx {
 
         match message {
             Message::String(s) => s.trim().to_string(),
+            Message::Segment(seg) => match seg {
+                MessageSegment::Text { text } => text.trim().to_string(),
+                _ => String::new(),
+            },
             Message::Array(segments) => segments
                 .iter()
                 .filter_map(|seg| {
@@ -228,14 +232,15 @@ impl Ctx {
         action: &str,
         params: serde_json::Value,
     ) -> Result<ApiResponse> {
-        let echo = self.next_echo(action);
+        let echo_value = serde_json::Value::String(self.next_echo(action));
+        let echo = echo_key(&echo_value).ok_or_else(|| anyhow!("Invalid echo value"))?;
         let (tx, rx) = oneshot::channel();
         self.pending_api.insert(echo.clone(), tx);
 
         self.send_request(ApiRequest {
             action: action.to_string(),
             params,
-            echo: Some(echo.clone()),
+            echo: Some(echo_value),
         })
         .await?;
 
@@ -268,10 +273,11 @@ impl Ctx {
     pub async fn call_action_with_response(&self, action: OneBotAction) -> Result<ApiResponse> {
         let mut req = action.into_request();
         let action_name = req.action.clone();
-        let echo = self.next_echo(&action_name);
+        let echo_value = serde_json::Value::String(self.next_echo(&action_name));
+        let echo = echo_key(&echo_value).ok_or_else(|| anyhow!("Invalid echo value"))?;
         let (tx, rx) = oneshot::channel();
         self.pending_api.insert(echo.clone(), tx);
-        req.echo = Some(echo.clone());
+        req.echo = Some(echo_value);
 
         self.send_request(req).await?;
 
@@ -293,6 +299,32 @@ impl Ctx {
                 ))
             }
         }
+    }
+
+    /// Call any custom OneBot action without waiting for response.
+    pub async fn call_custom_action(
+        &self,
+        action: impl Into<String>,
+        params: serde_json::Value,
+    ) -> Result<()> {
+        self.call_action(OneBotAction::Custom {
+            action: action.into(),
+            params,
+        })
+        .await
+    }
+
+    /// Call any custom OneBot action and wait for response.
+    pub async fn call_custom_action_with_response(
+        &self,
+        action: impl Into<String>,
+        params: serde_json::Value,
+    ) -> Result<ApiResponse> {
+        self.call_action_with_response(OneBotAction::Custom {
+            action: action.into(),
+            params,
+        })
+        .await
     }
 
     /// Send private message

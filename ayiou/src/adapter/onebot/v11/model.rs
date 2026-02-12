@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 #[serde(untagged)]
 pub enum Message {
     String(String),
+    Segment(MessageSegment),
     Array(Vec<MessageSegment>),
 }
 
@@ -93,13 +94,29 @@ pub enum MessageSegment {
     #[serde(rename = "forward")]
     Forward { id: String },
     #[serde(rename = "node")]
-    Node { id: String },
+    Node {
+        #[serde(flatten)]
+        data: NodeData,
+    },
     #[serde(rename = "xml")]
     Xml { data: String },
     #[serde(rename = "json")]
     Json { data: String },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum NodeData {
+    Id {
+        id: String,
+    },
+    Custom {
+        user_id: i64,
+        nickname: String,
+        content: Box<Message>,
+    },
 }
 
 impl MessageSegment {
@@ -187,7 +204,7 @@ pub struct GroupMessageEvent {
     pub self_id: i64,
     pub sub_type: String, // "normal", "anonymous", "notice"
     pub message_id: i32,
-    pub group_name: String,
+    pub group_name: Option<String>,
     pub group_id: i64,
     pub user_id: i64,
     pub anonymous: Option<Anonymous>,
@@ -512,7 +529,7 @@ pub struct File {
 pub struct ApiRequest {
     pub action: String,
     pub params: serde_json::Value,
-    pub echo: Option<String>,
+    pub echo: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -521,7 +538,15 @@ pub struct ApiResponse {
     pub retcode: i32,
     #[serde(default)]
     pub data: serde_json::Value,
-    pub echo: Option<String>,
+    pub echo: Option<serde_json::Value>,
+}
+
+pub fn echo_key(echo: &serde_json::Value) -> Option<String> {
+    match echo {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) if s.is_empty() => None,
+        other => Some(other.to_string()),
+    }
 }
 
 impl ApiResponse {
@@ -556,7 +581,7 @@ impl ApiResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SendMessageData {
-    pub message_id: i64,
+    pub message_id: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -568,7 +593,7 @@ pub struct LoginInfoData {
 #[derive(Debug, Clone, Deserialize)]
 pub struct GroupInfoData {
     pub group_id: i64,
-    pub group_name: String,
+    pub group_name: Option<String>,
     pub member_count: Option<i32>,
     pub max_member_count: Option<i32>,
 }
@@ -624,6 +649,10 @@ pub enum OneBotAction {
         group_id: i64,
         user_id: i64,
         duration: i64,
+    },
+    Custom {
+        action: String,
+        params: serde_json::Value,
     },
 }
 
@@ -705,6 +734,11 @@ impl OneBotAction {
                 }),
                 echo: None,
             },
+            Self::Custom { action, params } => ApiRequest {
+                action,
+                params,
+                echo: None,
+            },
         }
     }
 }
@@ -719,7 +753,7 @@ mod tests {
             status: "ok".to_string(),
             retcode: 0,
             data: serde_json::json!({ "user_id": 1, "nickname": "bot" }),
-            echo: Some("x".to_string()),
+            echo: Some(serde_json::Value::String("x".to_string())),
         };
 
         let data: LoginInfoData = resp.data_as_checked("get_login_info").unwrap();

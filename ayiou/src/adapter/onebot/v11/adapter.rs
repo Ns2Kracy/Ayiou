@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     adapter::onebot::v11::ctx::Ctx,
-    adapter::onebot::v11::model::{ApiResponse, Message, MessageEvent, OneBotEvent},
+    adapter::onebot::v11::model::{ApiResponse, Message, MessageEvent, OneBotEvent, echo_key},
     core::{
         adapter::{Adapter, ProtocolAdapter, spawn_protocol_adapter},
         driver::Driver,
@@ -52,7 +52,7 @@ impl OneBotV11Adapter {
             MessageEvent::Group(g) => {
                 info!(
                     "群聊 [{}({})] [{}({})] {}",
-                    g.group_name,
+                    g.group_name.as_deref().unwrap_or("<unknown-group>"),
                     g.group_id,
                     g.sender.card.as_deref().unwrap_or(&g.sender.nickname),
                     g.user_id,
@@ -65,6 +65,11 @@ impl OneBotV11Adapter {
     fn format_message(message: &Message) -> String {
         match message {
             Message::String(s) => format!("{:?}", s),
+            Message::Segment(segment) => {
+                let mut preview = String::new();
+                segment.write_preview(&mut preview);
+                format!("{:?}", preview)
+            }
             Message::Array(segments) => {
                 let mut preview = String::with_capacity(segments.len() * 8);
                 for seg in segments {
@@ -102,8 +107,8 @@ impl ProtocolAdapter for OneBotV11Protocol {
         outgoing_tx: mpsc::Sender<Self::Outbound>,
     ) -> Option<Self::Ctx> {
         if let Ok(resp) = serde_json::from_str::<ApiResponse>(&raw) {
-            if let Some(echo) = &resp.echo {
-                if let Some((_, tx)) = self.pending_api.remove(echo) {
+            if let Some(echo) = resp.echo.as_ref().and_then(echo_key) {
+                if let Some((_, tx)) = self.pending_api.remove(&echo) {
                     let _ = tx.send(resp);
                 } else {
                     warn!("Received OneBot response with unknown echo: {}", echo);
