@@ -15,6 +15,7 @@ pub mod driver;
 pub mod prelude;
 
 pub use ayiou_macros::{Plugin, bot_plugin, command};
+pub use core::runtime::{RuntimeController, RuntimeState};
 
 pub struct Bot<A: Adapter> {
     plugin_manager: PluginManager<A::Ctx>,
