@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use log::info;
 
-use crate::core::adapter::MsgContext;
+use crate::core::{adapter::MsgContext, plugin_runtime::PluginRuntimeState};
 
 // ============================================================================
 // Args parsing types
@@ -613,15 +613,28 @@ pub struct Dispatcher<C> {
     /// Trie root for command lookup
     root: Arc<TrieNode<C>>,
     options: DispatchOptions,
+    runtime_state: PluginRuntimeState,
 }
 
 impl<C: MsgContext> Dispatcher<C> {
     /// Create dispatcher from plugin list
     pub fn new(plugins: PluginList<C>) -> Self {
-        Self::with_options(plugins, DispatchOptions::default())
+        Self::with_runtime_state(
+            plugins,
+            DispatchOptions::default(),
+            PluginRuntimeState::default(),
+        )
     }
 
     pub fn with_options(plugins: PluginList<C>, options: DispatchOptions) -> Self {
+        Self::with_runtime_state(plugins, options, PluginRuntimeState::default())
+    }
+
+    pub fn with_runtime_state(
+        plugins: PluginList<C>,
+        options: DispatchOptions,
+        runtime_state: PluginRuntimeState,
+    ) -> Self {
         let mut root = TrieNode::default();
         let mut wildcards = Vec::new();
 
@@ -653,6 +666,7 @@ impl<C: MsgContext> Dispatcher<C> {
             wildcards: Arc::new(wildcards),
             root: Arc::new(root),
             options,
+            runtime_state,
         }
     }
 
@@ -708,6 +722,10 @@ impl<C: MsgContext> Dispatcher<C> {
 
         if let Some(plugins) = self.root.match_command(&text) {
             for plugin in plugins {
+                if !self.runtime_state.is_enabled(&plugin.meta().name) {
+                    continue;
+                }
+
                 if !plugin.matches(ctx) {
                     continue;
                 }
@@ -725,6 +743,10 @@ impl<C: MsgContext> Dispatcher<C> {
             && let Some(plugins) = self.root.match_command(&normalized_text)
         {
             for plugin in plugins {
+                if !self.runtime_state.is_enabled(&plugin.meta().name) {
+                    continue;
+                }
+
                 if !plugin.matches(ctx) {
                     continue;
                 }
@@ -743,6 +765,10 @@ impl<C: MsgContext> Dispatcher<C> {
     /// Dispatch only to wildcard plugins
     pub async fn dispatch_wildcards(&self, ctx: &C) -> Result<bool> {
         for plugin in self.wildcards.iter() {
+            if !self.runtime_state.is_enabled(&plugin.meta().name) {
+                continue;
+            }
+
             if !plugin.matches(ctx) {
                 continue;
             }
@@ -873,6 +899,48 @@ mod tests {
         dispatcher.dispatch(&ctx).await.unwrap();
 
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    struct NamedCounterPlugin {
+        name: &'static str,
+        hits: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin<TestCtx> for NamedCounterPlugin {
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new(self.name)
+        }
+
+        fn commands(&self) -> Vec<String> {
+            vec![self.name.to_string()]
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<bool> {
+            self.hits.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_plugin_is_not_dispatched() {
+        let state = PluginRuntimeState::default();
+        state.set_enabled("echo", false);
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let plugins: Arc<[Arc<dyn Plugin<TestCtx>>]> = vec![Arc::new(NamedCounterPlugin {
+            name: "echo",
+            hits: hits.clone(),
+        }) as Arc<dyn Plugin<TestCtx>>]
+        .into();
+
+        let dispatcher = Dispatcher::with_runtime_state(plugins, DispatchOptions::default(), state);
+        let ctx = TestCtx {
+            text: "echo hi".to_string(),
+        };
+
+        dispatcher.dispatch(&ctx).await.unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
     }
 
     #[test]
