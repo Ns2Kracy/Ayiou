@@ -1,0 +1,21 @@
+[package]
+name = "ayiou-plugin-qweather"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+ayiou = { path = "../../ayiou" }
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+log = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["process", "fs"] }
+urlencoding = "2"
+
+[dev-dependencies]
+pretty_assertions = "1"

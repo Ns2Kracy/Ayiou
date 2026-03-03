@@ -2,6 +2,7 @@ use ayiou::{
     Bot,
     adapter::onebot::v11::{adapter::OneBotV11Adapter, ext::OneBotV11BotExt},
 };
+use ayiou_plugin_qweather::QWeatherPlugin;
 use log::info;
 
 mod plugin;
@@ -27,7 +28,8 @@ async fn main() {
         .register_plugin(WhoamiPlugin)
         .register_plugin(GuessPlugin)
         .register_plugin(UrlDetectorPlugin)
-        .register_plugin(ToolboxPlugin);
+        .register_plugin(ToolboxPlugin)
+        .register_plugin(QWeatherPlugin);
 
     info!("Connecting to {}", onebot_ws_url);
     bot.run_onebot_ws(onebot_ws_url).await;
