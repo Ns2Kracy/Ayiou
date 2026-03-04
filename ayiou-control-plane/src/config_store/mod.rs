@@ -19,6 +19,25 @@ pub struct ConfigRecord {
     pub content: String,
 }
 
+pub(crate) fn backend_as_str(backend: &ConfigBackend) -> &'static str {
+    match backend {
+        ConfigBackend::Toml => "toml",
+        ConfigBackend::Sqlite => "sqlite",
+        ConfigBackend::Postgres => "postgres",
+        ConfigBackend::Redis => "redis",
+    }
+}
+
+pub(crate) fn backend_from_str(raw: &str) -> Result<ConfigBackend> {
+    match raw {
+        "toml" => Ok(ConfigBackend::Toml),
+        "sqlite" => Ok(ConfigBackend::Sqlite),
+        "postgres" => Ok(ConfigBackend::Postgres),
+        "redis" => Ok(ConfigBackend::Redis),
+        _ => bail!("unsupported config backend: {}", raw),
+    }
+}
+
 #[async_trait]
 pub trait ConfigStore: Send + Sync {
     async fn get(&self, bot_id: &str, plugin_name: &str) -> Result<Option<ConfigRecord>>;
