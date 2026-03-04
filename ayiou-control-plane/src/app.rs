@@ -15,8 +15,8 @@ use crate::{
     agent_session::{AgentSessionHandle, RecordingAgentSession},
     auth::AuthenticatedUser,
     bot_registry::BotRegistry,
+    config_store::{ConfigStore, InMemoryConfigStore},
     observability::{MetricEvent, MetricPoint, MetricsStore},
-    plugin_service::{ConfigStore, InMemoryConfigStore},
     rbac,
     webui,
 };
