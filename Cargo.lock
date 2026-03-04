@@ -1581,7 +1581,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "ayiou",
+ "ayiou-admin-proto",
+ "ayiou-agent",
+ "ayiou-control-plane",
  "ayiou-plugin-qweather",
  "log",
  "pretty_env_logger",
