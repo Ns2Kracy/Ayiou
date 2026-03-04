@@ -4,12 +4,12 @@ use ayiou_admin_proto::ConfigBackend;
 use ayiou_control_plane::config_store::{ConfigStore, InMemoryConfigStore};
 use uuid::Uuid;
 
-#[cfg(feature = "sqlite-backend")]
-use ayiou_control_plane::config_store::sqlite::SqliteConfigStore;
 #[cfg(feature = "postgres-backend")]
 use ayiou_control_plane::config_store::postgres::PostgresConfigStore;
 #[cfg(feature = "redis-backend")]
 use ayiou_control_plane::config_store::redis::RedisConfigStore;
+#[cfg(feature = "sqlite-backend")]
+use ayiou_control_plane::config_store::sqlite::SqliteConfigStore;
 
 async fn run_config_store_contract(store: Arc<dyn ConfigStore>) {
     let suffix = Uuid::new_v4().simple().to_string();
@@ -83,7 +83,13 @@ async fn sqlite_backend_persists_across_store_instances() {
 
     let store1 = SqliteConfigStore::new(db_url.clone());
     store1
-        .put("bot-persist", "echo", ConfigBackend::Toml, "threshold = 7", None)
+        .put(
+            "bot-persist",
+            "echo",
+            ConfigBackend::Toml,
+            "threshold = 7",
+            None,
+        )
         .await
         .unwrap();
 
@@ -110,7 +116,10 @@ async fn redis_backend_passes_config_store_contract() {
     let endpoint = std::env::var("AYIOU_TEST_REDIS_URL")
         .expect("set AYIOU_TEST_REDIS_URL to run redis contract test");
     let namespace = format!("ayiou:test:{}", Uuid::new_v4().simple());
-    let store: Arc<dyn ConfigStore> =
-        Arc::new(RedisConfigStore::new(endpoint).unwrap().with_namespace(namespace));
+    let store: Arc<dyn ConfigStore> = Arc::new(
+        RedisConfigStore::new(endpoint)
+            .unwrap()
+            .with_namespace(namespace),
+    );
     run_config_store_contract(store).await;
 }

@@ -50,18 +50,14 @@ impl SqliteConfigStore {
                     .inner
                     .database_url
                     .parse::<SqliteConnectOptions>()
-                    .with_context(|| {
-                        format!("parse sqlite url {}", self.inner.database_url)
-                    })?
+                    .with_context(|| format!("parse sqlite url {}", self.inner.database_url))?
                     .create_if_missing(true);
 
                 SqlitePoolOptions::new()
                     .max_connections(1)
                     .connect_with(options)
                     .await
-                    .with_context(|| {
-                        format!("connect sqlite database {}", self.inner.database_url)
-                    })
+                    .with_context(|| format!("connect sqlite database {}", self.inner.database_url))
             })
             .await
     }

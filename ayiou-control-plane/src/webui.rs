@@ -58,6 +58,12 @@ async fn bot_detail_page(
     <button>Enable Plugin</button>
     <button>Disable Plugin</button>
     <form>
+      <label>Load Wasm Plugin</label>
+      <input name="module_path" type="text" placeholder="/path/to/plugin.wasm"/>
+      <button type="submit">Load Wasm Plugin</button>
+    </form>
+    <button>Unload Wasm Plugin</button>
+    <form>
       <label>Plugin Config</label>
       <textarea name="config" rows="5" cols="60"></textarea>
       <button type="submit">Save Config</button>

@@ -34,8 +34,12 @@ impl CommandAck {
 pub trait RuntimeOps: Send + Sync {
     async fn start_bot(&self, bot_id: &str) -> Result<()>;
     async fn stop_bot(&self, bot_id: &str) -> Result<()>;
-    async fn set_plugin_enabled(&self, bot_id: &str, plugin_name: &str, enabled: bool)
-    -> Result<()>;
+    async fn set_plugin_enabled(
+        &self,
+        bot_id: &str,
+        plugin_name: &str,
+        enabled: bool,
+    ) -> Result<()>;
     async fn update_plugin_config(
         &self,
         bot_id: &str,
@@ -44,6 +48,13 @@ pub trait RuntimeOps: Send + Sync {
         content: &str,
         expected_version: Option<u64>,
     ) -> Result<()>;
+    async fn load_wasm_plugin(
+        &self,
+        bot_id: &str,
+        plugin_name: &str,
+        module_path: &str,
+    ) -> Result<()>;
+    async fn unload_wasm_plugin(&self, bot_id: &str, plugin_name: &str) -> Result<()>;
 }
 
 pub struct CommandExecutor<R> {
@@ -96,6 +107,19 @@ where
                         &content,
                         expected_version,
                     )
+                    .await?
+            }
+            AdminCommand::LoadWasmPlugin {
+                plugin_name,
+                module_path,
+            } => {
+                self.runtime
+                    .load_wasm_plugin(&env.bot_id, &plugin_name, &module_path)
+                    .await?
+            }
+            AdminCommand::UnloadWasmPlugin { plugin_name } => {
+                self.runtime
+                    .unload_wasm_plugin(&env.bot_id, &plugin_name)
                     .await?
             }
         }
@@ -167,6 +191,27 @@ mod tests {
             ));
             Ok(())
         }
+
+        async fn load_wasm_plugin(
+            &self,
+            bot_id: &str,
+            plugin_name: &str,
+            module_path: &str,
+        ) -> Result<()> {
+            self.calls
+                .lock()
+                .await
+                .push(format!("wasm_load:{bot_id}:{plugin_name}:{module_path}"));
+            Ok(())
+        }
+
+        async fn unload_wasm_plugin(&self, bot_id: &str, plugin_name: &str) -> Result<()> {
+            self.calls
+                .lock()
+                .await
+                .push(format!("wasm_unload:{bot_id}:{plugin_name}"));
+            Ok(())
+        }
     }
 
     #[tokio::test]
@@ -179,5 +224,40 @@ mod tests {
         exec.execute(cmd).await.unwrap();
 
         assert_eq!(runtime.start_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn wasm_commands_are_forwarded_to_runtime_ops() {
+        let runtime = FakeRuntime::default();
+        let exec = CommandExecutor::new(runtime.clone());
+
+        exec.execute(CommandEnvelope::new(
+            "c2",
+            "bot-a",
+            AdminCommand::LoadWasmPlugin {
+                plugin_name: "echo".into(),
+                module_path: "/tmp/echo.wasm".into(),
+            },
+        ))
+        .await
+        .unwrap();
+
+        exec.execute(CommandEnvelope::new(
+            "c3",
+            "bot-a",
+            AdminCommand::UnloadWasmPlugin {
+                plugin_name: "echo".into(),
+            },
+        ))
+        .await
+        .unwrap();
+
+        let calls = runtime.calls.lock().await.clone();
+        assert!(
+            calls
+                .iter()
+                .any(|entry| entry == "wasm_load:bot-a:echo:/tmp/echo.wasm")
+        );
+        assert!(calls.iter().any(|entry| entry == "wasm_unload:bot-a:echo"));
     }
 }

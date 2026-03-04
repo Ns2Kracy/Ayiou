@@ -28,7 +28,8 @@ impl QWeatherPlugin {
         let client = match QWeatherClient::new_from_env() {
             Ok(c) => c,
             Err(err) => {
-                ctx.reply_text(format!("QWeather config error: {}", err)).await?;
+                ctx.reply_text(format!("QWeather config error: {}", err))
+                    .await?;
                 return Ok(());
             }
         };
@@ -36,7 +37,8 @@ impl QWeatherPlugin {
         let bundle = match client.query_weather(location).await {
             Ok(bundle) => bundle,
             Err(err) => {
-                ctx.reply_text(format!("Weather query failed: {}", err)).await?;
+                ctx.reply_text(format!("Weather query failed: {}", err))
+                    .await?;
                 return Ok(());
             }
         };
@@ -56,8 +58,10 @@ impl QWeatherPlugin {
             }
             Err(err) => {
                 warn!("render weather card failed: {}", err);
-                ctx.reply_text("天气图生成失败，仅返回了文字结果。请检查 Chrome/Chromium 是否可用。")
-                    .await?;
+                ctx.reply_text(
+                    "天气图生成失败，仅返回了文字结果。请检查 Chrome/Chromium 是否可用。",
+                )
+                .await?;
             }
         }
 

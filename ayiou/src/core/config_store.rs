@@ -43,7 +43,9 @@ impl TomlConfigStore {
     fn record_path(&self, bot_id: &str, plugin: &str) -> PathBuf {
         let safe_bot = sanitize_segment(bot_id);
         let safe_plugin = sanitize_segment(plugin);
-        self.root.join(safe_bot).join(format!("{}.toml", safe_plugin))
+        self.root
+            .join(safe_bot)
+            .join(format!("{}.toml", safe_plugin))
     }
 }
 

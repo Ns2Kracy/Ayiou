@@ -1,10 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
-    Json,
-    extract::State,
-    Router,
+    Json, Router,
     extract::Path,
+    extract::State,
     http::StatusCode,
     routing::{get, post, put},
 };
@@ -17,8 +16,7 @@ use crate::{
     bot_registry::BotRegistry,
     config_store::{ConfigStore, InMemoryConfigStore},
     observability::{MetricEvent, MetricPoint, MetricsStore},
-    rbac,
-    webui,
+    rbac, webui,
 };
 
 #[derive(Clone)]
@@ -85,6 +83,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/bots/{id}/plugins/{name}/disable",
             post(disable_plugin),
         )
+        .route(
+            "/api/v1/bots/{id}/plugins/{name}/wasm/load",
+            post(load_wasm_plugin),
+        )
+        .route(
+            "/api/v1/bots/{id}/plugins/{name}/wasm/unload",
+            post(unload_wasm_plugin),
+        )
         .route("/api/v1/bots/{id}/metrics", get(query_metrics))
         .route(
             "/api/v1/bots/{id}/plugins/{name}/config",
@@ -95,11 +101,21 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 pub fn test_app_with_connected_agent(bot_id: &str) -> (Router, RecordingAgentSession) {
-    let state = AppState::single_user("admin", "admin-token", &["bot:start", "plugin:disable"]);
+    let state = AppState::single_user(
+        "admin",
+        "admin-token",
+        &[
+            "bot:start",
+            "plugin:disable",
+            "plugin:load",
+            "plugin:unload",
+        ],
+    );
     let recording = RecordingAgentSession::default();
-    state
-        .bot_registry()
-        .register(bot_id.to_string(), AgentSessionHandle::new(recording.clone()));
+    state.bot_registry().register(
+        bot_id.to_string(),
+        AgentSessionHandle::new(recording.clone()),
+    );
     (build_router(state), recording)
 }
 
@@ -110,9 +126,10 @@ pub fn test_app_with_store_and_agent() -> (Router, RecordingAgentSession, Arc<In
         .with_config_store(store.clone());
     let recording = RecordingAgentSession::default();
 
-    state
-        .bot_registry()
-        .register("bot-a".to_string(), AgentSessionHandle::new(recording.clone()));
+    state.bot_registry().register(
+        "bot-a".to_string(),
+        AgentSessionHandle::new(recording.clone()),
+    );
 
     (build_router(state), recording, store)
 }
@@ -129,11 +146,19 @@ pub fn test_app_with_bot(bot_id: &str) -> Router {
     let state = AppState::single_user(
         "admin",
         "admin-token",
-        &["bot:start", "plugin:disable", "config:write", "metrics:read"],
+        &[
+            "bot:start",
+            "plugin:disable",
+            "plugin:load",
+            "plugin:unload",
+            "config:write",
+            "metrics:read",
+        ],
     );
-    state
-        .bot_registry()
-        .register(bot_id.to_string(), AgentSessionHandle::new(RecordingAgentSession::default()));
+    state.bot_registry().register(
+        bot_id.to_string(),
+        AgentSessionHandle::new(RecordingAgentSession::default()),
+    );
     build_router(state)
 }
 
@@ -170,6 +195,46 @@ async fn disable_plugin(
     state
         .bot_registry()
         .send_command(&bot_id, AdminCommand::DisablePlugin { plugin_name })
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Debug, Deserialize)]
+struct LoadWasmPluginRequest {
+    module_path: String,
+}
+
+async fn load_wasm_plugin(
+    Path((bot_id, plugin_name)): Path<(String, String)>,
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(request): Json<LoadWasmPluginRequest>,
+) -> Result<StatusCode, StatusCode> {
+    rbac::require(&user, "plugin:load")?;
+    state
+        .bot_registry()
+        .send_command(
+            &bot_id,
+            AdminCommand::LoadWasmPlugin {
+                plugin_name,
+                module_path: request.module_path,
+            },
+        )
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn unload_wasm_plugin(
+    Path((bot_id, plugin_name)): Path<(String, String)>,
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<StatusCode, StatusCode> {
+    rbac::require(&user, "plugin:unload")?;
+    state
+        .bot_registry()
+        .send_command(&bot_id, AdminCommand::UnloadWasmPlugin { plugin_name })
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(StatusCode::ACCEPTED)
@@ -224,7 +289,10 @@ async fn update_plugin_config(
     Ok(StatusCode::ACCEPTED)
 }
 
-async fn ingest_metric(State(state): State<AppState>, Json(event): Json<MetricEvent>) -> StatusCode {
+async fn ingest_metric(
+    State(state): State<AppState>,
+    Json(event): Json<MetricEvent>,
+) -> StatusCode {
     state.metrics_store().upsert(event);
     StatusCode::ACCEPTED
 }

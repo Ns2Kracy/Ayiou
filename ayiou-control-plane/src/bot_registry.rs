@@ -25,7 +25,11 @@ impl BotRegistry {
     }
 
     pub fn list_bot_ids(&self) -> Vec<String> {
-        let mut bots: Vec<_> = self.sessions.iter().map(|entry| entry.key().clone()).collect();
+        let mut bots: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
         bots.sort();
         bots
     }

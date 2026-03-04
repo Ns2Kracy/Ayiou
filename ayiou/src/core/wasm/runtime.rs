@@ -33,8 +33,8 @@ impl WasmRuntime {
         let raw = tokio::fs::read(path)
             .await
             .with_context(|| format!("read wasm module from {}", path))?;
-        let wasm = normalize_wasm_bytes(&raw)
-            .with_context(|| format!("decode wasm module {}", path))?;
+        let wasm =
+            normalize_wasm_bytes(&raw).with_context(|| format!("decode wasm module {}", path))?;
 
         let module = Module::new(&self.engine, wasm)
             .with_context(|| format!("compile wasm module {}", path))?;
@@ -163,7 +163,10 @@ impl LoadedInstance {
     }
 
     fn call_regex(&mut self, text: &str) -> Result<bool> {
-        let Some(func) = self.instance.get_func(&mut self.store, abi::ON_REGEX_EXPORT) else {
+        let Some(func) = self
+            .instance
+            .get_func(&mut self.store, abi::ON_REGEX_EXPORT)
+        else {
             return Ok(false);
         };
 
@@ -200,7 +203,9 @@ impl LoadedInstance {
             .instance
             .get_typed_func::<i32, i32>(&mut self.store, abi::ALLOC_EXPORT)
             .context("get alloc export")?;
-        let ptr = alloc.call(&mut self.store, len).context("call alloc export")?;
+        let ptr = alloc
+            .call(&mut self.store, len)
+            .context("call alloc export")?;
         if ptr < 0 {
             bail!("invalid allocated pointer {}", ptr);
         }
