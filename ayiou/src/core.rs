@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod config_store;
 pub mod driver;
 #[macro_use]
 pub mod macros;
