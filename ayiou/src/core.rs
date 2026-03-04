@@ -12,6 +12,7 @@ pub mod storage;
 pub mod plugin;
 pub mod plugin_runtime;
 pub mod runtime;
+pub mod wasm;
 pub use plugin::*;
 pub use plugin_runtime::*;
 pub use runtime::*;

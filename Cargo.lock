@@ -108,6 +108,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "ayiou-macros",
+ "ayiou-wasm-sdk",
  "chrono",
  "cron",
  "dashmap",
@@ -188,6 +189,13 @@ dependencies = [
  "tempfile",
  "tokio",
  "urlencoding",
+]
+
+[[package]]
+name = "ayiou-wasm-sdk"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

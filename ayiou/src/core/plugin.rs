@@ -385,6 +385,18 @@ pub trait Plugin<C>: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Optional regex patterns this plugin can handle.
+    /// V2 runtimes (such as wasm) may use this for fast pre-filtering.
+    fn regex_patterns(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Optional cron expressions this plugin can handle.
+    /// V2 runtimes (such as wasm) may use this for scheduled triggers.
+    fn cron_expressions(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Optional command prefixes that this plugin accepts.
     ///
     /// Example: ["/", "!"] means command `echo` also matches `/echo` and `!echo`.
