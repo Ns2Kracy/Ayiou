@@ -79,6 +79,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/internal/v1/ingest/metrics", post(ingest_metric))
         .route("/api/v1/bots/{id}/start", post(start_bot))
+        .route("/api/v1/bots/{id}/stop", post(stop_bot))
+        .route(
+            "/api/v1/bots/{id}/plugins/{name}/enable",
+            post(enable_plugin),
+        )
         .route(
             "/api/v1/bots/{id}/plugins/{name}/disable",
             post(disable_plugin),
@@ -106,6 +111,8 @@ pub fn test_app_with_connected_agent(bot_id: &str) -> (Router, RecordingAgentSes
         "admin-token",
         &[
             "bot:start",
+            "bot:stop",
+            "plugin:enable",
             "plugin:disable",
             "plugin:load",
             "plugin:unload",
@@ -148,6 +155,8 @@ pub fn test_app_with_bot(bot_id: &str) -> Router {
         "admin-token",
         &[
             "bot:start",
+            "bot:stop",
+            "plugin:enable",
             "plugin:disable",
             "plugin:load",
             "plugin:unload",
@@ -181,6 +190,34 @@ async fn start_bot(
     state
         .bot_registry()
         .send_command(&bot_id, AdminCommand::StartBot)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn stop_bot(
+    Path(bot_id): Path<String>,
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<StatusCode, StatusCode> {
+    rbac::require(&user, "bot:stop")?;
+    state
+        .bot_registry()
+        .send_command(&bot_id, AdminCommand::StopBot)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn enable_plugin(
+    Path((bot_id, plugin_name)): Path<(String, String)>,
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<StatusCode, StatusCode> {
+    rbac::require(&user, "plugin:enable")?;
+    state
+        .bot_registry()
+        .send_command(&bot_id, AdminCommand::EnablePlugin { plugin_name })
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     Ok(StatusCode::ACCEPTED)

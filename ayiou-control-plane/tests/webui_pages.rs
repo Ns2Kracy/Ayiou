@@ -30,4 +30,8 @@ async fn bot_detail_page_contains_runtime_actions() {
     assert!(body.contains("Save Config"));
     assert!(body.contains("Load Wasm Plugin"));
     assert!(body.contains("Unload Wasm Plugin"));
+    assert!(body.contains("API Token"));
+    assert!(body.contains("pluginName"));
+    assert!(body.contains("configBackend"));
+    assert!(body.contains("setStatus"));
 }

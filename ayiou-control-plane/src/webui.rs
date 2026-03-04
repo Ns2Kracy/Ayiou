@@ -22,7 +22,10 @@ async fn bots_page(
 
     let mut items = String::new();
     for bot in bots {
-        items.push_str(&format!(r#"<li><a href="/ui/bots/{bot}">{bot}</a></li>"#));
+        let bot_escaped = escape_html(&bot);
+        items.push_str(&format!(
+            r#"<li><a href="/ui/bots/{bot_escaped}">{bot_escaped}</a></li>"#
+        ));
     }
 
     let html = format!(
@@ -46,31 +49,218 @@ async fn bot_detail_page(
     _state: State<AppState>,
     _user: AuthenticatedUser,
 ) -> Result<Html<String>, axum::http::StatusCode> {
-    let html = format!(
-        r#"
+    let bot_escaped = escape_html(&bot_id);
+    let html = r#"
 <!doctype html>
 <html>
-  <head><title>Bot {bot_id}</title></head>
-  <body>
-    <h1>Bot: {bot_id}</h1>
-    <button>Start Bot</button>
-    <button>Stop Bot</button>
-    <button>Enable Plugin</button>
-    <button>Disable Plugin</button>
-    <form>
-      <label>Load Wasm Plugin</label>
-      <input name="module_path" type="text" placeholder="/path/to/plugin.wasm"/>
-      <button type="submit">Load Wasm Plugin</button>
-    </form>
-    <button>Unload Wasm Plugin</button>
-    <form>
-      <label>Plugin Config</label>
-      <textarea name="config" rows="5" cols="60"></textarea>
-      <button type="submit">Save Config</button>
-    </form>
+  <head>
+    <title>Bot __BOT_ID__</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 980px; margin: 24px auto; line-height: 1.4; }
+      section { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+      label { display: block; font-weight: 600; margin-bottom: 6px; }
+      input, select, textarea { width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 6px; }
+      button { margin-right: 8px; margin-bottom: 8px; }
+      pre { background: #111; color: #ddd; padding: 10px; border-radius: 6px; overflow-x: auto; }
+    </style>
+  </head>
+  <body data-bot-id="__BOT_ID__">
+    <h1>Bot: __BOT_ID__</h1>
+
+    <section>
+      <label for="apiToken">API Token</label>
+      <input id="apiToken" type="password" placeholder="Bearer token" />
+      <button id="saveTokenBtn" type="button">Save Token</button>
+    </section>
+
+    <section>
+      <button id="startBotBtn" type="button">Start Bot</button>
+      <button id="stopBotBtn" type="button">Stop Bot</button>
+    </section>
+
+    <section>
+      <label for="pluginName">Plugin Name</label>
+      <input id="pluginName" type="text" value="echo" />
+      <button id="enablePluginBtn" type="button">Enable Plugin</button>
+      <button id="disablePluginBtn" type="button">Disable Plugin</button>
+    </section>
+
+    <section>
+      <label for="modulePath">Load Wasm Plugin</label>
+      <input id="modulePath" type="text" placeholder="/path/to/plugin.wasm" />
+      <button id="loadWasmBtn" type="button">Load Wasm Plugin</button>
+      <button id="unloadWasmBtn" type="button">Unload Wasm Plugin</button>
+    </section>
+
+    <section>
+      <label for="configBackend">Config Backend</label>
+      <select id="configBackend">
+        <option value="toml">toml</option>
+        <option value="sqlite">sqlite</option>
+        <option value="postgres">postgres</option>
+        <option value="redis">redis</option>
+      </select>
+      <label for="expectedVersion">Expected Version (optional)</label>
+      <input id="expectedVersion" type="text" placeholder="leave empty for latest" />
+      <label for="configContent">Plugin Config</label>
+      <textarea id="configContent" rows="6" placeholder="threshold=3"></textarea>
+      <button id="saveConfigBtn" type="button">Save Config</button>
+    </section>
+
+    <pre id="result">Ready.</pre>
+
+    <script>
+      const botId = document.body.dataset.botId;
+      const apiToken = document.getElementById("apiToken");
+      const result = document.getElementById("result");
+      const pluginName = document.getElementById("pluginName");
+      const modulePath = document.getElementById("modulePath");
+      const configBackend = document.getElementById("configBackend");
+      const expectedVersion = document.getElementById("expectedVersion");
+      const configContent = document.getElementById("configContent");
+
+      const TOKEN_KEY = "ayiou-control-plane-token";
+      apiToken.value = localStorage.getItem(TOKEN_KEY) || "";
+
+      function setStatus(text) {
+        result.textContent = text;
+      }
+
+      function tokenOrThrow() {
+        const token = apiToken.value.trim();
+        if (!token) {
+          throw new Error("API token is required");
+        }
+        return token;
+      }
+
+      function pluginOrThrow() {
+        const name = pluginName.value.trim();
+        if (!name) {
+          throw new Error("Plugin name is required");
+        }
+        return encodeURIComponent(name);
+      }
+
+      async function callApi(method, path, payload) {
+        const token = tokenOrThrow();
+        const headers = { Authorization: `Bearer ${token}` };
+        if (payload !== undefined) {
+          headers["Content-Type"] = "application/json";
+        }
+
+        const response = await fetch(path, {
+          method,
+          headers,
+          body: payload === undefined ? undefined : JSON.stringify(payload),
+        });
+
+        const text = await response.text();
+        setStatus(`${method} ${path}\n${response.status} ${response.statusText}\n${text}`);
+      }
+
+      document.getElementById("saveTokenBtn").addEventListener("click", () => {
+        localStorage.setItem(TOKEN_KEY, apiToken.value.trim());
+        setStatus("Token saved.");
+      });
+
+      document.getElementById("startBotBtn").addEventListener("click", async () => {
+        try {
+          await callApi("POST", `/api/v1/bots/${encodeURIComponent(botId)}/start`);
+        } catch (error) {
+          setStatus(error.message);
+        }
+      });
+
+      document.getElementById("stopBotBtn").addEventListener("click", async () => {
+        try {
+          await callApi("POST", `/api/v1/bots/${encodeURIComponent(botId)}/stop`);
+        } catch (error) {
+          setStatus(error.message);
+        }
+      });
+
+      document.getElementById("enablePluginBtn").addEventListener("click", async () => {
+        try {
+          const plugin = pluginOrThrow();
+          await callApi("POST", `/api/v1/bots/${encodeURIComponent(botId)}/plugins/${plugin}/enable`);
+        } catch (error) {
+          setStatus(error.message);
+        }
+      });
+
+      document.getElementById("disablePluginBtn").addEventListener("click", async () => {
+        try {
+          const plugin = pluginOrThrow();
+          await callApi("POST", `/api/v1/bots/${encodeURIComponent(botId)}/plugins/${plugin}/disable`);
+        } catch (error) {
+          setStatus(error.message);
+        }
+      });
+
+      document.getElementById("loadWasmBtn").addEventListener("click", async () => {
+        try {
+          const plugin = pluginOrThrow();
+          const path = modulePath.value.trim();
+          if (!path) {
+            throw new Error("Wasm module path is required");
+          }
+          await callApi("POST", `/api/v1/bots/${encodeURIComponent(botId)}/plugins/${plugin}/wasm/load`, {
+            module_path: path,
+          });
+        } catch (error) {
+          setStatus(error.message);
+        }
+      });
+
+      document.getElementById("unloadWasmBtn").addEventListener("click", async () => {
+        try {
+          const plugin = pluginOrThrow();
+          await callApi("POST", `/api/v1/bots/${encodeURIComponent(botId)}/plugins/${plugin}/wasm/unload`);
+        } catch (error) {
+          setStatus(error.message);
+        }
+      });
+
+      document.getElementById("saveConfigBtn").addEventListener("click", async () => {
+        try {
+          const plugin = pluginOrThrow();
+          const rawVersion = expectedVersion.value.trim();
+          let parsedVersion = null;
+          if (rawVersion !== "") {
+            parsedVersion = Number(rawVersion);
+            if (!Number.isInteger(parsedVersion) || parsedVersion < 0) {
+              throw new Error("Expected version must be a non-negative integer");
+            }
+          }
+          await callApi("PUT", `/api/v1/bots/${encodeURIComponent(botId)}/plugins/${plugin}/config`, {
+            backend: configBackend.value,
+            content: configContent.value,
+            expected_version: parsedVersion,
+          });
+        } catch (error) {
+          setStatus(error.message);
+        }
+      });
+    </script>
   </body>
 </html>
 "#
-    );
+    .replace("__BOT_ID__", &bot_escaped);
     Ok(Html(html))
+}
+
+fn escape_html(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }

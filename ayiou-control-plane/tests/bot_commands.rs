@@ -31,6 +31,52 @@ async fn start_bot_endpoint_pushes_command_to_connected_agent() {
 }
 
 #[tokio::test]
+async fn stop_bot_endpoint_pushes_command_to_connected_agent() {
+    let (app, fake_agent) = test_app_with_connected_agent("bot-a");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/bots/bot-a/stop")
+                .header("Authorization", "Bearer admin-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        fake_agent.last_command().await.command,
+        AdminCommand::StopBot
+    );
+}
+
+#[tokio::test]
+async fn enable_plugin_endpoint_pushes_command_to_connected_agent() {
+    let (app, fake_agent) = test_app_with_connected_agent("bot-a");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/bots/bot-a/plugins/echo/enable")
+                .header("Authorization", "Bearer admin-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert_eq!(
+        fake_agent.last_command().await.command,
+        AdminCommand::EnablePlugin {
+            plugin_name: "echo".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
 async fn load_wasm_endpoint_pushes_command_to_connected_agent() {
     let (app, fake_agent) = test_app_with_connected_agent("bot-a");
     let response = app
