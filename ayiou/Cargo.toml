@@ -23,6 +23,8 @@ regex = "1"
 cron = "0.15"
 chrono = "0.4"
 toml = "0.8"
+wasmtime = "38.0.3"
+wat = "1.241.2"
 
 [dev-dependencies]
 tempfile = "3.25.0"

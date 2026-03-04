@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+pub mod abi {
+    pub const MEMORY_EXPORT: &str = "memory";
+    pub const ALLOC_EXPORT: &str = "ayiou_alloc";
+    pub const ON_COMMAND_EXPORT: &str = "ayiou_on_command";
+    pub const ON_REGEX_EXPORT: &str = "ayiou_on_regex";
+    pub const ON_CRON_EXPORT: &str = "ayiou_on_cron";
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DispatchEvent {
     Command { command: String, args: String },
