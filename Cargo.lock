@@ -83,6 +83,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ayiou-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "ayiou-admin-proto",
+ "dashmap",
+ "tokio",
+]
+
+[[package]]
 name = "ayiou-macros"
 version = "0.1.0"
 dependencies = [

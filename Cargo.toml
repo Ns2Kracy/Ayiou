@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "ayiou-admin-proto",
+    "ayiou-agent",
     "ayiou",
     "ayiou-macros",
     "examples/my_bot",
