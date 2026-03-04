@@ -15,6 +15,7 @@ use crate::{
     agent_session::{AgentSessionHandle, RecordingAgentSession},
     auth::AuthenticatedUser,
     bot_registry::BotRegistry,
+    observability::{MetricEvent, MetricPoint, MetricsStore},
     plugin_service::{ConfigStore, InMemoryConfigStore},
     rbac,
 };
@@ -24,6 +25,7 @@ pub struct AppState {
     users_by_token: Arc<HashMap<String, AuthenticatedUser>>,
     bot_registry: BotRegistry,
     config_store: Arc<dyn ConfigStore>,
+    metrics_store: MetricsStore,
 }
 
 impl Default for AppState {
@@ -32,6 +34,7 @@ impl Default for AppState {
             users_by_token: Arc::new(HashMap::new()),
             bot_registry: BotRegistry::default(),
             config_store: Arc::new(InMemoryConfigStore::default()),
+            metrics_store: MetricsStore::default(),
         }
     }
 }
@@ -46,6 +49,7 @@ impl AppState {
             users_by_token: Arc::new(users),
             bot_registry: BotRegistry::default(),
             config_store: Arc::new(InMemoryConfigStore::default()),
+            metrics_store: MetricsStore::default(),
         }
     }
 
@@ -65,16 +69,22 @@ impl AppState {
         self.config_store = config_store;
         self
     }
+
+    pub fn metrics_store(&self) -> MetricsStore {
+        self.metrics_store.clone()
+    }
 }
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/internal/v1/ingest/metrics", post(ingest_metric))
         .route("/api/v1/bots/{id}/start", post(start_bot))
         .route(
             "/api/v1/bots/{id}/plugins/{name}/disable",
             post(disable_plugin),
         )
+        .route("/api/v1/bots/{id}/metrics", get(query_metrics))
         .route(
             "/api/v1/bots/{id}/plugins/{name}/config",
             put(update_plugin_config),
@@ -103,6 +113,14 @@ pub fn test_app_with_store_and_agent() -> (Router, RecordingAgentSession, Arc<In
         .register("bot-a".to_string(), AgentSessionHandle::new(recording.clone()));
 
     (build_router(state), recording, store)
+}
+
+pub fn test_app() -> Router {
+    build_router(AppState::single_user(
+        "viewer",
+        "viewer-token",
+        &["metrics:read"],
+    ))
 }
 
 async fn healthz() -> StatusCode {
@@ -184,4 +202,18 @@ async fn update_plugin_config(
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
     Ok(StatusCode::ACCEPTED)
+}
+
+async fn ingest_metric(State(state): State<AppState>, Json(event): Json<MetricEvent>) -> StatusCode {
+    state.metrics_store().upsert(event);
+    StatusCode::ACCEPTED
+}
+
+async fn query_metrics(
+    Path(bot_id): Path<String>,
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+) -> Result<Json<Vec<MetricPoint>>, StatusCode> {
+    rbac::require(&user, "metrics:read")?;
+    Ok(Json(state.metrics_store().query_by_bot(&bot_id)))
 }
