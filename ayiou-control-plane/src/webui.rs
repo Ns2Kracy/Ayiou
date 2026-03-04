@@ -1,22 +1,70 @@
 use axum::{
     Router,
-    extract::{Path, State},
-    response::Html,
-    routing::get,
+    extract::{Form, Path, State},
+    http::{StatusCode, header::SET_COOKIE},
+    response::{Html, IntoResponse, Redirect, Response},
+    routing::{get, post},
 };
+use serde::Deserialize;
 
 use crate::{app::AppState, auth::AuthenticatedUser};
 
+const AUTH_COOKIE_NAME: &str = "ayiou_token";
+
+#[derive(Debug, Deserialize)]
+struct LoginForm {
+    token: String,
+}
+
 pub fn ui_router() -> Router<AppState> {
     Router::new()
+        .route("/ui/login", get(login_page).post(login_submit))
+        .route("/ui/logout", post(logout_submit))
         .route("/ui/bots", get(bots_page))
         .route("/ui/bots/{id}", get(bot_detail_page))
+}
+
+async fn login_page() -> Html<String> {
+    Html(render_login_page(None))
+}
+
+async fn login_submit(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Response {
+    let token = form.token.trim();
+    if token.is_empty() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Html(render_login_page(Some("Token is required."))),
+        )
+            .into_response();
+    }
+
+    if state.user_for_token(token).is_none() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Html(render_login_page(Some("Invalid token."))),
+        )
+            .into_response();
+    }
+
+    let cookie = format!(
+        "{}={}; HttpOnly; Path=/; SameSite=Lax",
+        AUTH_COOKIE_NAME, token
+    );
+    ([(SET_COOKIE, cookie)], Redirect::to("/ui/bots")).into_response()
+}
+
+async fn logout_submit() -> Response {
+    let cookie = format!(
+        "{}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax",
+        AUTH_COOKIE_NAME
+    );
+    ([(SET_COOKIE, cookie)], Redirect::to("/ui/login")).into_response()
 }
 
 async fn bots_page(
     State(state): State<AppState>,
     _user: AuthenticatedUser,
-) -> Result<Html<String>, axum::http::StatusCode> {
+) -> Result<Html<String>, StatusCode> {
     let mut bots = state.known_bots();
     bots.sort();
 
@@ -35,6 +83,9 @@ async fn bots_page(
   <head><title>Ayiou Control Plane</title></head>
   <body>
     <h1>Bots</h1>
+    <form method="post" action="/ui/logout">
+      <button type="submit">Logout</button>
+    </form>
     <ul>{items}</ul>
   </body>
 </html>
@@ -48,7 +99,7 @@ async fn bot_detail_page(
     Path(bot_id): Path<String>,
     _state: State<AppState>,
     _user: AuthenticatedUser,
-) -> Result<Html<String>, axum::http::StatusCode> {
+) -> Result<Html<String>, StatusCode> {
     let bot_escaped = escape_html(&bot_id);
     let html = r#"
 <!doctype html>
@@ -66,12 +117,9 @@ async fn bot_detail_page(
   </head>
   <body data-bot-id="__BOT_ID__">
     <h1>Bot: __BOT_ID__</h1>
-
-    <section>
-      <label for="apiToken">API Token</label>
-      <input id="apiToken" type="password" placeholder="Bearer token" />
-      <button id="saveTokenBtn" type="button">Save Token</button>
-    </section>
+    <form method="post" action="/ui/logout">
+      <button type="submit">Logout</button>
+    </form>
 
     <section>
       <button id="startBotBtn" type="button">Start Bot</button>
@@ -111,7 +159,6 @@ async fn bot_detail_page(
 
     <script>
       const botId = document.body.dataset.botId;
-      const apiToken = document.getElementById("apiToken");
       const result = document.getElementById("result");
       const pluginName = document.getElementById("pluginName");
       const modulePath = document.getElementById("modulePath");
@@ -119,19 +166,8 @@ async fn bot_detail_page(
       const expectedVersion = document.getElementById("expectedVersion");
       const configContent = document.getElementById("configContent");
 
-      const TOKEN_KEY = "ayiou-control-plane-token";
-      apiToken.value = localStorage.getItem(TOKEN_KEY) || "";
-
       function setStatus(text) {
         result.textContent = text;
-      }
-
-      function tokenOrThrow() {
-        const token = apiToken.value.trim();
-        if (!token) {
-          throw new Error("API token is required");
-        }
-        return token;
       }
 
       function pluginOrThrow() {
@@ -143,8 +179,7 @@ async fn bot_detail_page(
       }
 
       async function callApi(method, path, payload) {
-        const token = tokenOrThrow();
-        const headers = { Authorization: `Bearer ${token}` };
+        const headers = {};
         if (payload !== undefined) {
           headers["Content-Type"] = "application/json";
         }
@@ -158,11 +193,6 @@ async fn bot_detail_page(
         const text = await response.text();
         setStatus(`${method} ${path}\n${response.status} ${response.statusText}\n${text}`);
       }
-
-      document.getElementById("saveTokenBtn").addEventListener("click", () => {
-        localStorage.setItem(TOKEN_KEY, apiToken.value.trim());
-        setStatus("Token saved.");
-      });
 
       document.getElementById("startBotBtn").addEventListener("click", async () => {
         try {
@@ -247,7 +277,32 @@ async fn bot_detail_page(
 </html>
 "#
     .replace("__BOT_ID__", &bot_escaped);
+
     Ok(Html(html))
+}
+
+fn render_login_page(error: Option<&str>) -> String {
+    let error_html = error
+        .map(|text| format!(r#"<p style="color:#b00020;">{}</p>"#, escape_html(text)))
+        .unwrap_or_default();
+
+    format!(
+        r#"
+<!doctype html>
+<html>
+  <head><title>Ayiou Login</title></head>
+  <body>
+    <h1>Sign In with Token</h1>
+    {error_html}
+    <form method="post" action="/ui/login">
+      <label for="token">Token</label>
+      <input id="token" name="token" type="password" />
+      <button type="submit">Sign In</button>
+    </form>
+  </body>
+</html>
+"#
+    )
 }
 
 fn escape_html(input: &str) -> String {
