@@ -73,6 +73,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ayiou-admin-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ayiou-macros"
 version = "0.1.0"
 dependencies = [

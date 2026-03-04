@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "ayiou-admin-proto",
     "ayiou",
     "ayiou-macros",
     "examples/my_bot",
