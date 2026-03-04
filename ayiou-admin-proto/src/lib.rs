@@ -26,6 +26,13 @@ pub enum AdminCommand {
         content: String,
         expected_version: Option<u64>,
     },
+    LoadWasmPlugin {
+        plugin_name: String,
+        module_path: String,
+    },
+    UnloadWasmPlugin {
+        plugin_name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,5 +73,21 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let back: CommandEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back.command_id, "cmd-1");
+    }
+
+    #[test]
+    fn wasm_command_envelope_json_roundtrip() {
+        let msg = CommandEnvelope::new(
+            "cmd-2",
+            "bot-a",
+            AdminCommand::LoadWasmPlugin {
+                plugin_name: "echo".into(),
+                module_path: "/tmp/echo.wasm".into(),
+            },
+        );
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: CommandEnvelope = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back.command, AdminCommand::LoadWasmPlugin { .. }));
     }
 }
