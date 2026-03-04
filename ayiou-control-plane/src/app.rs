@@ -18,6 +18,7 @@ use crate::{
     observability::{MetricEvent, MetricPoint, MetricsStore},
     plugin_service::{ConfigStore, InMemoryConfigStore},
     rbac,
+    webui,
 };
 
 #[derive(Clone)]
@@ -89,6 +90,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/bots/{id}/plugins/{name}/config",
             put(update_plugin_config),
         )
+        .merge(webui::ui_router())
         .with_state(state)
 }
 
@@ -121,6 +123,24 @@ pub fn test_app() -> Router {
         "viewer-token",
         &["metrics:read"],
     ))
+}
+
+pub fn test_app_with_bot(bot_id: &str) -> Router {
+    let state = AppState::single_user(
+        "admin",
+        "admin-token",
+        &["bot:start", "plugin:disable", "config:write", "metrics:read"],
+    );
+    state
+        .bot_registry()
+        .register(bot_id.to_string(), AgentSessionHandle::new(RecordingAgentSession::default()));
+    build_router(state)
+}
+
+impl AppState {
+    pub fn known_bots(&self) -> Vec<String> {
+        self.bot_registry.list_bot_ids()
+    }
 }
 
 async fn healthz() -> StatusCode {
