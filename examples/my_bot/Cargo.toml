@@ -6,13 +6,9 @@ edition = "2024"
 [dependencies]
 tokio = { version = "1.48", features = ["full"] }
 ayiou = { path = "../../ayiou" }
-ayiou-admin-proto = { path = "../../ayiou-admin-proto" }
-ayiou-agent = { path = "../../ayiou-agent" }
-ayiou-control-plane = { path = "../../ayiou-control-plane", default-features = false, features = ["sqlite-backend", "redis-backend", "postgres-backend"] }
 log = "0.4"
 pretty_env_logger = "0.5"
-axum = "0.8.6"
-async-trait = "0.1" # For the plugin trait
+async-trait = "0.1"
 anyhow = "1.0" # For Result
 regex = "1.12.2"
 ayiou-plugin-qweather = { path = "../../plugins/ayiou-plugin-qweather" }

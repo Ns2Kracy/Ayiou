@@ -1,0 +1,19 @@
+[package]
+name = "wtest_plugin_sdk"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ayiou-wasm-sdk = { path = "../../../../ayiou-wasm-sdk" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+[workspace]

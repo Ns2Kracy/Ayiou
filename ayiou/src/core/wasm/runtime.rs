@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path, str::FromStr, sync::Arc};
 
-use anyhow::{Context, Result, bail};
-use ayiou_wasm_sdk::{HostCall, abi};
+use anyhow::{Context, Result, anyhow, bail};
+use ayiou_wasm_sdk::{HostCall, ReplyAction, abi};
 use tokio::sync::{Mutex, RwLock};
 use wasmtime::{Engine, Instance, Module, Store};
 
@@ -37,10 +37,10 @@ impl WasmRuntime {
             normalize_wasm_bytes(&raw).with_context(|| format!("decode wasm module {}", path))?;
 
         let module = Module::new(&self.engine, wasm)
-            .with_context(|| format!("compile wasm module {}", path))?;
+            .map_err(|err| anyhow!("compile wasm module {}: {}", path, err))?;
         let mut store = Store::new(&self.engine, ());
         let instance = Instance::new(&mut store, &module, &[])
-            .with_context(|| format!("instantiate wasm module {}", path))?;
+            .map_err(|err| anyhow!("instantiate wasm module {}: {}", path, err))?;
 
         validate_abi(&mut store, &instance)?;
 
@@ -65,53 +65,77 @@ impl WasmRuntime {
     }
 
     pub async fn dispatch_command(&self, command: &str, args: &str) -> Result<bool> {
+        Ok(!self.dispatch_command_calls(command, args).await?.is_empty())
+    }
+
+    pub async fn dispatch_command_calls(&self, command: &str, args: &str) -> Result<Vec<HostCall>> {
         let modules = snapshot_modules(&self.modules).await;
-        let mut any = false;
+        let mut calls = Vec::new();
 
         for module in modules {
-            if module.call_command(command, args).await? {
-                any = true;
-                self.host
-                    .on_call(HostCall::command(module.name.clone(), command, args))
-                    .await?;
+            let outcome = module.call_command(command, args).await?;
+            if outcome.handled {
+                let mut call = HostCall::command(module.name.clone(), command, args);
+                if let Some(reply) = outcome.reply {
+                    call = call.with_reply(reply);
+                }
+
+                self.host.on_call(call.clone()).await?;
+                calls.push(call);
             }
         }
 
-        Ok(any)
+        Ok(calls)
     }
 
     pub async fn dispatch_regex(&self, text: &str) -> Result<bool> {
+        Ok(!self.dispatch_regex_calls(text).await?.is_empty())
+    }
+
+    pub async fn dispatch_regex_calls(&self, text: &str) -> Result<Vec<HostCall>> {
         let modules = snapshot_modules(&self.modules).await;
-        let mut any = false;
+        let mut calls = Vec::new();
 
         for module in modules {
-            if module.call_regex(text).await? {
-                any = true;
-                self.host
-                    .on_call(HostCall::regex(module.name.clone(), text))
-                    .await?;
+            let outcome = module.call_regex(text).await?;
+            if outcome.handled {
+                let mut call = HostCall::regex(module.name.clone(), text);
+                if let Some(reply) = outcome.reply {
+                    call = call.with_reply(reply);
+                }
+
+                self.host.on_call(call.clone()).await?;
+                calls.push(call);
             }
         }
 
-        Ok(any)
+        Ok(calls)
     }
 
     pub async fn trigger_cron(&self, expr: &str) -> Result<bool> {
+        Ok(!self.trigger_cron_calls(expr).await?.is_empty())
+    }
+
+    pub async fn trigger_cron_calls(&self, expr: &str) -> Result<Vec<HostCall>> {
         let _ = cron::Schedule::from_str(expr).context("invalid runtime cron expression")?;
 
         let modules = snapshot_modules(&self.modules).await;
-        let mut any = false;
+        let mut calls = Vec::new();
 
         for module in modules {
-            if module.call_cron(expr).await? {
-                any = true;
-                self.host
-                    .on_call(HostCall::cron(module.name.clone(), expr))
-                    .await?;
+            let outcome = module.call_cron(expr).await?;
+            if outcome.handled {
+                let mut call = HostCall::cron(module.name.clone(), expr);
+                if let Some(reply) = outcome.reply {
+                    call = call.with_reply(reply);
+                }
+
+                self.host.on_call(call.clone()).await?;
+                calls.push(call);
             }
         }
 
-        Ok(any)
+        Ok(calls)
     }
 }
 
@@ -125,74 +149,109 @@ struct LoadedInstance {
     instance: Instance,
 }
 
+struct DispatchOutcome {
+    handled: bool,
+    reply: Option<ReplyAction>,
+}
+
+impl DispatchOutcome {
+    fn not_handled() -> Self {
+        Self {
+            handled: false,
+            reply: None,
+        }
+    }
+}
+
 impl LoadedModule {
-    async fn call_command(&self, command: &str, args: &str) -> Result<bool> {
+    async fn call_command(&self, command: &str, args: &str) -> Result<DispatchOutcome> {
         let mut guard = self.inner.lock().await;
         guard.call_command(command, args)
     }
 
-    async fn call_regex(&self, text: &str) -> Result<bool> {
+    async fn call_regex(&self, text: &str) -> Result<DispatchOutcome> {
         let mut guard = self.inner.lock().await;
         guard.call_regex(text)
     }
 
-    async fn call_cron(&self, expr: &str) -> Result<bool> {
+    async fn call_cron(&self, expr: &str) -> Result<DispatchOutcome> {
         let mut guard = self.inner.lock().await;
         guard.call_cron(expr)
     }
 }
 
 impl LoadedInstance {
-    fn call_command(&mut self, command: &str, args: &str) -> Result<bool> {
+    fn call_command(&mut self, command: &str, args: &str) -> Result<DispatchOutcome> {
         let Some(func) = self
             .instance
             .get_func(&mut self.store, abi::ON_COMMAND_EXPORT)
         else {
-            return Ok(false);
+            return Ok(DispatchOutcome::not_handled());
         };
 
         let func = func
             .typed::<(i32, i32, i32, i32), i32>(&self.store)
-            .context("type-check command export")?;
+            .map_err(|err| anyhow!("type-check command export: {}", err))?;
         let (cmd_ptr, cmd_len) = self.write_utf8(command)?;
         let (args_ptr, args_len) = self.write_utf8(args)?;
         let result = func
             .call(&mut self.store, (cmd_ptr, cmd_len, args_ptr, args_len))
-            .context("call command export")?;
-        Ok(result != 0)
+            .map_err(|err| anyhow!("call command export: {}", err))?;
+        if result == 0 {
+            return Ok(DispatchOutcome::not_handled());
+        }
+
+        Ok(DispatchOutcome {
+            handled: true,
+            reply: self.take_reply()?,
+        })
     }
 
-    fn call_regex(&mut self, text: &str) -> Result<bool> {
+    fn call_regex(&mut self, text: &str) -> Result<DispatchOutcome> {
         let Some(func) = self
             .instance
             .get_func(&mut self.store, abi::ON_REGEX_EXPORT)
         else {
-            return Ok(false);
+            return Ok(DispatchOutcome::not_handled());
         };
 
         let func = func
             .typed::<(i32, i32), i32>(&self.store)
-            .context("type-check regex export")?;
+            .map_err(|err| anyhow!("type-check regex export: {}", err))?;
         let (ptr, len) = self.write_utf8(text)?;
         let result = func
             .call(&mut self.store, (ptr, len))
-            .context("call regex export")?;
-        Ok(result != 0)
+            .map_err(|err| anyhow!("call regex export: {}", err))?;
+        if result == 0 {
+            return Ok(DispatchOutcome::not_handled());
+        }
+
+        Ok(DispatchOutcome {
+            handled: true,
+            reply: self.take_reply()?,
+        })
     }
 
-    fn call_cron(&mut self, expr: &str) -> Result<bool> {
+    fn call_cron(&mut self, expr: &str) -> Result<DispatchOutcome> {
         let Some(func) = self.instance.get_func(&mut self.store, abi::ON_CRON_EXPORT) else {
-            return Ok(false);
+            return Ok(DispatchOutcome::not_handled());
         };
 
         let func = func
             .typed::<(i32, i32), i32>(&self.store)
-            .context("type-check cron export")?;
+            .map_err(|err| anyhow!("type-check cron export: {}", err))?;
         let (ptr, len) = self.write_utf8(expr)?;
         let result = func
             .call(&mut self.store, (ptr, len))
-            .context("call cron export")?;
-        Ok(result != 0)
+            .map_err(|err| anyhow!("call cron export: {}", err))?;
+        if result == 0 {
+            return Ok(DispatchOutcome::not_handled());
+        }
+
+        Ok(DispatchOutcome {
+            handled: true,
+            reply: self.take_reply()?,
+        })
     }
 
     fn write_utf8(&mut self, text: &str) -> Result<(i32, i32)> {
@@ -202,10 +261,10 @@ impl LoadedInstance {
         let alloc = self
             .instance
             .get_typed_func::<i32, i32>(&mut self.store, abi::ALLOC_EXPORT)
-            .context("get alloc export")?;
+            .map_err(|err| anyhow!("get alloc export: {}", err))?;
         let ptr = alloc
             .call(&mut self.store, len)
-            .context("call alloc export")?;
+            .map_err(|err| anyhow!("call alloc export: {}", err))?;
         if ptr < 0 {
             bail!("invalid allocated pointer {}", ptr);
         }
@@ -219,6 +278,42 @@ impl LoadedInstance {
             .context("write module memory")?;
 
         Ok((ptr, len))
+    }
+
+    fn take_reply(&mut self) -> Result<Option<ReplyAction>> {
+        let Some(func) = self
+            .instance
+            .get_func(&mut self.store, abi::TAKE_REPLY_EXPORT)
+        else {
+            return Ok(None);
+        };
+
+        let func = func
+            .typed::<(), i64>(&self.store)
+            .map_err(|err| anyhow!("type-check take_reply export: {}", err))?;
+        let packed = func
+            .call(&mut self.store, ())
+            .map_err(|err| anyhow!("call take_reply export: {}", err))?;
+        if packed == 0 {
+            return Ok(None);
+        }
+
+        let (ptr, len) = unpack_ptr_len(packed)?;
+        let ptr = usize::try_from(ptr).context("reply pointer must be positive")?;
+        let len = usize::try_from(len).context("reply length must be positive")?;
+
+        let memory = self
+            .instance
+            .get_memory(&mut self.store, abi::MEMORY_EXPORT)
+            .context("get memory export")?;
+        let mut payload = vec![0_u8; len];
+        memory
+            .read(&self.store, ptr, &mut payload)
+            .context("read reply payload from module memory")?;
+
+        let reply =
+            serde_json::from_slice(&payload).context("decode wasm reply payload as JSON")?;
+        Ok(Some(reply))
     }
 }
 
@@ -260,6 +355,23 @@ fn normalize_wasm_bytes(raw: &[u8]) -> Result<Vec<u8>> {
 
     let bytes = wat::parse_bytes(raw).context("parse WAT source")?;
     Ok(bytes.into_owned())
+}
+
+fn unpack_ptr_len(packed: i64) -> Result<(i32, i32)> {
+    let packed = packed as u64;
+    let ptr = (packed & 0xFFFF_FFFF) as u32;
+    let len = (packed >> 32) as u32;
+
+    let ptr = i32::try_from(ptr).context("reply pointer overflow i32")?;
+    let len = i32::try_from(len).context("reply length overflow i32")?;
+    if ptr < 0 {
+        bail!("invalid reply pointer {}", ptr);
+    }
+    if len < 0 {
+        bail!("invalid reply length {}", len);
+    }
+
+    Ok((ptr, len))
 }
 
 fn fallback_name(path: &str) -> String {

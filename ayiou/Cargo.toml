@@ -23,7 +23,7 @@ regex = "1"
 cron = "0.15"
 chrono = "0.4"
 toml = "0.8"
-wasmtime = "38.0.3"
+wasmtime = "42.0.1"
 wat = "1.241.2"
 
 [dev-dependencies]

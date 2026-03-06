@@ -75,7 +75,7 @@ async fn main() {
     let bot = ConsoleBot::console()
         .register_plugin(HelpPlugin)
         .register_plugin(EchoPlugin)
-        .register_plugin(ToolboxPlugin::default());
+        .register_plugin(ToolboxPlugin);
 
     println!("Console bot started. Type /help");
     bot.run_stdio().await;
