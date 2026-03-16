@@ -108,7 +108,6 @@ impl<A: Adapter> Bot<A> {
     }
 
     pub async fn run(mut self, adapter: A) {
-        pretty_env_logger::try_init().ok();
         info!("Starting Bot...");
 
         let adapter_runtime = adapter.start_with_runtime().await;

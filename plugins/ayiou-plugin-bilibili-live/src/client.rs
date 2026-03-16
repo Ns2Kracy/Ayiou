@@ -70,7 +70,11 @@ impl LiveClient for BilibiliLiveClient {
             bail!("bilibili streamer {} has no live room", uid);
         }
 
-        Ok(ResolveStreamer { uid, uname, room_id })
+        Ok(ResolveStreamer {
+            uid,
+            uname,
+            room_id,
+        })
     }
 
     async fn fetch_live_status(&self, room_id: u64) -> Result<LiveStatus> {
@@ -94,8 +98,8 @@ impl LiveClient for BilibiliLiveClient {
             .ok_or_else(|| anyhow!("bilibili room info missing data"))?;
         let is_live = get_u64(data, "live_status").unwrap_or(0) > 0;
         let title = get_optional_string(data, "title").unwrap_or_default();
-        let cover_url = get_optional_string(data, "user_cover")
-            .or_else(|| get_optional_string(data, "cover"));
+        let cover_url =
+            get_optional_string(data, "user_cover").or_else(|| get_optional_string(data, "cover"));
         let live_started_at = get_optional_string(data, "live_time")
             .filter(|value| !value.is_empty() && value != "0000-00-00 00:00:00");
 
@@ -131,7 +135,10 @@ fn get_string(value: &Value, key: &str) -> Result<String> {
 }
 
 fn get_optional_string(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(ToString::to_string)
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 fn get_u64(value: &Value, key: &str) -> Result<u64> {

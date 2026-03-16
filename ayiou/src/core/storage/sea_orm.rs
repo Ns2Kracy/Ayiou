@@ -2,7 +2,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::entity::prelude::*;
-use sea_orm::{ActiveModelTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ConnectOptions, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+};
 
 use crate::core::storage::Store;
 

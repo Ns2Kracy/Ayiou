@@ -23,3 +23,5 @@ target
 .serena
 .worktrees/
 .alma-snapshots
+*.sqlite
+*.db

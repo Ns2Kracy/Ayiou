@@ -21,19 +21,23 @@ impl SubscriptionRepo {
     }
 
     pub async fn subscribe_group(&self, group_id: i64, uid: u64) -> Result<bool> {
-        self.subscribe_target(&group_target_key(group_id), uid).await
+        self.subscribe_target(&group_target_key(group_id), uid)
+            .await
     }
 
     pub async fn subscribe_private(&self, user_id: i64, uid: u64) -> Result<bool> {
-        self.subscribe_target(&private_target_key(user_id), uid).await
+        self.subscribe_target(&private_target_key(user_id), uid)
+            .await
     }
 
     pub async fn unsubscribe_group(&self, group_id: i64, uid: u64) -> Result<bool> {
-        self.unsubscribe_target(&group_target_key(group_id), uid).await
+        self.unsubscribe_target(&group_target_key(group_id), uid)
+            .await
     }
 
     pub async fn unsubscribe_private(&self, user_id: i64, uid: u64) -> Result<bool> {
-        self.unsubscribe_target(&private_target_key(user_id), uid).await
+        self.unsubscribe_target(&private_target_key(user_id), uid)
+            .await
     }
 
     pub async fn list_group(&self, group_id: i64) -> Result<Vec<u64>> {
@@ -49,7 +53,9 @@ impl SubscriptionRepo {
     }
 
     pub async fn set_streamer_state(&self, state: &StreamerState) -> Result<()> {
-        self.store.set_json(&streamer_state_key(state.uid), state).await
+        self.store
+            .set_json(&streamer_state_key(state.uid), state)
+            .await
     }
 
     pub async fn subscriptions_by_uid(&self) -> Result<BTreeMap<u64, Vec<NotifyTarget>>> {
@@ -58,7 +64,10 @@ impl SubscriptionRepo {
         for key in self.store.list_prefix(TARGET_GROUP_PREFIX).await? {
             if let Some(group_id) = parse_group_target_key(&key) {
                 for uid in self.list_target(&key).await? {
-                    mapping.entry(uid).or_default().push(NotifyTarget::Group(group_id));
+                    mapping
+                        .entry(uid)
+                        .or_default()
+                        .push(NotifyTarget::Group(group_id));
                 }
             }
         }
@@ -66,7 +75,10 @@ impl SubscriptionRepo {
         for key in self.store.list_prefix(TARGET_PRIVATE_PREFIX).await? {
             if let Some(user_id) = parse_private_target_key(&key) {
                 for uid in self.list_target(&key).await? {
-                    mapping.entry(uid).or_default().push(NotifyTarget::Private(user_id));
+                    mapping
+                        .entry(uid)
+                        .or_default()
+                        .push(NotifyTarget::Private(user_id));
                 }
             }
         }

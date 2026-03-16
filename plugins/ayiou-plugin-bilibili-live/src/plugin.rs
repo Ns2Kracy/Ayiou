@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use chrono::Utc;
 use log::warn;
 
 use ayiou::adapter::onebot::v11::ctx::Ctx;
@@ -12,8 +13,9 @@ use ayiou::core::plugin_host::PluginHost;
 use ayiou::core::scheduler::schedule_job;
 use ayiou::core::storage::Store;
 
-use crate::client::{BilibiliLiveClient, LiveClient};
+use crate::client::{BilibiliLiveClient, LiveClient, LiveStatus, ResolveStreamer};
 use crate::command::CommandAction;
+use crate::model::StreamerState;
 use crate::poller::Poller;
 use crate::repo::SubscriptionRepo;
 
@@ -61,19 +63,14 @@ impl BilibiliLivePlugin {
             None => repo.subscribe_private(ctx.user_id(), uid).await?,
         };
 
-        let mut reply = if inserted {
-            format!("已订阅 {}({})", streamer.uname, uid)
-        } else {
-            format!("已订阅 {}({})，无需重复添加", streamer.uname, uid)
-        };
-
-        if let Ok(status) = self.client.fetch_live_status(streamer.room_id).await
-            && status.is_live
-        {
-            reply.push_str("\n当前正在直播");
+        let live_status = self.client.fetch_live_status(streamer.room_id).await.ok();
+        if let Some(status) = live_status.as_ref() {
+            repo.set_streamer_state(&streamer_state_snapshot(&streamer, status))
+                .await?;
         }
 
-        ctx.reply_text(reply).await
+        ctx.reply_text(build_sub_reply(inserted, &streamer, live_status.as_ref()))
+            .await
     }
 
     async fn handle_unsub(&self, ctx: &Ctx, uid: u64) -> Result<()> {
@@ -108,10 +105,14 @@ impl BilibiliLivePlugin {
         for uid in uids {
             if let Some(state) = repo.get_streamer_state(uid).await? {
                 let name = state.uname.unwrap_or_else(|| uid.to_string());
-                let status = if state.is_live { "直播中" } else { "未开播" };
+                let status = if state.is_live {
+                    "直播中"
+                } else {
+                    "未开播"
+                };
                 lines.push(format!("{}({}) - {}", name, uid, status));
             } else {
-                lines.push(format!("{}", uid));
+                lines.push(uid.to_string());
             }
         }
 
@@ -185,4 +186,106 @@ fn poll_interval_from_env() -> Duration {
         .filter(|secs| *secs > 0)
         .map(Duration::from_secs)
         .unwrap_or_else(|| Duration::from_secs(30))
+}
+
+fn build_sub_reply(
+    inserted: bool,
+    streamer: &ResolveStreamer,
+    live_status: Option<&LiveStatus>,
+) -> String {
+    let mut reply = if inserted {
+        format!("已订阅 {}({})", streamer.uname, streamer.uid)
+    } else {
+        format!("已订阅 {}({})，无需重复添加", streamer.uname, streamer.uid)
+    };
+
+    if let Some(status) = live_status.filter(|status| status.is_live) {
+        reply.push_str("\n当前正在直播");
+        if !status.title.is_empty() {
+            reply.push_str(&format!("\n标题：{}", status.title));
+        }
+        reply.push_str(&format!("\n链接：{}", status.live_url));
+    }
+
+    reply
+}
+
+fn streamer_state_snapshot(streamer: &ResolveStreamer, status: &LiveStatus) -> StreamerState {
+    StreamerState {
+        uid: streamer.uid,
+        room_id: Some(streamer.room_id),
+        uname: Some(streamer.uname.clone()),
+        is_live: status.is_live,
+        title: Some(status.title.clone()),
+        live_url: Some(status.live_url.clone()),
+        cover_url: status.cover_url.clone(),
+        last_live_started_at: status.live_started_at.clone(),
+        last_seen_at: Some(Utc::now().to_rfc3339()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_sub_reply, streamer_state_snapshot};
+    use crate::client::{LiveStatus, ResolveStreamer};
+
+    #[test]
+    fn sub_reply_merges_live_details() {
+        let streamer = ResolveStreamer {
+            uid: 44_235_058,
+            uname: "JDG-mmonk1".to_string(),
+            room_id: 8_948_888,
+        };
+        let status = LiveStatus {
+            room_id: 8_948_888,
+            is_live: true,
+            title: "和菠萝双排亚服".to_string(),
+            live_url: "https://live.bilibili.com/8948888".to_string(),
+            cover_url: None,
+            live_started_at: Some("2026-03-16 20:54:17".to_string()),
+        };
+
+        assert_eq!(
+            build_sub_reply(true, &streamer, Some(&status)),
+            "已订阅 JDG-mmonk1(44235058)\n当前正在直播\n标题：和菠萝双排亚服\n链接：https://live.bilibili.com/8948888"
+        );
+    }
+
+    #[test]
+    fn snapshot_keeps_current_live_status() {
+        let streamer = ResolveStreamer {
+            uid: 42,
+            uname: "主播A".to_string(),
+            room_id: 9_001,
+        };
+        let status = LiveStatus {
+            room_id: 9_001,
+            is_live: true,
+            title: "测试直播".to_string(),
+            live_url: "https://live.bilibili.com/9001".to_string(),
+            cover_url: Some("https://example.com/cover.jpg".to_string()),
+            live_started_at: Some("2026-03-16T10:00:00Z".to_string()),
+        };
+
+        let snapshot = streamer_state_snapshot(&streamer, &status);
+
+        assert_eq!(snapshot.uid, 42);
+        assert_eq!(snapshot.room_id, Some(9_001));
+        assert_eq!(snapshot.uname.as_deref(), Some("主播A"));
+        assert!(snapshot.is_live);
+        assert_eq!(snapshot.title.as_deref(), Some("测试直播"));
+        assert_eq!(
+            snapshot.live_url.as_deref(),
+            Some("https://live.bilibili.com/9001")
+        );
+        assert_eq!(
+            snapshot.cover_url.as_deref(),
+            Some("https://example.com/cover.jpg")
+        );
+        assert_eq!(
+            snapshot.last_live_started_at.as_deref(),
+            Some("2026-03-16T10:00:00Z")
+        );
+        assert!(snapshot.last_seen_at.is_some());
+    }
 }

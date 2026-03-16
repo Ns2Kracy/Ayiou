@@ -116,27 +116,25 @@ impl WsDriver {
                         }
                     }
                 }
-                Err(e) => {
-                    match &e {
-                        WsError::Http(response)
-                            if response.status().as_u16() == 401
-                                || response.status().as_u16() == 403 =>
-                        {
-                            warn!(
-                                "Connection to {} failed with status {} (access_token may be invalid), reconnecting in {}s...",
-                                self.redacted_url(),
-                                response.status(),
-                                retry_delay.as_secs()
-                            );
-                        }
-                        _ => warn!(
-                            "Connection to {} failed: {}, Reconnecting in {}s...",
+                Err(e) => match &e {
+                    WsError::Http(response)
+                        if response.status().as_u16() == 401
+                            || response.status().as_u16() == 403 =>
+                    {
+                        warn!(
+                            "Connection to {} failed with status {} (access_token may be invalid), reconnecting in {}s...",
                             self.redacted_url(),
-                            e,
+                            response.status(),
                             retry_delay.as_secs()
-                        ),
+                        );
                     }
-                }
+                    _ => warn!(
+                        "Connection to {} failed: {}, Reconnecting in {}s...",
+                        self.redacted_url(),
+                        e,
+                        retry_delay.as_secs()
+                    ),
+                },
             }
 
             tokio::time::sleep(retry_delay).await;

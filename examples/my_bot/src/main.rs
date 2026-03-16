@@ -5,7 +5,8 @@ use ayiou::{
     NoopWasmHost, RuntimeController, RuntimeState, WasmRuntime,
     adapter::onebot::v11::{adapter::OneBotV11Adapter, ctx::Ctx},
     core::{
-        DispatchOptions, Dispatcher, PluginManager, PluginRuntimeState, adapter::Adapter,
+        DispatchOptions, Dispatcher, PluginManager, PluginRuntimeState,
+        adapter::Adapter,
         plugin_host::PluginHost,
         scheduler::{Scheduler, TokioScheduler},
         storage::{SeaOrmStore, Store},
@@ -36,8 +37,10 @@ impl MyBotRuntimeOps {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    unsafe {
-        std::env::set_var("RUST_LOG", "DEBUG");
+    if std::env::var_os("RUST_LOG").is_none() {
+        unsafe {
+            std::env::set_var("RUST_LOG", "DEBUG");
+        }
     }
 
     pretty_env_logger::try_init().ok();
@@ -112,17 +115,17 @@ async fn run_managed_onebot_bot(
     } else {
         info!(
             "OneBot token auth: {}",
-            if token_auth_enabled { "enabled" } else { "disabled" }
+            if token_auth_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
         );
         OneBotV11Adapter::new(onebot_ws_url.clone())
     };
 
     let adapter_runtime = adapter.start_with_runtime().await;
-    let plugin_host = PluginHost::new(
-        scheduler.clone(),
-        store,
-        adapter_runtime.sender.clone(),
-    );
+    let plugin_host = PluginHost::new(scheduler.clone(), store, adapter_runtime.sender.clone());
     for plugin in built.iter() {
         plugin.start(plugin_host.clone()).await?;
     }

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use ayiou::{Bot, ConsoleBot};
 use ayiou::adapter::console::adapter::ConsoleAdapter;
 use ayiou::core::storage::{MemoryStore, Store};
+use ayiou::{Bot, ConsoleBot};
 
 #[test]
 fn bot_uses_memory_store_by_default() {

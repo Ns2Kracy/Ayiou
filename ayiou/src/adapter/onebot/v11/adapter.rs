@@ -6,12 +6,12 @@ use log::{info, warn};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    adapter::onebot::v11::{ctx::Ctx, sender::OneBotSender},
     adapter::onebot::v11::model::{ApiResponse, Message, MessageEvent, OneBotEvent, echo_key},
+    adapter::onebot::v11::{ctx::Ctx, sender::OneBotSender},
     core::{
         adapter::{Adapter, AdapterRuntime, ProtocolAdapter},
-        plugin_host::MessageSender,
         driver::Driver,
+        plugin_host::MessageSender,
     },
     driver::wsclient::WsDriver,
 };
@@ -169,7 +169,9 @@ impl Adapter for OneBotV11Adapter {
             });
 
             while let Some(raw) = raw_rx.recv().await {
-                if let Some(ctx) = protocol.handle_packet(raw, protocol_outgoing_tx.clone()).await
+                if let Some(ctx) = protocol
+                    .handle_packet(raw, protocol_outgoing_tx.clone())
+                    .await
                     && ctx_tx.send(ctx).await.is_err()
                 {
                     break;
