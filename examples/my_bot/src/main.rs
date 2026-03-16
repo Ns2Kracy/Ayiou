@@ -42,7 +42,6 @@ async fn main() -> Result<()> {
             std::env::set_var("RUST_LOG", "DEBUG");
         }
     }
-
     pretty_env_logger::try_init().ok();
 
     let onebot_ws_url = onebot_ws_url_from_env();

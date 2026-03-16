@@ -3,12 +3,11 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use async_trait::async_trait;
 use chrono::Utc;
 use log::warn;
 
 use ayiou::adapter::onebot::v11::ctx::Ctx;
-use ayiou::core::plugin::{Plugin, PluginMetadata};
+use ayiou::adapter::onebot::v11::model::{Message, MessageSegment};
 use ayiou::core::plugin_host::PluginHost;
 use ayiou::core::scheduler::schedule_job;
 use ayiou::core::storage::Store;
@@ -19,6 +18,13 @@ use crate::model::StreamerState;
 use crate::poller::Poller;
 use crate::repo::SubscriptionRepo;
 
+#[derive(ayiou::Plugin)]
+#[plugin(
+    name = "blive",
+    description = "Bilibili live notification plugin",
+    start = "start_plugin",
+    handler = "handle_command"
+)]
 pub struct BilibiliLivePlugin {
     client: Arc<dyn LiveClient>,
     poll_interval: Duration,
@@ -69,7 +75,7 @@ impl BilibiliLivePlugin {
                 .await?;
         }
 
-        ctx.reply_text(build_sub_reply(inserted, &streamer, live_status.as_ref()))
+        ctx.reply(build_sub_message(inserted, &streamer, live_status.as_ref()))
             .await
     }
 
@@ -131,17 +137,8 @@ impl BilibiliLivePlugin {
     }
 }
 
-#[async_trait]
-impl Plugin<Ctx> for BilibiliLivePlugin {
-    fn meta(&self) -> PluginMetadata {
-        PluginMetadata::new("blive").description("Bilibili live notification plugin")
-    }
-
-    fn commands(&self) -> Vec<String> {
-        vec!["blive".to_string()]
-    }
-
-    async fn start(&self, host: PluginHost<Ctx>) -> Result<()> {
+impl BilibiliLivePlugin {
+    async fn start_plugin(&self, host: PluginHost<Ctx>) -> Result<()> {
         let store = host.store();
         let _ = self.store.get_or_init(|| store.clone());
 
@@ -166,7 +163,7 @@ impl Plugin<Ctx> for BilibiliLivePlugin {
         Ok(())
     }
 
-    async fn handle(&self, ctx: &Ctx) -> Result<bool> {
+    async fn handle_command(&self, ctx: &Ctx) -> Result<bool> {
         let args = ctx.command_args().unwrap_or_default();
         match CommandAction::parse(&args) {
             Ok(CommandAction::Sub { uid }) => self.handle_sub(ctx, uid).await?,
@@ -188,7 +185,19 @@ fn poll_interval_from_env() -> Duration {
         .unwrap_or_else(|| Duration::from_secs(30))
 }
 
-fn build_sub_reply(
+fn build_sub_message(
+    inserted: bool,
+    streamer: &ResolveStreamer,
+    live_status: Option<&LiveStatus>,
+) -> Message {
+    let text = build_sub_reply_text(inserted, streamer, live_status);
+    let cover_url = live_status
+        .filter(|status| status.is_live)
+        .and_then(|status| status.cover_url.as_deref());
+    message_with_optional_cover(text, cover_url)
+}
+
+fn build_sub_reply_text(
     inserted: bool,
     streamer: &ResolveStreamer,
     live_status: Option<&LiveStatus>,
@@ -210,6 +219,20 @@ fn build_sub_reply(
     reply
 }
 
+fn message_with_optional_cover(text: String, cover_url: Option<&str>) -> Message {
+    match cover_url.filter(|url| !url.is_empty()) {
+        Some(cover_url) => Message::Array(vec![
+            MessageSegment::Text { text },
+            MessageSegment::Image {
+                file: cover_url.to_string(),
+                image_type: None,
+                url: None,
+            },
+        ]),
+        None => Message::String(text),
+    }
+}
+
 fn streamer_state_snapshot(streamer: &ResolveStreamer, status: &LiveStatus) -> StreamerState {
     StreamerState {
         uid: streamer.uid,
@@ -226,7 +249,9 @@ fn streamer_state_snapshot(streamer: &ResolveStreamer, status: &LiveStatus) -> S
 
 #[cfg(test)]
 mod tests {
-    use super::{build_sub_reply, streamer_state_snapshot};
+    use super::{build_sub_message, build_sub_reply_text, streamer_state_snapshot};
+    use ayiou::adapter::onebot::v11::model::{Message, MessageSegment};
+
     use crate::client::{LiveStatus, ResolveStreamer};
 
     #[test]
@@ -246,9 +271,41 @@ mod tests {
         };
 
         assert_eq!(
-            build_sub_reply(true, &streamer, Some(&status)),
+            build_sub_reply_text(true, &streamer, Some(&status)),
             "已订阅 JDG-mmonk1(44235058)\n当前正在直播\n标题：和菠萝双排亚服\n链接：https://live.bilibili.com/8948888"
         );
+    }
+
+    #[test]
+    fn sub_message_includes_cover_image_when_available() {
+        let streamer = ResolveStreamer {
+            uid: 42,
+            uname: "主播A".to_string(),
+            room_id: 9_001,
+        };
+        let status = LiveStatus {
+            room_id: 9_001,
+            is_live: true,
+            title: "测试直播".to_string(),
+            live_url: "https://live.bilibili.com/9001".to_string(),
+            cover_url: Some("https://example.com/cover.jpg".to_string()),
+            live_started_at: Some("2026-03-16T10:00:00Z".to_string()),
+        };
+
+        match build_sub_message(true, &streamer, Some(&status)) {
+            Message::Array(segments) => {
+                assert!(matches!(
+                    &segments[0],
+                    MessageSegment::Text { text }
+                    if text == "已订阅 主播A(42)\n当前正在直播\n标题：测试直播\n链接：https://live.bilibili.com/9001"
+                ));
+                assert!(matches!(
+                    &segments[1],
+                    MessageSegment::Image { file, .. } if file == "https://example.com/cover.jpg"
+                ));
+            }
+            other => panic!("expected image message, got {other:?}"),
+        }
     }
 
     #[test]

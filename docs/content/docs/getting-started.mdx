@@ -1,9 +1,9 @@
 ---
 title: 快速开始
-description: 使用 Ayiou 构建你的第一个 Bot（OneBot / Console）
+description: 从零搭建一个 Ayiou Bot，并了解 OneBot 与 Console 两种常见上下文
 ---
 
-## 安装
+## 安装依赖
 
 ```toml
 [dependencies]
@@ -15,16 +15,16 @@ async-trait = "0.1"
 
 ## 核心概念
 
-- `Bot<A>`：平台无关的运行时
-- `Driver`：连接层
-- `Adapter / ProtocolAdapter`：协议转换层
-- `Plugin`：业务逻辑
+- `Bot<A>`：Bot 运行时
+- `Driver`：底层连接驱动
+- `Adapter / ProtocolAdapter`：协议适配层
+- `Plugin`：消息处理插件
 
 ## 示例 1：OneBot v11
 
 ```rust
-use ayiou::prelude::*;
 use ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter;
+use ayiou::prelude::*;
 
 #[derive(Plugin)]
 #[plugin(name = "echo", command = "echo", prefix = "/")]
@@ -52,7 +52,7 @@ async fn main() {
 }
 ```
 
-## 示例 2：Console（本地调试）
+## 示例 2：Console
 
 ```rust
 use ayiou::prelude::*;
@@ -79,7 +79,50 @@ async fn main() {
 }
 ```
 
-## 常用 Context API（OneBot）
+## 带状态插件
+
+如果你的插件不是 unit struct，而是需要自己的字段、构造函数或初始化逻辑，注册时直接传实例即可，例如：
+
+```rust
+use ayiou::prelude::*;
+use ayiou_plugin_bilibili_live::BilibiliLivePlugin;
+
+let bot = Bot::<ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter>::new()
+    .register_plugin(BilibiliLivePlugin::new());
+```
+
+## 进阶：自定义 start / handler
+
+`#[derive(Plugin)]` 默认会调用 `execute(&self, ctx)`。如果插件需要在启动阶段注册定时任务，或者想自己控制 `handle()` 的返回值，也可以这样写：
+
+```rust
+use ayiou::core::plugin_host::PluginHost;
+use ayiou::prelude::*;
+
+#[derive(Plugin)]
+#[plugin(
+    name = "ticker",
+    command = "tick",
+    start = "bootstrap",
+    handler = "dispatch"
+)]
+struct TickerPlugin;
+
+impl TickerPlugin {
+    async fn bootstrap(&self, _host: PluginHost<Ctx>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn dispatch(&self, ctx: &Ctx) -> anyhow::Result<bool> {
+        ctx.reply_text("tick").await?;
+        Ok(true)
+    }
+}
+```
+
+更完整的说明见“Plugin 宏”。
+
+## 常用 Context API
 
 - `ctx.text() -> String`
 - `ctx.user_id() -> i64`
@@ -89,6 +132,6 @@ async fn main() {
 
 ## 下一步
 
-- 多命令插件：见「命令系统与 DX」
-- 可持久化状态与会话：见「存储与会话」
-- 可观测接入：见「可观测能力」
+- 了解 `#[derive(Plugin)]` 与 `#[bot_plugin]` 的区别
+- 学习命令参数解析与多命令插件写法
+- 为插件接入存储、定时任务和主动消息

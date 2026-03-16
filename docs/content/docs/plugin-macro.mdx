@@ -1,9 +1,11 @@
 ---
 title: Plugin 宏
-description: 使用 #[derive(Plugin)] 快速定义插件
+description: 使用 #[derive(Plugin)] 快速定义插件，并在需要时接入自定义 start/handler
 ---
 
 `#[derive(Plugin)]` 会为你的结构体自动实现 `ayiou::core::plugin::Plugin`。
+
+默认情况下，你只需要实现一个 `execute(&self, ctx)` 方法；如果插件还需要启动阶段初始化、后台任务或自定义消息分发，现在也可以通过 `start` 和 `handler` 两个属性把宏生成的入口委托给你自己的方法。
 
 ## 基本用法
 
@@ -22,20 +24,22 @@ impl MyPlugin {
 }
 ```
 
-## 属性说明
+## 可用属性
 
 | 属性 | 说明 |
 |---|---|
-| `name` | 插件名（默认 struct 名小写） |
-| `description` | 描述 |
-| `version` | 版本（默认 `0.1.0`） |
-| `command` | 命令名（可重复） |
-| `prefix` | 插件命令前缀（可重复） |
-| `regex` | 正则匹配模式 |
-| `cron` | cron 表达式（仅表达元数据，不等于自动调度） |
+| `name` | 插件名称，默认是结构体名的小写 |
+| `description` | 插件描述 |
+| `version` | 插件版本，默认是 `0.1.0` |
+| `command` | 插件命令；如果未提供且不是 `regex/cron` 插件，则默认使用 `name` |
+| `prefix` | 该插件接受的命令前缀，可重复写多个 |
+| `regex` | 用于消息匹配的正则表达式 |
+| `cron` | 定时调度表达式 |
 | `context` | 自定义上下文类型 |
+| `start` | 自定义启动方法名，签名应为 `async fn xxx(&self, host: PluginHost<Ctx>) -> Result<()>` |
+| `handler` | 自定义处理方法名，签名应为 `async fn xxx(&self, ctx: &Ctx) -> Result<bool>` |
 
-## context 示例
+## 自定义 Context
 
 ```rust
 #[derive(Plugin)]
@@ -47,6 +51,63 @@ impl MyPlugin {
 struct ConsoleHelp;
 ```
 
-## 何时用 #[bot_plugin]
+## 高级用法
 
-`#[derive(Plugin)]` 适合简单插件。若一个插件管理多个命令，推荐使用 `#[bot_plugin] + #[command]`（见「命令系统与 DX」）。
+下面这种形式适合“有状态 + 有后台任务 + 自定义命令分发”的插件。像 B 站直播插件就是这种形态。
+
+```rust
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use ayiou::prelude::*;
+use ayiou::core::plugin_host::PluginHost;
+
+#[derive(Plugin)]
+#[plugin(
+    name = "blive",
+    description = "Bilibili live notification plugin",
+    start = "start_plugin",
+    handler = "handle_command"
+)]
+struct BilibiliLivePlugin {
+    poll_interval: Duration,
+    started: AtomicBool,
+    store: OnceLock<std::sync::Arc<dyn ayiou::core::storage::Store>>,
+}
+
+impl BilibiliLivePlugin {
+    async fn start_plugin(&self, host: PluginHost<Ctx>) -> anyhow::Result<()> {
+        let _ = self.store.get_or_init(|| host.store());
+
+        if self.started.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        // 在这里做启动初始化、注册定时任务等
+        Ok(())
+    }
+
+    async fn handle_command(&self, ctx: &Ctx) -> anyhow::Result<bool> {
+        let args = ctx.command_args().unwrap_or_default();
+        ctx.reply_text(format!("received: {}", args)).await?;
+        Ok(true)
+    }
+}
+```
+
+### 宏在这个模式下做了什么
+
+- `Plugin::start()` 会转发到你指定的 `start_plugin`
+- `Plugin::handle()` 会转发到你指定的 `handle_command`
+- `meta()`、`commands()`、`command_prefixes()` 等基础元数据仍然由宏自动生成
+
+## 什么时候用 `#[bot_plugin]`
+
+`#[derive(Plugin)]` 现在已经不只适合“最简单的单命令插件”，它也适合：
+
+- 单入口命令插件
+- 需要启动时初始化的插件
+- 需要自定义 `handle()` 的状态型插件
+
+但如果你的插件主要特点是“多个子命令 + 明确参数签名 + 希望自动参数解析”，仍然更推荐使用 `#[bot_plugin] + #[command]`。这套宏更适合做命令分发型插件，见“命令系统与 DX”。

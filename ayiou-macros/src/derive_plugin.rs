@@ -13,6 +13,8 @@ pub struct PluginAttrs {
     pub context_type: Option<syn::Type>,
     pub regex: Option<String>,
     pub cron: Option<String>,
+    pub start_method: Option<syn::Ident>,
+    pub handler_method: Option<syn::Ident>,
 }
 
 impl PluginAttrs {
@@ -98,6 +100,24 @@ impl PluginAttrs {
                         }) = value
                         {
                             result.cron = Some(s.value());
+                        }
+                    }
+                    Some("start") => {
+                        let value: Expr = meta.value()?.parse()?;
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(s), ..
+                        }) = value
+                        {
+                            result.start_method = Some(syn::parse_str(&s.value())?);
+                        }
+                    }
+                    Some("handler") => {
+                        let value: Expr = meta.value()?.parse()?;
+                        if let Expr::Lit(ExprLit {
+                            lit: Lit::Str(s), ..
+                        }) = value
+                        {
+                            result.handler_method = Some(syn::parse_str(&s.value())?);
                         }
                     }
                     _ => {}
@@ -244,6 +264,31 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
         quote! {}
     };
 
+    let start_impl = if let Some(start_method) = &attrs.start_method {
+        quote! {
+            async fn start(&self, host: ayiou::core::plugin_host::PluginHost<#ctx_type>) -> anyhow::Result<()> {
+                self.#start_method(host).await
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    let handle_impl = if let Some(handler_method) = &attrs.handler_method {
+        quote! {
+            async fn handle(&self, ctx: &#ctx_type) -> anyhow::Result<bool> {
+                self.#handler_method(ctx).await
+            }
+        }
+    } else {
+        quote! {
+            async fn handle(&self, ctx: &#ctx_type) -> anyhow::Result<bool> {
+                self.execute(ctx).await?;
+                Ok(true)
+            }
+        }
+    };
+
     let expanded = quote! {
         #[async_trait::async_trait]
         impl #impl_generics ayiou::core::plugin::Plugin<#ctx_type> for #name #ty_generics #where_clause {
@@ -263,10 +308,9 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
 
             #matches_impl
 
-            async fn handle(&self, ctx: &#ctx_type) -> anyhow::Result<bool> {
-                self.execute(ctx).await?;
-                Ok(true)
-            }
+            #start_impl
+
+            #handle_impl
         }
 
         #cron_method

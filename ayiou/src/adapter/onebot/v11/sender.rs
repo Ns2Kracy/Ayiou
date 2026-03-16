@@ -30,19 +30,13 @@ impl OneBotSender {
 
 #[async_trait]
 impl MessageSender for OneBotSender {
-    async fn send_private_text(&self, user_id: i64, text: &str) -> Result<()> {
-        self.send_action(OneBotAction::SendPrivateMsg {
-            user_id,
-            message: Message::String(text.to_string()),
-        })
-        .await
+    async fn send_private_message(&self, user_id: i64, message: Message) -> Result<()> {
+        self.send_action(OneBotAction::SendPrivateMsg { user_id, message })
+            .await
     }
 
-    async fn send_group_text(&self, group_id: i64, text: &str) -> Result<()> {
-        self.send_action(OneBotAction::SendGroupMsg {
-            group_id,
-            message: Message::String(text.to_string()),
-        })
-        .await
+    async fn send_group_message(&self, group_id: i64, message: Message) -> Result<()> {
+        self.send_action(OneBotAction::SendGroupMsg { group_id, message })
+            .await
     }
 }

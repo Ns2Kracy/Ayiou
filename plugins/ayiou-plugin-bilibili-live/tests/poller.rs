@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use async_trait::async_trait;
 
+use ayiou::adapter::onebot::v11::model::{Message, MessageSegment};
 use ayiou::core::plugin_host::MessageSender;
 use ayiou::core::storage::MemoryStore;
 use ayiou_plugin_bilibili_live::client::{LiveClient, LiveStatus, ResolveStreamer};
@@ -13,26 +14,26 @@ use ayiou_plugin_bilibili_live::repo::SubscriptionRepo;
 
 #[derive(Default, Clone)]
 struct RecordingSender {
-    group_messages: Arc<Mutex<Vec<(i64, String)>>>,
+    group_messages: Arc<Mutex<Vec<(i64, Message)>>>,
 }
 
 impl RecordingSender {
-    fn group_messages(&self) -> Vec<(i64, String)> {
+    fn group_messages(&self) -> Vec<(i64, Message)> {
         self.group_messages.lock().unwrap().clone()
     }
 }
 
 #[async_trait]
 impl MessageSender for RecordingSender {
-    async fn send_private_text(&self, _user_id: i64, _text: &str) -> Result<()> {
+    async fn send_private_message(&self, _user_id: i64, _message: Message) -> Result<()> {
         Ok(())
     }
 
-    async fn send_group_text(&self, group_id: i64, text: &str) -> Result<()> {
+    async fn send_group_message(&self, group_id: i64, message: Message) -> Result<()> {
         self.group_messages
             .lock()
             .unwrap()
-            .push((group_id, text.to_string()));
+            .push((group_id, message));
         Ok(())
     }
 }
@@ -98,13 +99,88 @@ async fn poller_only_notifies_on_live_edge() {
     poller.poll_once().await.unwrap();
     poller.poll_once().await.unwrap();
 
-    assert_eq!(
-        sender.group_messages(),
-        vec![(
-            123,
-            "主播A 开播了\n标题：测试直播\n链接：https://live.bilibili.com/9001".to_string(),
-        )]
-    );
+    assert_eq!(sender.group_messages().len(), 1);
+    let (group_id, message) = &sender.group_messages()[0];
+    assert_eq!(*group_id, 123);
+    assert!(matches!(
+        message,
+        Message::String(text)
+        if text == "主播A 开播了\n标题：测试直播\n链接：https://live.bilibili.com/9001"
+    ));
+}
+
+#[tokio::test]
+async fn poller_includes_cover_when_available() {
+    let store = Arc::new(MemoryStore::new());
+    let repo = SubscriptionRepo::new(store);
+    repo.subscribe_group(123, 42).await.unwrap();
+
+    let client = Arc::new(FakeClient {
+        states: Mutex::new(VecDeque::from(vec![
+            LiveStatus {
+                room_id: 9001,
+                is_live: false,
+                title: "测试直播".to_string(),
+                live_url: "https://live.bilibili.com/9001".to_string(),
+                cover_url: None,
+                live_started_at: None,
+            },
+            LiveStatus {
+                room_id: 9001,
+                is_live: true,
+                title: "测试直播".to_string(),
+                live_url: "https://live.bilibili.com/9001".to_string(),
+                cover_url: Some("https://example.com/cover.jpg".to_string()),
+                live_started_at: Some("2026-03-16T10:00:00Z".to_string()),
+            },
+        ])),
+    });
+    let sender = Arc::new(RecordingSender::default());
+    let poller = Poller::new(repo, client, sender.clone());
+
+    poller.poll_once().await.unwrap();
+    poller.poll_once().await.unwrap();
+
+    assert_eq!(sender.group_messages().len(), 1);
+    let (_, message) = &sender.group_messages()[0];
+    match message {
+        Message::Array(segments) => {
+            assert!(matches!(
+                &segments[0],
+                MessageSegment::Text { text }
+                if text == "主播A 开播了\n标题：测试直播\n链接：https://live.bilibili.com/9001"
+            ));
+            assert!(matches!(
+                &segments[1],
+                MessageSegment::Image { file, .. } if file == "https://example.com/cover.jpg"
+            ));
+        }
+        other => panic!("expected image message, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn poller_does_not_notify_when_starting_with_live_streamer() {
+    let store = Arc::new(MemoryStore::new());
+    let repo = SubscriptionRepo::new(store);
+    repo.subscribe_group(123, 42).await.unwrap();
+
+    let client = Arc::new(FakeClient {
+        states: Mutex::new(VecDeque::from(vec![LiveStatus {
+            room_id: 9001,
+            is_live: true,
+            title: "测试直播".to_string(),
+            live_url: "https://live.bilibili.com/9001".to_string(),
+            cover_url: Some("https://example.com/cover.jpg".to_string()),
+            live_started_at: Some("2026-03-16T10:00:00Z".to_string()),
+        }])),
+    });
+    let sender = Arc::new(RecordingSender::default());
+    let poller = Poller::new(repo, client, sender.clone());
+
+    poller.poll_once().await.unwrap();
+
+    assert!(sender.group_messages().is_empty());
 }
 
 #[tokio::test]

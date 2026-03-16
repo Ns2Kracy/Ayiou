@@ -1,35 +1,35 @@
 ---
-title: Ayiou 框架
-description: 一个面向多平台的 Rust Bot 框架（Driver + Adapter + Plugin）
+title: Ayiou 文档
+description: 面向 Rust Bot 的 Driver + Adapter + Plugin 框架文档
 ---
 
-Ayiou 是一个 Rust Bot 框架，核心目标是：
+Ayiou 是一个面向 Rust Bot 场景的插件化框架。
 
-- 平台无关的插件开发体验
-- 明确的 Driver / Adapter 分层
-- 强类型命令系统与可扩展运行时能力
+- 支持清晰的运行时分层
+- 支持 Driver / Adapter 解耦
+- 支持从轻量插件到复杂后台插件的统一开发体验
 
-## 架构分层
+## 核心能力
 
-- `Driver`：连接层（WebSocket/HTTP/Console 等）
-- `ProtocolAdapter`：协议转换层（OneBot/Discord/...）
-- `Bot` Runtime：分发事件、执行插件
+- `Driver`：连接 WebSocket / HTTP / Console 等底层输入输出
+- `ProtocolAdapter`：适配 OneBot、Console 等协议
+- `Bot` Runtime：负责插件注册、调度、存储和事件分发
 
-## 当前能力
+## 插件开发
 
-- `#[derive(Plugin)]`：快速单命令插件
-- `#[bot_plugin] + #[command]`：多命令插件与自动参数解析
-- OneBot v11 适配
-- Console 适配（便于本地调试）
-- 存储与会话抽象（开发者自定义后端实现）
-- 轻量可观测（`MetricsSink` + 内存聚合 + 周期日志）
+- `#[derive(Plugin)]`：快速定义插件，支持自定义 `start` / `handler`
+- `#[bot_plugin] + #[command]`：适合多命令插件与自动参数解析
+- OneBot v11 主动消息与上下文 API
+- Console 适配器与本地调试体验
+- 存储、定时任务、状态型插件支持
+- 可观测性与 `MetricsSink`
 
-## 推荐阅读
+## 阅读入口
 
 <Cards>
   <Card title="快速开始" href="/docs/getting-started" />
   <Card title="Plugin 宏" href="/docs/plugin-macro" />
   <Card title="命令系统与 DX" href="/docs/command-system-dx" />
   <Card title="存储与会话" href="/docs/storage-session" />
-  <Card title="可观测能力" href="/docs/observability" />
+  <Card title="可观测性" href="/docs/observability" />
 </Cards>

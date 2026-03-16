@@ -10,7 +10,9 @@ use derive_plugin::expand_derive_plugin;
 /// Derive macro for simple plugin definition.
 ///
 /// This macro generates `Plugin` trait implementation from struct attributes.
-/// You must implement an `execute` method on your struct that handles the command.
+/// By default you implement an `execute` method on your struct that handles the command.
+/// For more advanced plugins, you can also point the macro at custom `start` and `handler`
+/// methods via `#[plugin(start = "...", handler = "...")]`.
 ///
 /// # Example
 ///
@@ -47,6 +49,8 @@ use derive_plugin::expand_derive_plugin;
 /// - `regex`: Regex pattern for message matching
 /// - `cron`: Cron expression for scheduled execution
 /// - `context`: Custom context type (defaults to `Ctx` or generic `C`)
+/// - `start`: Custom startup method name returning `Result<()>`
+/// - `handler`: Custom handler method name returning `Result<bool>`
 #[proc_macro_derive(Plugin, attributes(plugin))]
 pub fn derive_plugin(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
