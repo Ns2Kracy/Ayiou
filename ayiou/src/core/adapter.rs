@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use std::future::Future;
 
 use async_trait::async_trait;
@@ -5,6 +7,7 @@ use log::error;
 use tokio::sync::mpsc;
 
 use crate::core::driver::Driver;
+use crate::core::plugin_host::MessageSender;
 
 /// Trait for contexts that support message operations.
 pub trait MsgContext: Send + Sync + Clone + 'static {
@@ -18,12 +21,27 @@ pub trait MsgContext: Send + Sync + Clone + 'static {
 /// Adapter is responsible for protocol translation:
 /// - raw inbound packet -> context/event
 /// - context action -> raw outbound packet
+pub struct AdapterRuntime<C> {
+    pub events: mpsc::Receiver<C>,
+    pub sender: Option<Arc<dyn MessageSender>>,
+}
+
 #[async_trait]
 pub trait Adapter: Send + Sync + 'static {
     type Ctx: MsgContext;
 
     /// Start adapter and return a stream of normalized contexts.
     async fn start(self) -> mpsc::Receiver<Self::Ctx>;
+
+    async fn start_with_runtime(self) -> AdapterRuntime<Self::Ctx>
+    where
+        Self: Sized,
+    {
+        AdapterRuntime {
+            events: self.start().await,
+            sender: None,
+        }
+    }
 }
 
 /// Protocol adapter abstraction:

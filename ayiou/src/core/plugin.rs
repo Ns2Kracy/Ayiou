@@ -3,7 +3,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use log::info;
 
-use crate::core::{adapter::MsgContext, plugin_runtime::PluginRuntimeState};
+use crate::core::{
+    adapter::MsgContext, plugin_host::PluginHost, plugin_runtime::PluginRuntimeState,
+};
 
 // ============================================================================
 // Args parsing types
@@ -372,7 +374,7 @@ impl Default for PluginMetadata {
 
 /// Plugin trait: main entry point for message handling
 #[async_trait::async_trait]
-pub trait Plugin<C>: Send + Sync + 'static {
+pub trait Plugin<C: 'static>: Send + Sync + 'static {
     /// Metadata (name/description/version)
     fn meta(&self) -> PluginMetadata {
         PluginMetadata::default()
@@ -407,6 +409,11 @@ pub trait Plugin<C>: Send + Sync + 'static {
     /// Check if this plugin matches the context (default: always match)
     fn matches(&self, _ctx: &C) -> bool {
         true
+    }
+
+    /// Startup hook for long-lived background tasks or initialization.
+    async fn start(&self, _host: PluginHost<C>) -> Result<()> {
+        Ok(())
     }
 
     /// Handle the message, return Ok(true) to block subsequent handlers

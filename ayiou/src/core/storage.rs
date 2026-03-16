@@ -5,6 +5,9 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use serde::{Serialize, de::DeserializeOwned};
 
+pub mod sea_orm;
+pub use sea_orm::SeaOrmStore;
+
 pub trait StoreCodec: Send + Sync + 'static {
     fn encode<T: Serialize>(&self, value: &T) -> Result<Vec<u8>>;
     fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T>;

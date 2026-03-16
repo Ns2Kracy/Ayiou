@@ -16,7 +16,7 @@ pub use crate::core::plugin::{
 pub use crate::core::session::{
     MemorySessionStore, SessionError, SessionKey, SessionRecord, SessionStore,
 };
-pub use crate::core::storage::{MemoryStore, Store, StoreSerdeExt};
+pub use crate::core::storage::{MemoryStore, SeaOrmStore, Store, StoreSerdeExt};
 
 pub use crate::adapter::console::adapter::ConsoleAdapter;
 pub use crate::adapter::console::ctx::Ctx as ConsoleCtx;

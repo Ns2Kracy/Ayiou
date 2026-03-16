@@ -6,10 +6,11 @@ use log::{info, warn};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    adapter::onebot::v11::ctx::Ctx,
+    adapter::onebot::v11::{ctx::Ctx, sender::OneBotSender},
     adapter::onebot::v11::model::{ApiResponse, Message, MessageEvent, OneBotEvent, echo_key},
     core::{
-        adapter::{Adapter, ProtocolAdapter, spawn_protocol_adapter},
+        adapter::{Adapter, AdapterRuntime, ProtocolAdapter},
+        plugin_host::MessageSender,
         driver::Driver,
     },
     driver::wsclient::WsDriver,
@@ -28,6 +29,11 @@ pub struct OneBotV11Adapter {
 impl OneBotV11Adapter {
     pub fn new(url: impl Into<String>) -> Self {
         Self::with_driver(WsDriver::new(&url.into()))
+    }
+
+    pub fn with_token(url: impl Into<String>, token: impl Into<String>) -> Self {
+        let url = url.into();
+        Self::with_driver(WsDriver::with_access_token(&url, token.into()))
     }
 
     pub fn with_driver<D>(driver: D) -> Self
@@ -144,6 +150,38 @@ impl Adapter for OneBotV11Adapter {
     type Ctx = Ctx;
 
     async fn start(self) -> mpsc::Receiver<Ctx> {
-        spawn_protocol_adapter(self.driver, 100, OneBotV11Protocol::new())
+        self.start_with_runtime().await.events
+    }
+
+    async fn start_with_runtime(self) -> AdapterRuntime<Self::Ctx> {
+        let mut protocol = OneBotV11Protocol::new();
+        let (outgoing_tx, outgoing_rx) = mpsc::channel::<String>(100);
+        let (raw_tx, mut raw_rx) = mpsc::channel::<String>(100);
+        let (ctx_tx, ctx_rx) = mpsc::channel::<Ctx>(100);
+        let protocol_outgoing_tx = outgoing_tx.clone();
+
+        let driver = self.driver;
+        tokio::spawn(async move {
+            let driver_handle = tokio::spawn(async move {
+                if let Err(err) = driver.run(raw_tx, outgoing_rx).await {
+                    warn!("Driver error: {}", err);
+                }
+            });
+
+            while let Some(raw) = raw_rx.recv().await {
+                if let Some(ctx) = protocol.handle_packet(raw, protocol_outgoing_tx.clone()).await
+                    && ctx_tx.send(ctx).await.is_err()
+                {
+                    break;
+                }
+            }
+
+            driver_handle.abort();
+        });
+
+        AdapterRuntime {
+            events: ctx_rx,
+            sender: Some(Arc::new(OneBotSender::new(outgoing_tx)) as Arc<dyn MessageSender>),
+        }
     }
 }

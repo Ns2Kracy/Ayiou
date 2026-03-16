@@ -6,7 +6,9 @@ use crate::core::{
     adapter::Adapter,
     observability::{MetricsSink, NoopMetrics, elapsed_ms},
     plugin::{DispatchOptions, Dispatcher, Plugin, PluginBox, PluginManager},
+    plugin_host::PluginHost,
     scheduler::{Scheduler, TokioScheduler},
+    storage::{MemoryStore, Store},
 };
 
 pub mod adapter;
@@ -23,6 +25,7 @@ pub struct Bot<A: Adapter> {
     dispatch_options: DispatchOptions,
     metrics_sink: Arc<dyn MetricsSink>,
     scheduler: Arc<dyn Scheduler>,
+    store: Arc<dyn Store>,
 }
 
 impl<A: Adapter> Default for Bot<A> {
@@ -38,6 +41,7 @@ impl<A: Adapter> Bot<A> {
             dispatch_options: DispatchOptions::default(),
             metrics_sink: Arc::new(NoopMetrics),
             scheduler: Arc::new(TokioScheduler::new()),
+            store: Arc::new(MemoryStore::new()),
         }
     }
 
@@ -51,8 +55,17 @@ impl<A: Adapter> Bot<A> {
         self
     }
 
+    pub fn with_store(mut self, store: Arc<dyn Store>) -> Self {
+        self.store = store;
+        self
+    }
+
     pub fn scheduler(&self) -> Arc<dyn Scheduler> {
         self.scheduler.clone()
+    }
+
+    pub fn store(&self) -> Arc<dyn Store> {
+        self.store.clone()
     }
 
     pub fn command_prefix(mut self, prefix: impl Into<String>) -> Self {
@@ -98,17 +111,34 @@ impl<A: Adapter> Bot<A> {
         pretty_env_logger::try_init().ok();
         info!("Starting Bot...");
 
-        let mut event_rx = adapter.start().await;
-
+        let adapter_runtime = adapter.start_with_runtime().await;
         let plugins = self.plugin_manager.build();
+        let plugin_host = PluginHost::new(
+            self.scheduler.clone(),
+            self.store.clone(),
+            adapter_runtime.sender.clone(),
+        );
+
+        for plugin in plugins.iter() {
+            if let Err(err) = plugin.start(plugin_host.clone()).await {
+                error!("Plugin startup error: {}", err);
+                return;
+            }
+        }
+
         let dispatcher = Dispatcher::with_options(plugins, self.dispatch_options.clone());
+        let mut event_rx = adapter_runtime.events;
         info!("Loaded {} plugins", self.plugin_manager.count());
 
         info!("Bot is running, press Ctrl+C to exit.");
 
         loop {
             tokio::select! {
-                Some(ctx) = event_rx.recv() => {
+                maybe_ctx = event_rx.recv() => {
+                    let Some(ctx) = maybe_ctx else {
+                        info!("Adapter channel closed.");
+                        break;
+                    };
                     self.metrics_sink.incr_counter("events_in_total", 1, &[]);
                     let dispatcher = dispatcher.clone();
                     let metrics = self.metrics_sink.clone();
