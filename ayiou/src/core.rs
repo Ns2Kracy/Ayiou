@@ -1,11 +1,7 @@
-#[macro_use]
-pub mod macros;
-
 pub mod adapter;
 pub mod config_store;
 pub mod context;
 pub mod driver;
-pub mod extract;
 pub mod model;
 pub mod observability;
 pub mod plugin;

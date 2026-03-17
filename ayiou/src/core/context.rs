@@ -6,7 +6,6 @@ use crate::core::{
     adapter::MsgContext,
     model::{CommandInvocation, EventEnvelope, MessageEvent, OutboundMessage},
     plugin::current_command_invocation,
-    plugin::parse_command_line,
     plugin_host::OutboundSender,
 };
 
@@ -58,10 +57,6 @@ impl Context {
         T: Any + Send + Sync + 'static,
     {
         self.extension.as_ref().downcast_ref::<T>()
-    }
-
-    pub fn command_line_with_prefixes(&self, prefixes: &[&str]) -> Option<CommandInvocation> {
-        parse_command_line(&self.text(), prefixes)
     }
 
     pub async fn reply(&self, message: OutboundMessage) -> Result<()> {

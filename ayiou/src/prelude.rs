@@ -6,7 +6,6 @@ pub use crate::core::adapter::{
 };
 pub use crate::core::context::Context;
 pub use crate::core::driver::Driver;
-pub use crate::core::extract::{Args, Rest, TupleArgs};
 pub use crate::core::model::{
     BotId, ChannelKind, ChannelRef, CommandInvocation, EventEnvelope, MessageEvent,
     MessageSegment as CoreMessageSegment, OutboundMessage, OutboundReceipt, PlatformId, UserRef,
