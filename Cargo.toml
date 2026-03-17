@@ -1,13 +1,6 @@
 [workspace]
 resolver = "3"
 members = [
-    "ayiou-admin-proto",
-    "ayiou-agent",
-    "ayiou-wasm-sdk",
     "ayiou",
     "ayiou-macros",
-    "examples/my_bot",
-    "examples/console_bot",
-    "plugins/ayiou-plugin-bilibili-live",
-    "plugins/ayiou-plugin-qweather",
 ]
