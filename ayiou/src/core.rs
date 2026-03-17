@@ -3,8 +3,10 @@ pub mod macros;
 
 pub mod adapter;
 pub mod config_store;
+pub mod context;
 pub mod driver;
 pub mod extract;
+pub mod model;
 pub mod observability;
 pub mod plugin;
 pub mod plugin_host;
@@ -13,8 +15,12 @@ pub mod runtime;
 pub mod scheduler;
 pub mod session;
 pub mod storage;
+pub mod supervisor;
 
+pub use context::*;
+pub use model::*;
 pub use plugin::*;
 pub use plugin_host::*;
 pub use plugin_runtime::*;
 pub use runtime::*;
+pub use supervisor::*;

@@ -1,85 +1,35 @@
-use anyhow::Result;
-use tokio::sync::mpsc;
-
-use crate::core::adapter::MsgContext;
-
-const DEFAULT_COMMAND_PREFIXES: [&str; 3] = ["/", "!", "."];
+use crate::core::{
+    adapter::MsgContext,
+    context::Context,
+    model::{BotId, ChannelRef, EventEnvelope, MessageEvent, PlatformId, UserRef},
+    plugin_host::OutboundSender,
+};
 
 #[derive(Clone)]
 pub struct Ctx {
     line: String,
-    outgoing_tx: mpsc::Sender<String>,
 }
 
 impl Ctx {
-    pub fn new(line: String, outgoing_tx: mpsc::Sender<String>) -> Self {
-        Self { line, outgoing_tx }
+    pub fn new(line: String) -> Self {
+        Self { line }
     }
 
     pub fn line(&self) -> &str {
         &self.line
     }
 
-    pub async fn reply_text(&self, text: impl Into<String>) -> Result<()> {
-        self.outgoing_tx.send(text.into()).await?;
-        Ok(())
+    pub fn to_event_envelope(&self) -> EventEnvelope {
+        let platform = PlatformId::new("console");
+        let user = UserRef::new(platform.clone(), "console-user");
+        let channel = ChannelRef::direct(platform.clone(), "console-user");
+        let message = MessageEvent::new(user, channel, self.text());
+        EventEnvelope::new(BotId::new("console"), platform).with_message(message)
     }
 
-    pub fn command_name(&self) -> Option<String> {
-        self.command_name_with_prefixes(&DEFAULT_COMMAND_PREFIXES)
-    }
-
-    pub fn command_args(&self) -> Option<String> {
-        self.command_args_with_prefixes(&DEFAULT_COMMAND_PREFIXES)
-    }
-
-    pub fn command_name_with_prefixes(&self, prefixes: &[&str]) -> Option<String> {
-        let trimmed = self.line.trim_start();
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        let token_end = trimmed
-            .char_indices()
-            .find(|(_, ch)| ch.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(trimmed.len());
-
-        let token = &trimmed[..token_end];
-
-        for prefix in prefixes {
-            if let Some(cmd) = token.strip_prefix(prefix)
-                && !cmd.is_empty()
-            {
-                return Some(cmd.to_string());
-            }
-        }
-
-        None
-    }
-
-    pub fn command_args_with_prefixes(&self, prefixes: &[&str]) -> Option<String> {
-        let trimmed = self.line.trim_start();
-        if trimmed.is_empty() {
-            return None;
-        }
-
-        let token_end = trimmed
-            .char_indices()
-            .find(|(_, ch)| ch.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(trimmed.len());
-
-        let token = &trimmed[..token_end];
-
-        for prefix in prefixes {
-            if token.strip_prefix(prefix).is_some() {
-                let args = trimmed[token_end..].trim_start();
-                return Some(args.to_string());
-            }
-        }
-
-        None
+    pub fn into_context(self, sender: Option<std::sync::Arc<dyn OutboundSender>>) -> Context {
+        let envelope = self.to_event_envelope();
+        Context::new(envelope, sender, self)
     }
 }
 

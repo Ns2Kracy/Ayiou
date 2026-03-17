@@ -36,7 +36,7 @@ pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<Tok
     let ctx_ty = plugin_attrs
         .context
         .clone()
-        .unwrap_or_else(|| syn::parse_quote!(ayiou::prelude::Ctx));
+        .unwrap_or_else(|| syn::parse_quote!(ayiou::prelude::Context));
 
     let mut methods = Vec::new();
 
@@ -135,12 +135,19 @@ pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<Tok
             async fn handle(&self, ctx: &#ctx_ty) -> anyhow::Result<bool> {
                 use ayiou::core::adapter::MsgContext;
 
+                if let Some(line) = ayiou::core::plugin::current_command_invocation() {
+                    return self.__ayiou_dispatch_command(ctx, line.command(), line.args()).await;
+                }
+
                 let text = ctx.text();
-                let mut prefixes_owned = vec!["/".to_string(), "!".to_string(), ".".to_string()];
-                prefixes_owned.extend(self.command_prefixes());
+                let prefixes_owned = self.command_prefixes();
                 let prefix_refs: Vec<&str> = prefixes_owned.iter().map(String::as_str).collect();
 
                 if let Some(line) = ayiou::core::plugin::parse_command_line(&text, &prefix_refs) {
+                    return self.__ayiou_dispatch_command(ctx, line.command(), line.args()).await;
+                }
+
+                if let Some(line) = ayiou::core::plugin::parse_command_line(&text, &[]) {
                     return self.__ayiou_dispatch_command(ctx, line.command(), line.args()).await;
                 }
 

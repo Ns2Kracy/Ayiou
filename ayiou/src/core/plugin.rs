@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use anyhow::Result;
 use log::info;
 
 use crate::core::{
-    adapter::MsgContext, plugin_host::PluginHost, plugin_runtime::PluginRuntimeState,
+    adapter::MsgContext, model::CommandInvocation, plugin_host::PluginHost,
+    plugin_runtime::PluginRuntimeState,
 };
 
 // ============================================================================
@@ -59,34 +60,10 @@ pub trait ArgsParser: Sized + Default {
     }
 }
 
-/// Parsed command line components.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandLine {
-    command: String,
-    args: String,
-}
-
-impl CommandLine {
-    pub fn new(command: impl Into<String>, args: impl Into<String>) -> Self {
-        Self {
-            command: command.into(),
-            args: args.into(),
-        }
-    }
-
-    pub fn command(&self) -> &str {
-        &self.command
-    }
-
-    pub fn args(&self) -> &str {
-        &self.args
-    }
-}
-
 /// Parse command line from text.
 ///
 /// `prefixes` will be stripped from the first token when matched.
-pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandLine> {
+pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandInvocation> {
     let trimmed = text.trim_start();
     if trimmed.is_empty() {
         return None;
@@ -102,16 +79,18 @@ pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandLine> 
     let args = trimmed[token_end..].trim_start();
 
     let mut command = token;
+    let mut matched_prefix = None;
     for prefix in prefixes {
         if let Some(stripped) = token.strip_prefix(prefix)
             && !stripped.is_empty()
         {
             command = stripped;
+            matched_prefix = Some((*prefix).to_string());
             break;
         }
     }
 
-    Some(CommandLine::new(command, args))
+    Some(CommandInvocation::new(command, args, matched_prefix))
 }
 
 /// Split command arguments into tokens.
@@ -161,6 +140,21 @@ pub fn tokenize_command_args(args: &str) -> std::result::Result<Vec<String>, Arg
     }
 
     Ok(out)
+}
+
+tokio::task_local! {
+    static CURRENT_COMMAND_INVOCATION: CommandInvocation;
+}
+
+pub async fn with_command_invocation<F, T>(invocation: CommandInvocation, future: F) -> T
+where
+    F: Future<Output = T>,
+{
+    CURRENT_COMMAND_INVOCATION.scope(invocation, future).await
+}
+
+pub fn current_command_invocation() -> Option<CommandInvocation> {
+    CURRENT_COMMAND_INVOCATION.try_with(Clone::clone).ok()
 }
 
 pub fn parse_typed_arg<T>(
@@ -689,6 +683,54 @@ impl<C: MsgContext> Dispatcher<C> {
         }
     }
 
+    async fn invoke_plugin(
+        &self,
+        plugin: &Arc<dyn Plugin<C>>,
+        ctx: &C,
+        command: Option<CommandInvocation>,
+    ) -> Result<bool> {
+        let plugin_name = plugin.meta().name;
+
+        let result = if let Some(command) = command {
+            with_command_invocation(command, plugin.handle(ctx)).await
+        } else {
+            plugin.handle(ctx).await
+        };
+
+        match result {
+            Ok(block) => {
+                self.runtime_state.clear_error(&plugin_name);
+                Ok(block)
+            }
+            Err(err) => {
+                let message = format!("plugin `{}` failed to handle event: {}", plugin_name, err);
+                self.runtime_state
+                    .record_error(&plugin_name, message.clone());
+                Err(err.context(message))
+            }
+        }
+    }
+
+    fn command_invocation_for_plugin(
+        &self,
+        plugin: &Arc<dyn Plugin<C>>,
+        text: &str,
+    ) -> Option<CommandInvocation> {
+        let plugin_prefixes = plugin.command_prefixes();
+        let plugin_prefix_refs: Vec<&str> = plugin_prefixes.iter().map(String::as_str).collect();
+        parse_command_line(text, &plugin_prefix_refs)
+            .or_else(|| {
+                let global_prefix_refs: Vec<&str> = self
+                    .options
+                    .command_prefixes()
+                    .iter()
+                    .map(String::as_str)
+                    .collect();
+                parse_command_line(text, &global_prefix_refs)
+            })
+            .or_else(|| parse_command_line(text, &[]))
+    }
+
     fn normalize_command_text(&self, text: &str) -> Option<String> {
         let trimmed = text.trim_start();
         if trimmed.is_empty() {
@@ -749,9 +791,8 @@ impl<C: MsgContext> Dispatcher<C> {
                     continue;
                 }
 
-                if let Ok(block) = plugin.handle(ctx).await
-                    && block
-                {
+                let invocation = self.command_invocation_for_plugin(plugin, &text);
+                if self.invoke_plugin(plugin, ctx, invocation).await? {
                     return Ok(true);
                 }
             }
@@ -770,9 +811,8 @@ impl<C: MsgContext> Dispatcher<C> {
                     continue;
                 }
 
-                if let Ok(block) = plugin.handle(ctx).await
-                    && block
-                {
+                let invocation = self.command_invocation_for_plugin(plugin, &normalized_text);
+                if self.invoke_plugin(plugin, ctx, invocation).await? {
                     return Ok(true);
                 }
             }
@@ -792,9 +832,7 @@ impl<C: MsgContext> Dispatcher<C> {
                 continue;
             }
 
-            if let Ok(block) = plugin.handle(ctx).await
-                && block
-            {
+            if self.invoke_plugin(plugin, ctx, None).await? {
                 return Ok(true);
             }
         }
@@ -918,6 +956,75 @@ mod tests {
         dispatcher.dispatch(&ctx).await.unwrap();
 
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    struct InvocationCapturePlugin {
+        invocation: Arc<std::sync::Mutex<Option<(String, String)>>>,
+        prefixes: Vec<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin<TestCtx> for InvocationCapturePlugin {
+        fn commands(&self) -> Vec<String> {
+            vec!["echo".to_string()]
+        }
+
+        fn command_prefixes(&self) -> Vec<String> {
+            self.prefixes.clone()
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<bool> {
+            let invocation = current_command_invocation().expect("command invocation should exist");
+            *self.invocation.lock().unwrap() = Some((
+                invocation.command().to_string(),
+                invocation.args().to_string(),
+            ));
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_exposes_command_invocation_for_global_prefix_matches() {
+        let invocation = Arc::new(std::sync::Mutex::new(None));
+        let plugins: Arc<[Arc<dyn Plugin<TestCtx>>]> = vec![Arc::new(InvocationCapturePlugin {
+            invocation: invocation.clone(),
+            prefixes: Vec::new(),
+        }) as Arc<dyn Plugin<TestCtx>>]
+        .into();
+
+        let dispatcher = Dispatcher::with_options(plugins, DispatchOptions::new(["/"]));
+        let ctx = TestCtx {
+            text: "/echo hello world".to_string(),
+        };
+
+        dispatcher.dispatch(&ctx).await.unwrap();
+
+        assert_eq!(
+            *invocation.lock().unwrap(),
+            Some(("echo".to_string(), "hello world".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_exposes_command_invocation_for_plugin_prefix_matches() {
+        let invocation = Arc::new(std::sync::Mutex::new(None));
+        let plugins: Arc<[Arc<dyn Plugin<TestCtx>>]> = vec![Arc::new(InvocationCapturePlugin {
+            invocation: invocation.clone(),
+            prefixes: vec!["/".to_string()],
+        }) as Arc<dyn Plugin<TestCtx>>]
+        .into();
+
+        let dispatcher = Dispatcher::new(plugins);
+        let ctx = TestCtx {
+            text: "/echo hello".to_string(),
+        };
+
+        dispatcher.dispatch(&ctx).await.unwrap();
+
+        assert_eq!(
+            *invocation.lock().unwrap(),
+            Some(("echo".to_string(), "hello".to_string()))
+        );
     }
 
     struct NamedCounterPlugin {

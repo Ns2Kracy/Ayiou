@@ -1,0 +1,107 @@
+use std::{any::Any, sync::Arc};
+
+use anyhow::{Result, anyhow};
+
+use crate::core::{
+    adapter::MsgContext,
+    model::{CommandInvocation, EventEnvelope, MessageEvent, OutboundMessage},
+    plugin::current_command_invocation,
+    plugin::parse_command_line,
+    plugin_host::OutboundSender,
+};
+
+#[derive(Clone)]
+pub struct Context {
+    envelope: EventEnvelope,
+    outbound: Option<Arc<dyn OutboundSender>>,
+    extension: Arc<dyn Any + Send + Sync>,
+}
+
+impl Context {
+    pub fn new<T>(
+        envelope: EventEnvelope,
+        outbound: Option<Arc<dyn OutboundSender>>,
+        extension: T,
+    ) -> Self
+    where
+        T: Any + Send + Sync,
+    {
+        Self {
+            envelope,
+            outbound,
+            extension: Arc::new(extension),
+        }
+    }
+
+    pub fn event(&self) -> &EventEnvelope {
+        &self.envelope
+    }
+
+    pub fn message(&self) -> Option<&MessageEvent> {
+        self.envelope.message()
+    }
+
+    pub fn command(&self) -> Option<CommandInvocation> {
+        current_command_invocation()
+    }
+
+    pub fn command_name(&self) -> Option<String> {
+        self.command().map(|command| command.command().to_string())
+    }
+
+    pub fn command_args(&self) -> Option<String> {
+        self.command().map(|command| command.args().to_string())
+    }
+
+    pub fn extension<T>(&self) -> Option<&T>
+    where
+        T: Any + Send + Sync + 'static,
+    {
+        self.extension.as_ref().downcast_ref::<T>()
+    }
+
+    pub fn command_line_with_prefixes(&self, prefixes: &[&str]) -> Option<CommandInvocation> {
+        parse_command_line(&self.text(), prefixes)
+    }
+
+    pub async fn reply(&self, message: OutboundMessage) -> Result<()> {
+        let sender = self
+            .outbound
+            .clone()
+            .ok_or_else(|| anyhow!("adapter does not provide proactive message sending"))?;
+
+        sender.send(message).await?;
+        Ok(())
+    }
+
+    pub async fn reply_text(&self, text: impl Into<String>) -> Result<()> {
+        let message = self
+            .message()
+            .ok_or_else(|| anyhow!("current event does not carry a message context"))?;
+        self.reply(OutboundMessage::text(message.channel.clone(), text))
+            .await
+    }
+}
+
+impl MsgContext for Context {
+    fn text(&self) -> String {
+        self.message()
+            .map(|msg| msg.text.clone())
+            .unwrap_or_default()
+    }
+
+    fn user_id(&self) -> String {
+        self.message()
+            .map(|msg| msg.sender.user_id().to_string())
+            .unwrap_or_default()
+    }
+
+    fn group_id(&self) -> Option<String> {
+        self.message().and_then(|msg| match msg.channel.kind() {
+            crate::core::model::ChannelKind::Group => Some(msg.channel.channel_id().to_string()),
+            crate::core::model::ChannelKind::Direct | crate::core::model::ChannelKind::Channel => {
+                None
+            }
+        })
+    }
+}

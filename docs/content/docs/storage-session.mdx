@@ -37,7 +37,7 @@ description: 为插件提供可持久化数据和长流程交互控制
 
 核心类型：
 
-- `SessionKey`（platform/plugin/user/channel）
+- `SessionKey`（bot/platform/plugin/user/channel）
 - `SessionRecord`（state/revision/ttl）
 - `SessionError`（NotFound/Expired/RevisionConflict）
 
@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     store.set_json("plugin:counter:u1", &1_i64).await?;
 
     let session_store = Arc::new(MemorySessionStore::new());
-    let key = SessionKey::new("onebot", "wizard", "u1", Some("g1"));
+    let key = SessionKey::new("bot-a", "onebot", "wizard", "u1", Some("g1"));
 
     let rec = session_store
         .save(key.clone(), serde_json::json!({"step": 1}), None)

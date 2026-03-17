@@ -15,7 +15,14 @@ use crate::adapter::onebot::v11::model::{
     Message, MessageEvent, MessageSegment, OneBotAction, OneBotEvent, PrivateMessageEvent,
     SendMessageData, echo_key,
 };
-use crate::core::plugin::parse_command_line;
+use crate::core::{
+    context::Context,
+    model::{
+        BotId, ChannelRef, EventEnvelope, MessageEvent as KernelMessageEvent,
+        MessageSegment as KernelMessageSegment, PlatformId, UserRef,
+    },
+    plugin_host::OutboundSender,
+};
 
 /// Message event type
 #[derive(Clone)]
@@ -26,7 +33,6 @@ pub enum MsgEvent {
 
 use crate::core::adapter::MsgContext;
 
-const DEFAULT_COMMAND_PREFIXES: [&str; 3] = ["/", "!", "."];
 const API_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Message context
@@ -83,28 +89,6 @@ impl Ctx {
     #[inline]
     pub fn event(&self) -> &OneBotEvent {
         &self.event
-    }
-
-    /// Parse command name with default prefixes (/, !, .)
-    pub fn command_name(&self) -> Option<String> {
-        self.command_name_with_prefixes(&DEFAULT_COMMAND_PREFIXES)
-    }
-
-    /// Parse command arguments with default prefixes (/, !, .)
-    pub fn command_args(&self) -> Option<String> {
-        self.command_args_with_prefixes(&DEFAULT_COMMAND_PREFIXES)
-    }
-
-    /// Parse command name with custom prefixes
-    pub fn command_name_with_prefixes(&self, prefixes: &[&str]) -> Option<String> {
-        let text = self.text();
-        parse_command_line(&text, prefixes).map(|line| line.command().to_string())
-    }
-
-    /// Parse command arguments with custom prefixes
-    pub fn command_args_with_prefixes(&self, prefixes: &[&str]) -> Option<String> {
-        let text = self.text();
-        parse_command_line(&text, prefixes).map(|line| line.args().to_string())
     }
 
     /// Get plain text from message
@@ -198,9 +182,79 @@ impl Ctx {
         Ok(())
     }
 
-    /// Reply with text
-    pub async fn reply_text(&self, text: impl Into<String>) -> Result<()> {
-        self.reply(Message::String(text.into())).await
+    pub fn self_id(&self) -> i64 {
+        match &self.msg {
+            MsgEvent::Private(p) => p.self_id,
+            MsgEvent::Group(g) => g.self_id,
+        }
+    }
+
+    pub fn outgoing_tx(&self) -> mpsc::Sender<String> {
+        self.outgoing_tx.clone()
+    }
+
+    pub fn platform_id(&self) -> PlatformId {
+        PlatformId::new("onebot/v11")
+    }
+
+    pub fn to_event_envelope(&self) -> EventEnvelope {
+        let platform = self.platform_id();
+        let sender = UserRef::new(platform.clone(), self.user_id().to_string())
+            .with_display_name(self.nickname().to_string());
+        let channel = match &self.msg {
+            MsgEvent::Private(p) => ChannelRef::direct(platform.clone(), p.user_id.to_string()),
+            MsgEvent::Group(g) => ChannelRef::group(platform.clone(), g.group_id.to_string()),
+        };
+        let message_id = match &self.msg {
+            MsgEvent::Private(p) => p.message_id.to_string(),
+            MsgEvent::Group(g) => g.message_id.to_string(),
+        };
+        let segments = to_kernel_segments(match &self.msg {
+            MsgEvent::Private(p) => &p.message,
+            MsgEvent::Group(g) => &g.message,
+        });
+
+        let message = KernelMessageEvent::new(sender, channel, self.text())
+            .with_message_id(message_id)
+            .with_segments(segments);
+
+        EventEnvelope::new(BotId::new(self.self_id().to_string()), platform).with_message(message)
+    }
+
+    pub fn into_context(self, sender: Option<std::sync::Arc<dyn OutboundSender>>) -> Context {
+        let envelope = self.to_event_envelope();
+        Context::new(envelope, sender, self)
+    }
+}
+
+fn to_kernel_segments(message: &Message) -> Vec<KernelMessageSegment> {
+    match message {
+        Message::String(text) => vec![KernelMessageSegment::text(text.clone())],
+        Message::Segment(segment) => vec![to_kernel_segment(segment)],
+        Message::Array(segments) => segments.iter().map(to_kernel_segment).collect(),
+    }
+}
+
+fn to_kernel_segment(segment: &MessageSegment) -> KernelMessageSegment {
+    match segment {
+        MessageSegment::Text { text } => KernelMessageSegment::text(text.clone()),
+        MessageSegment::At { qq } => KernelMessageSegment::Mention {
+            user_id: qq.clone(),
+        },
+        MessageSegment::Image { file, url, .. } => KernelMessageSegment::Image {
+            url: url.clone().unwrap_or_else(|| file.clone()),
+        },
+        MessageSegment::Record { file, url, .. } | MessageSegment::Video { file, url } => {
+            KernelMessageSegment::Attachment {
+                name: None,
+                url: url.clone().or_else(|| Some(file.clone())),
+                mime: None,
+            }
+        }
+        other => KernelMessageSegment::Unknown {
+            kind: serde_json::to_string(other).unwrap_or_else(|_| "unknown".to_string()),
+            data: serde_json::Value::Null,
+        },
     }
 }
 

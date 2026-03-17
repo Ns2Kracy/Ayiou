@@ -173,7 +173,7 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
         {
             quote! { C }
         } else {
-            quote! { ayiou::prelude::Ctx }
+            quote! { ayiou::prelude::Context }
         }
     };
 

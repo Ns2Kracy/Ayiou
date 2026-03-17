@@ -7,7 +7,7 @@ use log::error;
 use tokio::sync::mpsc;
 
 use crate::core::driver::Driver;
-use crate::core::plugin_host::MessageSender;
+use crate::core::plugin_host::OutboundSender;
 
 /// Trait for contexts that support message operations.
 pub trait MsgContext: Send + Sync + Clone + 'static {
@@ -23,12 +23,31 @@ pub trait MsgContext: Send + Sync + Clone + 'static {
 /// - context action -> raw outbound packet
 pub struct AdapterRuntime<C> {
     pub events: mpsc::Receiver<C>,
-    pub sender: Option<Arc<dyn MessageSender>>,
+    pub sender: Option<Arc<dyn OutboundSender>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AdapterCapabilities {
+    pub proactive_send: bool,
+    pub attachments: bool,
+    pub platform_extensions: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdapterErrorKind {
+    Connection,
+    ProtocolParse,
+    SendFailure,
+    Configuration,
 }
 
 #[async_trait]
 pub trait Adapter: Send + Sync + 'static {
     type Ctx: MsgContext;
+
+    fn capabilities(&self) -> AdapterCapabilities {
+        AdapterCapabilities::default()
+    }
 
     /// Start adapter and return a stream of normalized contexts.
     async fn start(self) -> mpsc::Receiver<Self::Ctx>;

@@ -12,6 +12,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionKey {
+    pub bot_id: String,
     pub platform: String,
     pub plugin: String,
     pub user_id: String,
@@ -20,12 +21,14 @@ pub struct SessionKey {
 
 impl SessionKey {
     pub fn new(
+        bot_id: impl Into<String>,
         platform: impl Into<String>,
         plugin: impl Into<String>,
         user_id: impl Into<String>,
         channel_id: Option<impl Into<String>>,
     ) -> Self {
         Self {
+            bot_id: bot_id.into(),
             platform: platform.into(),
             plugin: plugin.into(),
             user_id: user_id.into(),
@@ -201,7 +204,7 @@ mod tests {
     #[tokio::test]
     async fn session_store_basic_flow() {
         let store = MemorySessionStore::new();
-        let key = SessionKey::new("onebot", "wizard", "u1", Some("g1"));
+        let key = SessionKey::new("bot-a", "onebot", "wizard", "u1", Some("g1"));
 
         let saved = store
             .save(key.clone(), serde_json::json!({"step": 1}), None)
@@ -222,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn session_store_revision_conflict() {
         let store = MemorySessionStore::new();
-        let key = SessionKey::new("onebot", "wizard", "u1", Some("g1"));
+        let key = SessionKey::new("bot-a", "onebot", "wizard", "u1", Some("g1"));
 
         store
             .save(key.clone(), serde_json::json!({"step": 1}), None)

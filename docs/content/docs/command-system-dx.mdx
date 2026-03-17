@@ -1,20 +1,15 @@
 ---
-title: 命令系统与 DX（v0.4）
-description: 使用 #[bot_plugin] + #[command] 构建可维护命令插件
+title: 命令系统与 DX
+description: 使用 #[bot_plugin] + #[command] 构建可维护的命令型插件
 ---
 
-v0.4 引入了面向命令插件的声明式 API：
-
-- 前缀命令路由（全局前缀 + 插件级前缀）
-- 命令别名
-- 自动参数解析（`FromStr` / `Option<T>` / 尾部 `String`）
-- 属性宏：`#[bot_plugin]`、`#[command]`
+`#[bot_plugin] + #[command]` 适合“多命令、强签名、自动参数解析”的插件。
 
 ## 快速示例
 
 ```rust
-use ayiou::prelude::*;
 use ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter;
+use ayiou::prelude::*;
 
 #[derive(Default)]
 struct AdminPlugin;
@@ -22,14 +17,14 @@ struct AdminPlugin;
 #[bot_plugin(name = "admin", prefix = "/", prefix = "!")]
 impl AdminPlugin {
     #[command(name = "ban", aliases = ["block"])]
-    async fn ban(&self, ctx: &Ctx, user_id: i64, minutes: Option<u32>) -> anyhow::Result<()> {
+    async fn ban(&self, ctx: &Context, user_id: i64, minutes: Option<u32>) -> anyhow::Result<()> {
         let minutes = minutes.unwrap_or(10);
         ctx.reply_text(format!("ban {} for {} minutes", user_id, minutes)).await?;
         Ok(())
     }
 
     #[command]
-    async fn say(&self, ctx: &Ctx, content: String) -> anyhow::Result<()> {
+    async fn say(&self, ctx: &Context, content: String) -> anyhow::Result<()> {
         ctx.reply_text(content).await?;
         Ok(())
     }
@@ -47,28 +42,37 @@ async fn main() {
 
 ## 参数解析规则
 
-`#[command]` 方法签名：
+`#[command]` 方法签名要求：
 
-1. 必须 `async fn`
-2. 第一个参数是 `&self`
-3. 第二个参数是 `&Ctx`（或 `#[bot_plugin(context = "...")]` 指定类型）
+1. 必须是 `async fn`
+2. 第一个参数必须是 `&self`
+3. 第二个参数默认推荐写成 `&Context`
 4. 后续参数自动从命令参数解析
 
 支持类型：
 
 - 任意 `FromStr`
 - `Option<T>`
-- 尾部 `String`（吃掉剩余文本）
-- 尾部 `Vec<String>`（收集剩余 token）
+- 尾部 `String`
+- 尾部 `Vec<String>`
 
 ## 命令匹配
 
-- `#[command(name = "kick", alias = "k")]` 注册 `kick` 与 `k`
-- 运行时会尝试：
-  - 全局前缀（`Bot::command_prefixes(...)`）
-  - 插件前缀（`#[bot_plugin(prefix = "...")]`）
+- `#[command(name = "kick", alias = "k")]` 会注册 `kick` 和 `k`
+- 运行时会依次尝试：
+- 全局前缀：`Bot::command_prefixes(...)`
+- 插件前缀：`#[bot_plugin(prefix = "...")]`
 
-示例输入：
+默认推荐把第二个参数写成 `&Context`，这样命令解析、回复和跨平台插件体验最稳定。
+
+如果确实需要平台原生 API，再通过：
+
+- `ctx.extension::<Ctx>()`
+- `#[bot_plugin(context = "...")]`
+
+访问平台上下文。
+
+## 输入示例
 
 ```text
 /say "hello world" foo\ bar

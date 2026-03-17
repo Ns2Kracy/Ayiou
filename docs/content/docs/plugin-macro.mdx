@@ -1,11 +1,11 @@
 ---
 title: Plugin 宏
-description: 使用 #[derive(Plugin)] 快速定义插件，并在需要时接入自定义 start/handler
+description: 使用 #[derive(Plugin)] 和 #[bot_plugin] 构建通用优先的插件
 ---
 
 `#[derive(Plugin)]` 会为你的结构体自动实现 `ayiou::core::plugin::Plugin`。
 
-默认情况下，你只需要实现一个 `execute(&self, ctx)` 方法；如果插件还需要启动阶段初始化、后台任务或自定义消息分发，现在也可以通过 `start` 和 `handler` 两个属性把宏生成的入口委托给你自己的方法。
+默认推荐直接面向通用 `Context` 编写插件；只有在你明确依赖平台专属 API 时，才切到平台上下文。
 
 ## 基本用法
 
@@ -17,7 +17,7 @@ use ayiou::prelude::*;
 struct MyPlugin;
 
 impl MyPlugin {
-    async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+    async fn execute(&self, ctx: &Context) -> anyhow::Result<()> {
         ctx.reply_text("hello").await?;
         Ok(())
     }
@@ -28,67 +28,81 @@ impl MyPlugin {
 
 | 属性 | 说明 |
 |---|---|
-| `name` | 插件名称，默认是结构体名的小写 |
+| `name` | 插件名，默认是结构体名的小写 |
 | `description` | 插件描述 |
-| `version` | 插件版本，默认是 `0.1.0` |
-| `command` | 插件命令；如果未提供且不是 `regex/cron` 插件，则默认使用 `name` |
-| `prefix` | 该插件接受的命令前缀，可重复写多个 |
-| `regex` | 用于消息匹配的正则表达式 |
-| `cron` | 定时调度表达式 |
-| `context` | 自定义上下文类型 |
-| `start` | 自定义启动方法名，签名应为 `async fn xxx(&self, host: PluginHost<Ctx>) -> Result<()>` |
-| `handler` | 自定义处理方法名，签名应为 `async fn xxx(&self, ctx: &Ctx) -> Result<bool>` |
+| `version` | 插件版本，默认 `0.1.0` |
+| `command` | 命令名；如果未提供且不是 `regex/cron` 插件，则默认使用 `name` |
+| `prefix` | 插件级命令前缀，可重复声明 |
+| `regex` | 消息匹配正则 |
+| `cron` | 调度表达式 |
+| `context` | 显式指定上下文类型 |
+| `start` | 自定义启动方法，签名应为 `async fn xxx(&self, host: PluginHost<Context>) -> Result<()>` |
+| `handler` | 自定义处理方法，签名应为 `async fn xxx(&self, ctx: &Context) -> Result<bool>` |
 
-## 自定义 Context
+## 平台扩展
+
+默认上下文是 `Context`。当你需要平台扩展时，优先通过 `ctx.extension::<...>()` 获取。
+
+```rust
+use ayiou::adapter::onebot::v11::model::Message;
+use ayiou::prelude::*;
+
+#[derive(Plugin)]
+#[plugin(name = "whoami", command = "whoami")]
+struct WhoAmI;
+
+impl WhoAmI {
+    async fn execute(&self, ctx: &Context) -> anyhow::Result<()> {
+        if let Some(onebot) = ctx.extension::<Ctx>() {
+            let login = onebot.get_login_info_data().await?;
+            onebot
+                .reply(Message::String(format!(
+                    "bot={} user={}",
+                    login.nickname,
+                    onebot.user_id()
+                )))
+                .await?;
+        }
+
+        Ok(())
+    }
+}
+```
+
+如果平台上下文本身就是你的主入口，也仍然可以使用：
 
 ```rust
 #[derive(Plugin)]
-#[plugin(
-    name = "console_help",
-    command = "help",
-    context = "ayiou::adapter::console::ctx::Ctx"
-)]
-struct ConsoleHelp;
+#[plugin(context = "ayiou::prelude::Ctx")]
+struct OneBotOnlyPlugin;
 ```
 
 ## 高级用法
 
-下面这种形式适合“有状态 + 有后台任务 + 自定义命令分发”的插件。像 B 站直播插件就是这种形态。
-
 ```rust
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
-use std::time::Duration;
 
-use ayiou::prelude::*;
 use ayiou::core::plugin_host::PluginHost;
+use ayiou::prelude::*;
 
 #[derive(Plugin)]
 #[plugin(
-    name = "blive",
-    description = "Bilibili live notification plugin",
+    name = "stateful",
+    description = "stateful plugin",
     start = "start_plugin",
     handler = "handle_command"
 )]
-struct BilibiliLivePlugin {
-    poll_interval: Duration,
-    started: AtomicBool,
+struct StatefulPlugin {
     store: OnceLock<std::sync::Arc<dyn ayiou::core::storage::Store>>,
 }
 
-impl BilibiliLivePlugin {
-    async fn start_plugin(&self, host: PluginHost<Ctx>) -> anyhow::Result<()> {
+impl StatefulPlugin {
+    async fn start_plugin(&self, host: PluginHost<Context>) -> anyhow::Result<()> {
         let _ = self.store.get_or_init(|| host.store());
-
-        if self.started.swap(true, Ordering::SeqCst) {
-            return Ok(());
-        }
-
-        // 在这里做启动初始化、注册定时任务等
         Ok(())
     }
 
-    async fn handle_command(&self, ctx: &Ctx) -> anyhow::Result<bool> {
+    async fn handle_command(&self, ctx: &Context) -> anyhow::Result<bool> {
         let args = ctx.command_args().unwrap_or_default();
         ctx.reply_text(format!("received: {}", args)).await?;
         Ok(true)
@@ -96,18 +110,16 @@ impl BilibiliLivePlugin {
 }
 ```
 
-### 宏在这个模式下做了什么
+## 什么时候用 #[bot_plugin]
 
-- `Plugin::start()` 会转发到你指定的 `start_plugin`
-- `Plugin::handle()` 会转发到你指定的 `handle_command`
-- `meta()`、`commands()`、`command_prefixes()` 等基础元数据仍然由宏自动生成
-
-## 什么时候用 `#[bot_plugin]`
-
-`#[derive(Plugin)]` 现在已经不只适合“最简单的单命令插件”，它也适合：
+`#[derive(Plugin)]` 更适合：
 
 - 单入口命令插件
-- 需要启动时初始化的插件
-- 需要自定义 `handle()` 的状态型插件
+- 通用业务插件
+- 需要 `start` / `handler` 的状态型插件
 
-但如果你的插件主要特点是“多个子命令 + 明确参数签名 + 希望自动参数解析”，仍然更推荐使用 `#[bot_plugin] + #[command]`。这套宏更适合做命令分发型插件，见“命令系统与 DX”。
+`#[bot_plugin] + #[command]` 更适合：
+
+- 多命令插件
+- 需要自动参数解析的命令型插件
+- 命令签名较多、希望方法级分发更清晰的场景

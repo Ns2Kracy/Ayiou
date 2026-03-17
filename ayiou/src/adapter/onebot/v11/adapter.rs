@@ -10,8 +10,9 @@ use crate::{
     adapter::onebot::v11::{ctx::Ctx, sender::OneBotSender},
     core::{
         adapter::{Adapter, AdapterRuntime, ProtocolAdapter},
+        context::Context,
         driver::Driver,
-        plugin_host::MessageSender,
+        plugin_host::OutboundSender,
     },
     driver::wsclient::WsDriver,
 };
@@ -105,7 +106,7 @@ impl OneBotV11Protocol {
 impl ProtocolAdapter for OneBotV11Protocol {
     type Inbound = String;
     type Outbound = String;
-    type Ctx = Ctx;
+    type Ctx = Context;
 
     async fn handle_packet(
         &mut self,
@@ -130,12 +131,14 @@ impl ProtocolAdapter for OneBotV11Protocol {
                 }
 
                 let event = Arc::new(event);
-                Ctx::new(
+                let raw_ctx = Ctx::new(
                     event,
                     outgoing_tx,
                     self.pending_api.clone(),
                     self.echo_seq.clone(),
-                )
+                )?;
+                let sender = std::sync::Arc::new(OneBotSender::new(raw_ctx.outgoing_tx()));
+                Some(raw_ctx.into_context(Some(sender)))
             }
             Err(err) => {
                 warn!("Failed to parse: {}, raw: {}", err, raw);
@@ -147,9 +150,17 @@ impl ProtocolAdapter for OneBotV11Protocol {
 
 #[async_trait]
 impl Adapter for OneBotV11Adapter {
-    type Ctx = Ctx;
+    type Ctx = Context;
 
-    async fn start(self) -> mpsc::Receiver<Ctx> {
+    fn capabilities(&self) -> crate::core::adapter::AdapterCapabilities {
+        crate::core::adapter::AdapterCapabilities {
+            proactive_send: true,
+            attachments: true,
+            platform_extensions: vec!["onebot/v11".to_string()],
+        }
+    }
+
+    async fn start(self) -> mpsc::Receiver<Context> {
         self.start_with_runtime().await.events
     }
 
@@ -157,7 +168,7 @@ impl Adapter for OneBotV11Adapter {
         let mut protocol = OneBotV11Protocol::new();
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<String>(100);
         let (raw_tx, mut raw_rx) = mpsc::channel::<String>(100);
-        let (ctx_tx, ctx_rx) = mpsc::channel::<Ctx>(100);
+        let (ctx_tx, ctx_rx) = mpsc::channel::<Context>(100);
         let protocol_outgoing_tx = outgoing_tx.clone();
 
         let driver = self.driver;
@@ -183,7 +194,7 @@ impl Adapter for OneBotV11Adapter {
 
         AdapterRuntime {
             events: ctx_rx,
-            sender: Some(Arc::new(OneBotSender::new(outgoing_tx)) as Arc<dyn MessageSender>),
+            sender: Some(Arc::new(OneBotSender::new(outgoing_tx)) as Arc<dyn OutboundSender>),
         }
     }
 }

@@ -1,6 +1,6 @@
 ---
 title: 快速开始
-description: 从零搭建一个 Ayiou Bot，并了解 OneBot 与 Console 两种常见上下文
+description: 从零搭建一个 Ayiou Bot，并理解默认 Context 与平台扩展的关系
 ---
 
 ## 安装依赖
@@ -15,10 +15,10 @@ async-trait = "0.1"
 
 ## 核心概念
 
-- `Bot<A>`：Bot 运行时
-- `Driver`：底层连接驱动
-- `Adapter / ProtocolAdapter`：协议适配层
-- `Plugin`：消息处理插件
+- `Bot<A>`：单 Bot 运行时 builder
+- `Adapter / ProtocolAdapter`：把平台事件归一化到内核
+- `Plugin`：处理消息、命令和主动发送
+- `Context`：默认通用上下文
 
 ## 示例 1：OneBot v11
 
@@ -31,12 +31,13 @@ use ayiou::prelude::*;
 struct EchoPlugin;
 
 impl EchoPlugin {
-    async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
+    async fn execute(&self, ctx: &Context) -> anyhow::Result<()> {
         let args = ctx.command_args().unwrap_or_default();
         if args.is_empty() {
             ctx.reply_text("Usage: /echo <text>").await?;
             return Ok(());
         }
+
         ctx.reply_text(format!("echo: {}", args)).await?;
         Ok(())
     }
@@ -58,16 +59,11 @@ async fn main() {
 use ayiou::prelude::*;
 
 #[derive(Plugin)]
-#[plugin(
-    name = "help",
-    command = "help",
-    prefix = "/",
-    context = "ayiou::adapter::console::ctx::Ctx"
-)]
+#[plugin(name = "help", command = "help", prefix = "/")]
 struct HelpPlugin;
 
 impl HelpPlugin {
-    async fn execute(&self, ctx: &ConsoleCtx) -> anyhow::Result<()> {
+    async fn execute(&self, ctx: &Context) -> anyhow::Result<()> {
         ctx.reply_text("Commands: /help").await
     }
 }
@@ -79,21 +75,27 @@ async fn main() {
 }
 ```
 
-## 带状态插件
+## 平台扩展
 
-如果你的插件不是 unit struct，而是需要自己的字段、构造函数或初始化逻辑，注册时直接传实例即可，例如：
+默认推荐直接使用 `Context`。当你需要平台原生 API 时，再通过扩展访问平台上下文。
+
+Console 示例：
 
 ```rust
-use ayiou::prelude::*;
-use ayiou_plugin_bilibili_live::BilibiliLivePlugin;
-
-let bot = Bot::<ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter>::new()
-    .register_plugin(BilibiliLivePlugin::new());
+if let Some(console) = ctx.extension::<ConsoleCtx>() {
+    let raw_line = console.line();
+}
 ```
 
-## 进阶：自定义 start / handler
+OneBot 示例：
 
-`#[derive(Plugin)]` 默认会调用 `execute(&self, ctx)`。如果插件需要在启动阶段注册定时任务，或者想自己控制 `handle()` 的返回值，也可以这样写：
+```rust
+if let Some(onebot) = ctx.extension::<Ctx>() {
+    let login = onebot.get_login_info_data().await?;
+}
+```
+
+## 自定义 start / handler
 
 ```rust
 use ayiou::core::plugin_host::PluginHost;
@@ -109,29 +111,22 @@ use ayiou::prelude::*;
 struct TickerPlugin;
 
 impl TickerPlugin {
-    async fn bootstrap(&self, _host: PluginHost<Ctx>) -> anyhow::Result<()> {
+    async fn bootstrap(&self, _host: PluginHost<Context>) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn dispatch(&self, ctx: &Ctx) -> anyhow::Result<bool> {
+    async fn dispatch(&self, ctx: &Context) -> anyhow::Result<bool> {
         ctx.reply_text("tick").await?;
         Ok(true)
     }
 }
 ```
 
-更完整的说明见“Plugin 宏”。
-
 ## 常用 Context API
 
 - `ctx.text() -> String`
-- `ctx.user_id() -> i64`
-- `ctx.group_id() -> Option<i64>`
+- `ctx.user_id() -> String`
+- `ctx.group_id() -> Option<String>`
 - `ctx.reply_text("...")`
 - `ctx.command_name()` / `ctx.command_args()`
-
-## 下一步
-
-- 了解 `#[derive(Plugin)]` 与 `#[bot_plugin]` 的区别
-- 学习命令参数解析与多命令插件写法
-- 为插件接入存储、定时任务和主动消息
+- `ctx.extension::<ConsoleCtx>()` / `ctx.extension::<Ctx>()`
