@@ -18,7 +18,6 @@ pub mod prelude;
 
 pub use ayiou_macros::{Plugin, bot_plugin, command};
 pub use core::runtime::{RuntimeController, RuntimeState};
-pub use core::wasm::{NoopWasmHost, RecordingWasmHost, WasmHostApi, WasmRuntime};
 
 pub struct Bot<A: Adapter> {
     plugin_manager: PluginManager<A::Ctx>,
