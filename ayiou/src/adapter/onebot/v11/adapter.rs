@@ -1,4 +1,4 @@
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::{Arc, RwLock, atomic::AtomicU64};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -6,7 +6,9 @@ use log::{info, warn};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    adapter::onebot::v11::model::{ApiResponse, Message, MessageEvent, OneBotEvent, echo_key},
+    adapter::onebot::v11::model::{
+        ApiResponse, LoginInfoData, Message, MessageEvent, OneBotEvent, echo_key,
+    },
     adapter::onebot::v11::{ctx::Ctx, sender::OneBotSender},
     core::{
         adapter::{Adapter, AdapterRuntime, ProtocolAdapter},
@@ -91,6 +93,7 @@ impl OneBotV11Adapter {
 struct OneBotV11Protocol {
     pending_api: Arc<DashMap<String, oneshot::Sender<ApiResponse>>>,
     echo_seq: Arc<AtomicU64>,
+    profile: Arc<RwLock<Option<LoginInfoData>>>,
 }
 
 impl OneBotV11Protocol {
@@ -98,6 +101,7 @@ impl OneBotV11Protocol {
         Self {
             pending_api: Arc::new(DashMap::new()),
             echo_seq: Arc::new(AtomicU64::new(1)),
+            profile: Arc::new(RwLock::new(None)),
         }
     }
 }
@@ -137,7 +141,12 @@ impl ProtocolAdapter for OneBotV11Protocol {
                     self.pending_api.clone(),
                     self.echo_seq.clone(),
                 )?;
-                let sender = std::sync::Arc::new(OneBotSender::new(raw_ctx.outgoing_tx()));
+                let sender = std::sync::Arc::new(OneBotSender::with_runtime(
+                    raw_ctx.outgoing_tx(),
+                    self.pending_api.clone(),
+                    self.echo_seq.clone(),
+                    self.profile.clone(),
+                ));
                 Some(raw_ctx.into_context(Some(sender)))
             }
             Err(err) => {
@@ -170,6 +179,12 @@ impl Adapter for OneBotV11Adapter {
         let (raw_tx, mut raw_rx) = mpsc::channel::<String>(100);
         let (ctx_tx, ctx_rx) = mpsc::channel::<Context>(100);
         let protocol_outgoing_tx = outgoing_tx.clone();
+        let sender = Arc::new(OneBotSender::with_runtime(
+            outgoing_tx.clone(),
+            protocol.pending_api.clone(),
+            protocol.echo_seq.clone(),
+            protocol.profile.clone(),
+        )) as Arc<dyn OutboundSender>;
 
         let driver = self.driver;
         tokio::spawn(async move {
@@ -194,7 +209,7 @@ impl Adapter for OneBotV11Adapter {
 
         AdapterRuntime {
             events: ctx_rx,
-            sender: Some(Arc::new(OneBotSender::new(outgoing_tx)) as Arc<dyn OutboundSender>),
+            sender: Some(sender),
         }
     }
 }
