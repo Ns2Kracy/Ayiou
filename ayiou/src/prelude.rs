@@ -17,6 +17,11 @@ pub use crate::core::plugin::{
     ArgsParseError, ArgsParser, Command, CronSchedule, DispatchOptions, Dispatcher, Plugin,
     PluginManager, PluginMetadata, RegexValidated,
 };
+pub use crate::core::plugin_system::{
+    ApplyConfigOutcome, ConfigUpdate, HandleOutcome, HandlerDecl, HandlerEventKind,
+    LegacyManagedPluginAdapter, LegacyMessagePluginAdapter, RuntimePlugin, RuntimePluginEngine,
+    RuntimePluginFactory, RuntimePluginManifest, RuntimePluginServices,
+};
 pub use crate::core::session::{
     MemorySessionStore, SessionError, SessionKey, SessionRecord, SessionStore,
 };

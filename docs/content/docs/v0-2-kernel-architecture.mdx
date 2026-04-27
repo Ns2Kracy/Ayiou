@@ -1,0 +1,361 @@
+---
+title: Ayiou v0.2 内核设计
+description: 借鉴 NoneBot2 与 AstrBot 的优点，但不照搬其插件模型与运行时约束
+---
+
+# 目标
+
+v0.2 的目标不是“做得像 NoneBot2”或“做得像 AstrBot”，而是把它们各自做对的部分吸收进 Ayiou，并解决它们在长期演进里暴露出的典型问题：
+
+- 插件开发体验和运行时治理割裂
+- 会话、权限、配置、热重载彼此独立，没有形成统一执行管线
+- 平台扩展能力存在，但缺少稳定的能力协商层
+- 多 Bot 管理和单 Bot 插件开发是两套世界
+
+v0.2 追求的结果是：
+
+- 开发者写插件时，看到的是一套统一模型
+- 运行时管理插件时，用的也是同一套模型
+- 单 Bot 与多 Bot 只是部署形态差异，不再是架构分叉
+
+## 借鉴什么，不借鉴什么
+
+### 借鉴 NoneBot2
+
+- `Matcher` 风格的事件过滤与分层匹配
+- `Rule / Permission / Priority / Block` 的执行管线思想
+- Adapter 与平台能力解耦的方向
+- 依赖注入让插件接口保持简洁
+
+### 不直接照搬 NoneBot2
+
+- 不把核心抽象做得过度动态，避免大量隐式依赖和调试困难
+- 不让会话控制强绑定某一种 matcher 语义
+- 不让插件编排过度依赖“全局注册 + 隐式状态”
+
+### 借鉴 AstrBot
+
+- 插件配置和管理体验更接近产品化
+- 装饰器式 filter 对消息型插件很顺手
+- Session Controller 这类高层能力有实际开发价值
+- 更强调插件实例管理，而不是只有“插件类型”
+
+### 不直接照搬 AstrBot
+
+- 不把运行时设计过度绑定到上层产品形态
+- 不把过多行为藏进装饰器和魔法属性里
+- 不把平台特性直接渗透到通用插件主路径
+
+## v0.2 设计原则
+
+1. 单一插件模型
+2. 通用优先，平台扩展显式进入
+3. 先有执行管线，再做语法糖
+4. 配置、权限、会话都挂到同一运行时
+5. 单 Bot 和多 Bot 共用同一内核对象图
+
+# 核心创新
+
+## 1. 统一为“插件类型 + 插件实例”双层模型
+
+当前仓库里已经同时存在两套模型：
+
+- 面向消息分发的 `Plugin<C>`
+- 面向生命周期管理的 `ManagedPlugin`
+
+v0.2 不再保留这两套平行体系，而是合并为：
+
+- `PluginFactory`：描述插件类型、默认配置、能力声明、构造实例
+- `PluginInstance`：承载生命周期、配置应用、事件处理、健康状态
+
+这样做的意义是：
+
+- 宏生成的命令插件不再绕开运行时治理
+- `Supervisor` 不需要单独维护另一套插件契约
+- 单 Bot builder 和多 Bot supervisor 看到的是同一个实例对象
+
+一个建议中的轮廓如下：
+
+```rust
+pub trait PluginFactory: Send + Sync + 'static {
+    type Config: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static;
+
+    fn kind(&self) -> &'static str;
+    fn manifest(&self) -> PluginManifest;
+    fn default_config(&self) -> Self::Config;
+    fn create(&self, ctx: PluginCreateContext<Self::Config>) -> anyhow::Result<Box<dyn PluginInstance>>;
+}
+
+#[async_trait::async_trait]
+pub trait PluginInstance: Send + Sync + 'static {
+    fn meta(&self) -> PluginMeta;
+    fn declared_handlers(&self) -> &[HandlerDecl];
+
+    async fn start(&mut self) -> anyhow::Result<()> { Ok(()) }
+    async fn stop(&mut self) -> anyhow::Result<()> { Ok(()) }
+    async fn apply_config(&mut self, update: ConfigUpdate) -> anyhow::Result<ApplyOutcome>;
+    async fn handle(&self, event: &KernelEvent, ctx: &HandlerContext) -> anyhow::Result<HandleOutcome>;
+    fn health(&self) -> PluginHealth { PluginHealth::healthy() }
+}
+```
+
+这里最关键的不是 trait 名字，而是“命令插件、正则插件、cron 插件、状态插件，最后都进入同一个实例运行时”。
+
+## 2. 用 Handler 管线替代当前 commands/wildcard 二分法
+
+当前分发器主要是：
+
+- 先匹配 command
+- 再跑 wildcard
+
+这个模型足够做 Demo，但不够支撑复杂插件生态。v0.2 建议把插件暴露的处理入口预编译成 `HandlerDecl`：
+
+- `EventKind`
+- `Rule`
+- `Permission`
+- `Priority`
+- `Block`
+- `ConcurrencyPolicy`
+- `SessionPolicy`
+
+也就是把 NoneBot2 的 matcher 思路吸收进来，但保持 Ayiou 的静态可读性。
+
+建议的执行管线：
+
+1. adapter 产出统一 `KernelEvent`
+2. runtime 做能力补全与基础解析
+3. router 根据 `EventKind` 粗筛 handler
+4. rule 阶段做命令、前缀、正则、提及、来源等过滤
+5. permission 阶段做 bot / 群 / 用户 / 角色 / 平台能力校验
+6. session 阶段决定是否接管后续输入
+7. handler 执行业务
+8. block 阶段决定是否终止后续 handler
+
+这样有几个直接收益：
+
+- `regex_patterns` 和 `cron_expressions` 不再只是预留字段
+- 优先级、拦截、权限成为内建语义
+- 消息命令、计划任务、系统事件能进入同一分发模型
+
+## 3. 会话不只是存储，而是“恢复型执行”
+
+`SessionStore` 现在已经有不错的底座，但接口还偏底层。v0.2 的创新点不在于再造一个 DSL，而是给插件一个可恢复的、可治理的会话执行模型。
+
+建议增加：
+
+- `ConversationScope`
+- `SessionCursor`
+- `wait_next()`
+- `pause(reason)`
+- `reject(prompt)`
+- `finish()`
+
+同时支持显式 scope 组合：
+
+- `user`
+- `channel`
+- `guild/group`
+- `plugin-instance`
+- 自定义 scope key
+
+这样做比直接照抄 NoneBot2 的暂停/拒绝更稳，因为 Ayiou 的 session 是从统一存储抽象出发，可以天然支持多 bot 与跨重启恢复。
+
+## 4. 配置系统从“字符串存取”升级到“类型化配置生命周期”
+
+当前配置语义里，`desired/applied version` 的方向是对的，但配置载体还是弱类型文本。
+
+v0.2 建议每个插件类型声明：
+
+- 配置结构体
+- schema
+- 默认值
+- 配置迁移器
+- 配置校验器
+
+建议把配置生命周期拆成：
+
+- `draft`
+- `validated`
+- `applied`
+- `rejected`
+
+额外创新点：
+
+- 支持 `dry-run apply`
+- 支持 `migrate from version N`
+- 支持“部分失败回滚，但保留错误上下文”
+
+这比单纯照搬 AstrBot 的 schema 管理更适合内核，因为它把配置当作运行时状态的一部分，而不是只是 UI 表单来源。
+
+## 5. 平台扩展不再是裸 `extension<T>()`，而是能力协商
+
+`extension<T>()` 要保留，因为它简单直接。但如果所有平台特性都靠类型下转型，插件生态后面会慢慢回到“写通用插件其实很难”的老路。
+
+v0.2 建议新增一层能力声明：
+
+- `Capability::ProactiveSend`
+- `Capability::MessageDelete`
+- `Capability::Reaction`
+- `Capability::GroupModeration`
+- `Capability::RichSegments`
+
+插件可以声明：
+
+- 必需能力
+- 可选能力
+
+运行时在启动时做协商，得到：
+
+- 可启动
+- 降级启动
+- 启动失败
+
+这样插件作者就不用到处 `if let Some(onebot) = ctx.extension::<Ctx>()`，而是先在 manifest 层声明约束，再在 handler 中按能力接口使用。
+
+## 6. Supervisor 变成真正的“多 Bot 编排器”
+
+v1 设计文档里已经把 `Supervisor` 定位成多 Bot 管理入口，这个方向不变，但 v0.2 要把它做完整。
+
+完整的 `Supervisor` 应该持有：
+
+- `AdapterRegistry`
+- `PluginRegistry`
+- `BotRegistry`
+- `RuntimeGraph`
+- `ConfigStore`
+- `SessionStore`
+- `Metrics/Tracing`
+
+每个 bot runtime 应该真正包含：
+
+- adapter 实例
+- inbound event stream
+- outbound sender
+- plugin instance graph
+- task supervisor
+- session coordinator
+
+这样单 bot 的 `Bot<A>` 就可以退化成：
+
+- 一个便捷 builder
+- 最后编译成 `BotDefinition + RuntimeSpec`
+- 交给同一套 runtime engine
+
+# Ayiou 自己该有的风格
+
+## 不是纯动态框架，而是“静态清晰 + 运行时可治理”
+
+和 Python 框架相比，Ayiou 有 Rust 的优势，不该把一切都做成运行时猜测。建议保留：
+
+- 显式 trait
+- 显式 handler 声明
+- 显式 config type
+- 显式 capability manifest
+
+但同时补足：
+
+- 自动注入常用上下文
+- 宏生成 handler 声明
+- 内建 session / permission / config 管线
+
+## 不是只有消息命令，而是统一事件内核
+
+v0.2 应明确把 `KernelEvent` 做成统一事件枚举，至少包含：
+
+- `Message`
+- `Notice`
+- `Request`
+- `ScheduleTick`
+- `Lifecycle`
+- `Custom`
+
+命令只是 `Message` 的一种 rule，不应继续主导整个插件契约。
+
+## 不是只做 filter，而是做“声明式执行约束”
+
+装饰器 filter 很好用，但 Ayiou 可以再往前一步，把过滤、权限、并发、session、节流统一进 handler 声明：
+
+```rust
+#[handler(
+    on = "message",
+    command = "ban",
+    permission = "group_admin",
+    priority = 20,
+    block = true,
+    session = "channel",
+    concurrency = "serialize"
+)]
+```
+
+这不是单纯模仿，而是把几个分散概念合并成一个稳定的运行时约束描述。
+
+# 建议中的 v0.2 拆分
+
+## Phase 1: 先统一插件模型
+
+- 合并 `Plugin<C>` 与 `ManagedPlugin`
+- 让命令宏生成 `HandlerDecl`
+- 让 `Bot` 与 `Supervisor` 共享同一 runtime engine
+
+这是最优先的，因为后面所有创新都依赖这一步。
+
+## Phase 2: 建立 Handler 管线
+
+- 引入 `KernelEvent`
+- 引入 `Rule / Permission / Priority / Block`
+- router 从命令索引升级为 handler 索引
+
+## Phase 3: 建立会话与权限高层 API
+
+- 基于 `SessionStore` 做 `Conversation`
+- 加入 scope、pause、resume、reject
+- 加入最小可用 permission gate
+
+## Phase 4: 类型化配置与能力协商
+
+- 插件 schema
+- dry-run apply
+- capability manifest
+- degraded startup
+
+## Phase 5: 完成多 Bot 闭环
+
+- adapter registry
+- runtime graph
+- bot lifecycle orchestration
+- 统一管理 API
+
+# 当前仓库里的具体调整建议
+
+## 应保留
+
+- 统一消息模型
+- `Context` 作为通用主路径
+- `SessionStore` 的 revision + lock 设计
+- `desired/applied config version` 语义
+- worker queue 的有界并发方向
+
+## 应尽快重构
+
+- `Plugin<C>` 与 `ManagedPlugin` 双轨并存
+- `Dispatcher` 只分 command/wildcard
+- `Supervisor` 只管插件实例，不真正驱动 adapter/runtime
+- `extension<T>()` 作为平台能力主入口
+
+## 可以后做
+
+- marketplace
+- 完整 Web UI
+- 沙箱执行
+- 完整动态安装
+
+# 一句话方案
+
+v0.2 最核心的不是“再造一个宏系统”，而是把 Ayiou 收敛成：
+
+- 一套插件实例模型
+- 一条统一事件执行管线
+- 一组可恢复的会话与配置机制
+- 一个真正能编排多 Bot 的 supervisor
+
+这样既能吸收 NoneBot2 的内核优点，也能吸收 AstrBot 的产品体验优势，同时保留 Ayiou 自己应有的工程清晰度。

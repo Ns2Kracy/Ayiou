@@ -7,9 +7,14 @@ use tokio::sync::Mutex;
 
 use crate::core::{
     config_store::{ConfigRecord, ConfigStore},
+    context::Context,
     observability::{MetricsSink, NoopMetrics},
     plugin_host::OutboundSender,
+    plugin_host::PluginHost,
     plugin_runtime::{PluginInstanceState, PluginLifecycleState, PluginRuntimeState},
+    plugin_system::{
+        ConfigUpdate, LegacyManagedPluginAdapter, RuntimePlugin, RuntimePluginServices,
+    },
     runtime::{RuntimeController, RuntimeState},
     scheduler::{Scheduler, TokioScheduler},
     session::{MemorySessionStore, SessionStore},
@@ -17,7 +22,7 @@ use crate::core::{
 };
 
 use super::{
-    catalog::{ManagedPlugin, PluginCatalog},
+    catalog::PluginCatalog,
     types::{BotDefinition, BotStatus, PluginConfigSnapshot, PluginInstanceSpec, RuntimeServices},
 };
 
@@ -32,7 +37,7 @@ impl From<ConfigRecord> for PluginConfigSnapshot {
 
 struct PluginSlot {
     spec: PluginInstanceSpec,
-    plugin: Mutex<Option<Box<dyn ManagedPlugin>>>,
+    plugin: Mutex<Option<Box<dyn RuntimePlugin<Context>>>>,
 }
 
 struct BotRecord {
@@ -134,8 +139,26 @@ impl Supervisor {
             record
                 .plugin_state
                 .set_lifecycle(instance_id, PluginLifecycleState::Initializing);
-            let mut plugin = self.catalog.create(&slot.spec.kind, instance_id)?;
-            plugin.init(record.services.clone()).await?;
+            let managed = self.catalog.create(&slot.spec.kind, instance_id)?;
+            let host = PluginHost::new(
+                record.services.scheduler.clone(),
+                record.services.store.clone(),
+                record.services.outbound.clone(),
+            );
+            let services = RuntimePluginServices::new(host)
+                .with_identity(
+                    record.services.bot_id.clone(),
+                    record.services.platform.clone(),
+                )
+                .with_sessions(record.services.sessions.clone())
+                .with_metrics(record.services.metrics.clone());
+            let mut plugin: Box<dyn RuntimePlugin<Context>> =
+                Box::new(LegacyManagedPluginAdapter::new(
+                    instance_id.to_string(),
+                    slot.spec.kind.clone(),
+                    managed,
+                ));
+            plugin.init(services).await?;
             *plugin_guard = Some(plugin);
             true
         } else {
@@ -147,10 +170,14 @@ impl Supervisor {
             .ok_or_else(|| anyhow!("plugin instance `{}` is unavailable", instance_id))?;
 
         if let Some(config) = config {
-            plugin.apply_config(config.clone()).await?;
-            record
-                .plugin_state
-                .mark_config_applied(instance_id, config.version);
+            let outcome = plugin
+                .apply_config(ConfigUpdate::new(config.version, config.content.clone()))
+                .await?;
+            if let Some(version) = outcome.applied_version {
+                record
+                    .plugin_state
+                    .mark_config_applied(instance_id, version);
+            }
         }
 
         if ensure_running && record.plugin_state.is_enabled(instance_id) {
@@ -442,7 +469,7 @@ impl ConfigManager for Supervisor {
 mod tests {
     use super::*;
     use crate::core::config_store::TomlConfigStore;
-    use crate::core::supervisor::PluginFactory;
+    use crate::core::supervisor::{ManagedPlugin, PluginFactory};
 
     struct TestFactory;
 

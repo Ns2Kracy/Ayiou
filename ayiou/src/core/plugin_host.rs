@@ -15,12 +15,22 @@ pub trait OutboundSender: Send + Sync {
 
 pub use OutboundSender as MessageSender;
 
-#[derive(Clone)]
 pub struct PluginHost<C> {
     scheduler: Arc<dyn Scheduler>,
     store: Arc<dyn Store>,
     sender: Option<Arc<dyn OutboundSender>>,
     _marker: PhantomData<fn() -> C>,
+}
+
+impl<C> Clone for PluginHost<C> {
+    fn clone(&self) -> Self {
+        Self {
+            scheduler: self.scheduler.clone(),
+            store: self.store.clone(),
+            sender: self.sender.clone(),
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<C> PluginHost<C> {

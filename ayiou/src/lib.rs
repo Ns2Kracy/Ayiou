@@ -8,6 +8,8 @@ use crate::core::{
     observability::{MetricsSink, NoopMetrics, elapsed_ms},
     plugin::{DispatchOptions, Dispatcher, Plugin, PluginBox, PluginManager},
     plugin_host::PluginHost,
+    plugin_runtime::PluginRuntimeState,
+    plugin_system::{LegacyMessagePluginAdapter, RuntimePluginEngine, RuntimePluginServices},
     scheduler::{Scheduler, TokioScheduler},
     storage::{MemoryStore, Store},
 };
@@ -263,20 +265,36 @@ impl<A: Adapter> Bot<A> {
 
         let adapter_runtime = adapter.start_with_runtime().await;
         let plugins = self.plugin_manager.build();
+        let runtime_state = PluginRuntimeState::default();
         let plugin_host = PluginHost::new(
             self.scheduler.clone(),
             self.store.clone(),
             adapter_runtime.sender.clone(),
         );
+        let mut engine = RuntimePluginEngine::new(
+            RuntimePluginServices::new(plugin_host),
+            runtime_state.clone(),
+        );
 
         for plugin in plugins.iter() {
-            if let Err(err) = plugin.start(plugin_host.clone()).await {
-                error!("Plugin startup error: {}", err);
-                return;
-            }
+            engine.push(Box::new(LegacyMessagePluginAdapter::new(
+                plugin.meta().name.clone(),
+                plugin.clone(),
+            )));
         }
 
-        let dispatcher = Dispatcher::with_options(plugins, self.dispatch_options.clone());
+        if let Err(err) = engine.init_all().await {
+            error!("Plugin initialization error: {}", err);
+            return;
+        }
+
+        if let Err(err) = engine.start_all().await {
+            error!("Plugin startup error: {}", err);
+            return;
+        }
+
+        let dispatcher =
+            Dispatcher::with_runtime_state(plugins, self.dispatch_options.clone(), runtime_state);
         info!("Loaded {} plugins", self.plugin_manager.count());
         let runtime = BotRuntime::new(
             dispatcher,
@@ -285,6 +303,10 @@ impl<A: Adapter> Bot<A> {
             self.runtime_options.clone(),
         );
         runtime.run(adapter_runtime.events).await;
+
+        if let Err(err) = engine.stop_all().await {
+            error!("Plugin shutdown error: {}", err);
+        }
     }
 }
 
