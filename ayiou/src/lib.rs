@@ -6,7 +6,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::core::{
     adapter::Adapter,
     observability::{MetricsSink, NoopMetrics, elapsed_ms},
-    plugin::{DispatchOptions, Dispatcher, Plugin, PluginBox, PluginManager},
+    plugin::{DispatchOptions, Plugin, PluginBox, PluginManager},
     plugin_host::PluginHost,
     plugin_runtime::PluginRuntimeState,
     plugin_system::{LegacyMessagePluginAdapter, RuntimePluginEngine, RuntimePluginServices},
@@ -59,7 +59,7 @@ pub struct Bot<A: Adapter> {
 }
 
 struct BotRuntime<C> {
-    dispatcher: Dispatcher<C>,
+    engine: Arc<tokio::sync::RwLock<RuntimePluginEngine<C>>>,
     metrics_sink: Arc<dyn MetricsSink>,
     scheduler: Arc<dyn Scheduler>,
     options: BotRuntimeOptions,
@@ -70,13 +70,13 @@ where
     C: crate::core::adapter::MsgContext + Send + 'static,
 {
     fn new(
-        dispatcher: Dispatcher<C>,
+        engine: Arc<tokio::sync::RwLock<RuntimePluginEngine<C>>>,
         metrics_sink: Arc<dyn MetricsSink>,
         scheduler: Arc<dyn Scheduler>,
         options: BotRuntimeOptions,
     ) -> Self {
         Self {
-            dispatcher,
+            engine,
             metrics_sink,
             scheduler,
             options,
@@ -134,7 +134,7 @@ where
     ) -> Vec<JoinHandle<()>> {
         (0..self.options.worker_count)
             .map(|_| {
-                let dispatcher = self.dispatcher.clone();
+                let engine = self.engine.clone();
                 let metrics = self.metrics_sink.clone();
                 let worker_rx = worker_rx.clone();
                 tokio::spawn(async move {
@@ -149,7 +149,11 @@ where
                         };
 
                         let start = Instant::now();
-                        if let Err(err) = dispatcher.dispatch(&ctx).await {
+                        let dispatch_result = {
+                            let engine = engine.read().await;
+                            engine.handle_all(&ctx).await
+                        };
+                        if let Err(err) = dispatch_result {
                             metrics.incr_counter("plugin_errors_total", 1, &[]);
                             error!("Plugin dispatch error: {}", err);
                         }
@@ -264,17 +268,18 @@ impl<A: Adapter> Bot<A> {
         info!("Starting Bot...");
 
         let adapter_runtime = adapter.start_with_runtime().await;
-        let plugins = self.plugin_manager.build();
         let runtime_state = PluginRuntimeState::default();
         let plugin_host = PluginHost::new(
             self.scheduler.clone(),
             self.store.clone(),
             adapter_runtime.sender.clone(),
         );
-        let mut engine = RuntimePluginEngine::new(
+        let mut engine = RuntimePluginEngine::with_options(
             RuntimePluginServices::new(plugin_host),
             runtime_state.clone(),
+            self.dispatch_options.clone(),
         );
+        let plugins = self.plugin_manager.build();
 
         for plugin in plugins.iter() {
             engine.push(Box::new(LegacyMessagePluginAdapter::new(
@@ -293,18 +298,17 @@ impl<A: Adapter> Bot<A> {
             return;
         }
 
-        let dispatcher =
-            Dispatcher::with_runtime_state(plugins, self.dispatch_options.clone(), runtime_state);
         info!("Loaded {} plugins", self.plugin_manager.count());
+        let engine = Arc::new(tokio::sync::RwLock::new(engine));
         let runtime = BotRuntime::new(
-            dispatcher,
+            engine.clone(),
             self.metrics_sink.clone(),
             self.scheduler.clone(),
             self.runtime_options.clone(),
         );
         runtime.run(adapter_runtime.events).await;
 
-        if let Err(err) = engine.stop_all().await {
+        if let Err(err) = engine.write().await.stop_all().await {
             error!("Plugin shutdown error: {}", err);
         }
     }

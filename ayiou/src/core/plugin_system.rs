@@ -5,9 +5,9 @@ use async_trait::async_trait;
 
 use crate::core::{
     context::Context,
-    model::{BotId, PlatformId},
+    model::{BotId, CommandInvocation, PlatformId},
     observability::MetricsSink,
-    plugin::{Plugin, PluginMetadata},
+    plugin::{DispatchOptions, Plugin, PluginMetadata, parse_command_line, with_command_invocation},
     plugin_host::PluginHost,
     plugin_runtime::{PluginLifecycleState, PluginRuntimeState},
     session::SessionStore,
@@ -229,7 +229,7 @@ impl RuntimePluginServices<Context> {
 }
 
 #[async_trait]
-pub trait RuntimePlugin<C: 'static>: Send + Sync + 'static {
+pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
     fn instance_id(&self) -> &str;
 
     fn kind(&self) -> &str;
@@ -265,12 +265,21 @@ pub trait RuntimePlugin<C: 'static>: Send + Sync + 'static {
 
     async fn handle(&self, ctx: &C) -> Result<HandleOutcome>;
 
+    async fn handle_with_invocation(
+        &self,
+        ctx: &C,
+        invocation: Option<CommandInvocation>,
+    ) -> Result<HandleOutcome> {
+        let _ = invocation;
+        self.handle(ctx).await
+    }
+
     fn health(&self) -> PluginHealth {
         PluginHealth::healthy()
     }
 }
 
-pub trait RuntimePluginFactory<C: 'static>: Send + Sync + 'static {
+pub trait RuntimePluginFactory<C: Sync + 'static>: Send + Sync + 'static {
     fn kind(&self) -> &'static str;
 
     fn create(&self, instance_id: &str) -> Result<Box<dyn RuntimePlugin<C>>>;
@@ -279,6 +288,7 @@ pub trait RuntimePluginFactory<C: 'static>: Send + Sync + 'static {
 pub struct RuntimePluginEngine<C> {
     services: RuntimePluginServices<C>,
     runtime_state: PluginRuntimeState,
+    dispatch_options: DispatchOptions,
     plugins: Vec<Box<dyn RuntimePlugin<C>>>,
 }
 
@@ -287,9 +297,18 @@ where
     C: Send + Sync + 'static,
 {
     pub fn new(services: RuntimePluginServices<C>, runtime_state: PluginRuntimeState) -> Self {
+        Self::with_options(services, runtime_state, DispatchOptions::default())
+    }
+
+    pub fn with_options(
+        services: RuntimePluginServices<C>,
+        runtime_state: PluginRuntimeState,
+        dispatch_options: DispatchOptions,
+    ) -> Self {
         Self {
             services,
             runtime_state,
+            dispatch_options,
             plugins: Vec::new(),
         }
     }
@@ -393,16 +412,27 @@ where
         Ok(outcome)
     }
 
-    pub async fn handle_all(&self, ctx: &C) -> Result<bool> {
-        for plugin in &self.plugins {
-            if !self.runtime_state.is_enabled(plugin.instance_id()) {
-                continue;
-            }
+    pub async fn handle_all(&self, ctx: &C) -> Result<bool>
+    where
+        C: crate::core::adapter::MsgContext,
+    {
+        let mut matched = self.matched_handlers(ctx);
+        matched.sort_by(|left, right| {
+            left.priority
+                .cmp(&right.priority)
+                .then(left.match_rank.cmp(&right.match_rank))
+                .then(left.plugin_index.cmp(&right.plugin_index))
+        });
 
-            match plugin.handle(ctx).await {
+        for candidate in matched {
+            let plugin = &self.plugins[candidate.plugin_index];
+            match plugin
+                .handle_with_invocation(ctx, candidate.invocation.clone())
+                .await
+            {
                 Ok(outcome) => {
                     self.runtime_state.clear_error(plugin.instance_id());
-                    if outcome.block {
+                    if outcome.block || candidate.block {
                         return Ok(true);
                     }
                 }
@@ -416,6 +446,105 @@ where
 
         Ok(false)
     }
+
+    fn matched_handlers(&self, ctx: &C) -> Vec<MatchedHandler>
+    where
+        C: crate::core::adapter::MsgContext,
+    {
+        let text = ctx.text();
+        let global_prefixes = self.dispatch_options.command_prefixes();
+        let mut matched = Vec::new();
+
+        for (plugin_index, plugin) in self.plugins.iter().enumerate() {
+            if !self.runtime_state.is_enabled(plugin.instance_id()) {
+                continue;
+            }
+
+            let best = plugin
+                .declared_handlers()
+                .into_iter()
+                .filter_map(|handler| {
+                    self.match_handler(&text, plugin_index, handler, global_prefixes)
+                })
+                .min_by(|left, right| {
+                    left.priority
+                        .cmp(&right.priority)
+                        .then(left.match_rank.cmp(&right.match_rank))
+                });
+
+            if let Some(best) = best {
+                matched.push(best);
+            }
+        }
+
+        matched
+    }
+
+    fn match_handler(
+        &self,
+        text: &str,
+        plugin_index: usize,
+        handler: HandlerDecl,
+        global_prefixes: &[String],
+    ) -> Option<MatchedHandler> {
+        let command_match = if handler.commands.is_empty() {
+            None
+        } else {
+            match_handler_command(text, &handler.commands, &handler.command_prefixes, global_prefixes)
+        };
+
+        if let Some(invocation) = command_match {
+            return Some(MatchedHandler {
+                plugin_index,
+                priority: handler.priority,
+                block: handler.block,
+                invocation: Some(invocation),
+                match_rank: 0,
+            });
+        }
+
+        if handler.wildcard {
+            return Some(MatchedHandler {
+                plugin_index,
+                priority: handler.priority,
+                block: handler.block,
+                invocation: None,
+                match_rank: 1,
+            });
+        }
+
+        None
+    }
+}
+
+#[derive(Clone)]
+struct MatchedHandler {
+    plugin_index: usize,
+    priority: i32,
+    block: bool,
+    invocation: Option<CommandInvocation>,
+    match_rank: u8,
+}
+
+fn match_handler_command(
+    text: &str,
+    commands: &[String],
+    handler_prefixes: &[String],
+    global_prefixes: &[String],
+) -> Option<CommandInvocation> {
+    let handler_prefix_refs: Vec<&str> = handler_prefixes.iter().map(String::as_str).collect();
+    let global_prefix_refs: Vec<&str> = global_prefixes.iter().map(String::as_str).collect();
+
+    parse_command_line(text, &handler_prefix_refs)
+        .filter(|invocation| commands.iter().any(|command| command == invocation.command()))
+        .or_else(|| {
+            parse_command_line(text, &global_prefix_refs)
+                .filter(|invocation| commands.iter().any(|command| command == invocation.command()))
+        })
+        .or_else(|| {
+            parse_command_line(text, &[])
+                .filter(|invocation| commands.iter().any(|command| command == invocation.command()))
+        })
 }
 
 pub struct LegacyMessagePluginAdapter<C> {
@@ -484,6 +613,19 @@ where
 
     async fn handle(&self, ctx: &C) -> Result<HandleOutcome> {
         Ok(HandleOutcome::from_block(self.plugin.handle(ctx).await?))
+    }
+
+    async fn handle_with_invocation(
+        &self,
+        ctx: &C,
+        invocation: Option<CommandInvocation>,
+    ) -> Result<HandleOutcome> {
+        let block = if let Some(invocation) = invocation {
+            with_command_invocation(invocation, self.plugin.handle(ctx)).await?
+        } else {
+            self.plugin.handle(ctx).await?
+        };
+        Ok(HandleOutcome::from_block(block))
     }
 }
 
@@ -579,6 +721,7 @@ mod tests {
         adapter::MsgContext,
         model::{ChannelRef, EventEnvelope, MessageEvent, PlatformId, UserRef},
         observability::NoopMetrics,
+        plugin::{PluginMetadata, current_command_invocation},
         plugin_host::PluginHost,
         scheduler::{Scheduler, TokioScheduler},
         storage::{MemoryStore, Store},
@@ -655,7 +798,12 @@ mod tests {
         engine.init_all().await.unwrap();
         engine.start_all().await.unwrap();
 
-        let blocked = engine.handle_all(&TestCtx::default()).await.unwrap();
+        let blocked = engine
+            .handle_all(&TestCtx {
+                text: "/echo hi".to_string(),
+            })
+            .await
+            .unwrap();
         assert!(blocked);
         assert_eq!(starts.load(Ordering::SeqCst), 1);
         assert_eq!(handles.load(Ordering::SeqCst), 1);
@@ -667,6 +815,135 @@ mod tests {
             engine.plugins()[0].declared_handlers(),
             vec![HandlerDecl::message_commands(["echo"], ["/"])]
         );
+    }
+
+    struct InvocationPlugin {
+        seen: Arc<std::sync::Mutex<Option<(String, String)>>>,
+    }
+
+    #[async_trait]
+    impl Plugin<TestCtx> for InvocationPlugin {
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new("invoke")
+        }
+
+        fn commands(&self) -> Vec<String> {
+            vec!["echo".to_string()]
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<bool> {
+            let invocation = current_command_invocation().expect("command invocation should exist");
+            *self.seen.lock().unwrap() = Some((
+                invocation.command().to_string(),
+                invocation.args().to_string(),
+            ));
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_plugin_engine_uses_global_prefixes_and_command_invocation() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let host = PluginHost::new(scheduler, store, None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let plugin = Arc::new(InvocationPlugin { seen: seen.clone() }) as Arc<dyn Plugin<TestCtx>>;
+
+        let mut engine =
+            RuntimePluginEngine::with_options(services, state, DispatchOptions::new(["/"]));
+        engine.push(Box::new(LegacyMessagePluginAdapter::new("invoke", plugin)));
+        engine.init_all().await.unwrap();
+        engine.start_all().await.unwrap();
+
+        let blocked = engine
+            .handle_all(&TestCtx {
+                text: "/echo hello world".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(blocked);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            Some(("echo".to_string(), "hello world".to_string()))
+        );
+    }
+
+    struct PriorityPlugin {
+        instance_id: &'static str,
+        priority: i32,
+        block_decl: bool,
+        hits: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl RuntimePlugin<TestCtx> for PriorityPlugin {
+        fn instance_id(&self) -> &str {
+            self.instance_id
+        }
+
+        fn kind(&self) -> &str {
+            self.instance_id
+        }
+
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new(self.instance_id)
+        }
+
+        fn declared_handlers(&self) -> Vec<HandlerDecl> {
+            vec![HandlerDecl {
+                event_kind: HandlerEventKind::Message,
+                commands: Vec::new(),
+                command_prefixes: Vec::new(),
+                priority: self.priority,
+                block: self.block_decl,
+                wildcard: true,
+            }]
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+            self.hits.lock().unwrap().push(self.instance_id);
+            Ok(HandleOutcome::pass())
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_plugin_engine_orders_handlers_by_priority_and_respects_block() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let host = PluginHost::new(scheduler, store, None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "late",
+            priority: 20,
+            block_decl: false,
+            hits: hits.clone(),
+        }));
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "first",
+            priority: 5,
+            block_decl: true,
+            hits: hits.clone(),
+        }));
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "never",
+            priority: 30,
+            block_decl: false,
+            hits: hits.clone(),
+        }));
+        engine.init_all().await.unwrap();
+        engine.start_all().await.unwrap();
+
+        let blocked = engine.handle_all(&TestCtx::default()).await.unwrap();
+
+        assert!(blocked);
+        assert_eq!(*hits.lock().unwrap(), vec!["first"]);
     }
 
     struct TestManagedPlugin {
