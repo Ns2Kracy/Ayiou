@@ -7,16 +7,11 @@ use crate::core::{
     context::Context,
     model::{BotId, CommandInvocation, PlatformId},
     observability::MetricsSink,
-    plugin::{
-        DispatchOptions, Plugin, PluginMetadata, parse_command_line, with_command_invocation,
-    },
+    plugin::{DispatchOptions, PluginMetadata, parse_command_line},
     plugin_host::PluginHost,
     plugin_runtime::{PluginLifecycleState, PluginRuntimeState},
     session::SessionStore,
-    supervisor::{
-        ManagedPlugin, PluginConfigSnapshot, PluginHealth,
-        RuntimeServices as SupervisorRuntimeServices,
-    },
+    supervisor::{PluginHealth, RuntimeServices as SupervisorRuntimeServices},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -384,7 +379,7 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
         Ok(())
     }
 
-    async fn start(&mut self) -> Result<()> {
+    async fn start(&mut self, _services: RuntimePluginServices<C>) -> Result<()> {
         Ok(())
     }
 
@@ -521,7 +516,7 @@ where
             self.runtime_state
                 .set_lifecycle(&instance_id, PluginLifecycleState::Starting);
 
-            if let Err(err) = plugin.start().await {
+            if let Err(err) = plugin.start(self.services.clone()).await {
                 self.runtime_state
                     .record_error(&instance_id, err.to_string());
                 return Err(err);
@@ -788,180 +783,18 @@ fn permissions_match<C>(
     })
 }
 
-pub struct LegacyMessagePluginAdapter<C> {
-    instance_id: String,
-    kind: String,
-    plugin: Arc<dyn Plugin<C>>,
-    services: Option<RuntimePluginServices<C>>,
-}
-
-impl<C> LegacyMessagePluginAdapter<C>
-where
-    C: 'static,
-{
-    pub fn new(instance_id: impl Into<String>, plugin: Arc<dyn Plugin<C>>) -> Self {
-        let kind = plugin.meta().name.clone();
-        Self {
-            instance_id: instance_id.into(),
-            kind,
-            plugin,
-            services: None,
-        }
-    }
-}
-
-#[async_trait]
-impl<C> RuntimePlugin<C> for LegacyMessagePluginAdapter<C>
-where
-    C: Send + Sync + 'static,
-{
-    fn instance_id(&self) -> &str {
-        &self.instance_id
-    }
-
-    fn kind(&self) -> &str {
-        &self.kind
-    }
-
-    fn meta(&self) -> PluginMetadata {
-        self.plugin.meta()
-    }
-
-    fn declared_handlers(&self) -> Vec<HandlerDecl> {
-        let commands = self.plugin.commands();
-        if commands.is_empty() {
-            vec![HandlerDecl::wildcard_message()]
-        } else {
-            vec![HandlerDecl::message_commands(
-                commands,
-                self.plugin.command_prefixes(),
-            )]
-        }
-    }
-
-    async fn init(&mut self, services: RuntimePluginServices<C>) -> Result<()> {
-        self.services = Some(services);
-        Ok(())
-    }
-
-    async fn start(&mut self) -> Result<()> {
-        let services = self
-            .services
-            .clone()
-            .ok_or_else(|| anyhow!("plugin `{}` has not been initialized", self.instance_id))?;
-        self.plugin.start(services.host).await
-    }
-
-    async fn handle(&self, ctx: &C) -> Result<HandleOutcome> {
-        Ok(HandleOutcome::from_block(self.plugin.handle(ctx).await?))
-    }
-
-    async fn handle_with_invocation(
-        &self,
-        ctx: &C,
-        invocation: Option<CommandInvocation>,
-    ) -> Result<HandleOutcome> {
-        let block = if let Some(invocation) = invocation {
-            with_command_invocation(invocation, self.plugin.handle(ctx)).await?
-        } else {
-            self.plugin.handle(ctx).await?
-        };
-        Ok(HandleOutcome::from_block(block))
-    }
-}
-
-pub struct LegacyManagedPluginAdapter {
-    instance_id: String,
-    kind: String,
-    plugin: Box<dyn ManagedPlugin>,
-}
-
-impl LegacyManagedPluginAdapter {
-    pub fn new(
-        instance_id: impl Into<String>,
-        kind: impl Into<String>,
-        plugin: Box<dyn ManagedPlugin>,
-    ) -> Self {
-        Self {
-            instance_id: instance_id.into(),
-            kind: kind.into(),
-            plugin,
-        }
-    }
-}
-
-#[async_trait]
-impl RuntimePlugin<Context> for LegacyManagedPluginAdapter {
-    fn instance_id(&self) -> &str {
-        &self.instance_id
-    }
-
-    fn kind(&self) -> &str {
-        &self.kind
-    }
-
-    fn meta(&self) -> PluginMetadata {
-        PluginMetadata::new(self.instance_id.clone())
-            .description(format!("managed plugin kind `{}`", self.kind))
-    }
-
-    fn declared_handlers(&self) -> Vec<HandlerDecl> {
-        let mut handler = HandlerDecl::wildcard_message();
-        handler.event_kind = HandlerEventKind::Any;
-        vec![handler]
-    }
-
-    async fn init(&mut self, services: RuntimePluginServices<Context>) -> Result<()> {
-        let runtime_services = services.try_as_supervisor_runtime_services()?;
-        self.plugin.init(runtime_services).await
-    }
-
-    async fn start(&mut self) -> Result<()> {
-        self.plugin.start().await
-    }
-
-    async fn stop(&mut self) -> Result<()> {
-        self.plugin.stop().await
-    }
-
-    async fn apply_config(&mut self, update: ConfigUpdate) -> Result<ApplyConfigOutcome> {
-        self.plugin
-            .apply_config(PluginConfigSnapshot {
-                version: update.version,
-                content: update.content,
-            })
-            .await?;
-        Ok(ApplyConfigOutcome::applied(update.version))
-    }
-
-    async fn handle(&self, ctx: &Context) -> Result<HandleOutcome> {
-        self.plugin.handle_event(ctx.event()).await?;
-        Ok(HandleOutcome::pass())
-    }
-
-    fn health(&self) -> PluginHealth {
-        self.plugin.health()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::Arc;
 
     use anyhow::Result;
 
     use crate::core::{
         adapter::MsgContext,
-        model::{ChannelRef, EventEnvelope, MessageEvent, PlatformId, UserRef},
-        observability::NoopMetrics,
-        plugin::{PluginMetadata, current_command_invocation},
+        plugin::PluginMetadata,
         plugin_host::PluginHost,
         scheduler::{Scheduler, TokioScheduler},
         storage::{MemoryStore, Store},
-        supervisor::{ManagedPlugin, PluginConfigSnapshot},
     };
 
     use super::*;
@@ -983,128 +816,6 @@ mod tests {
         fn group_id(&self) -> Option<String> {
             None
         }
-    }
-
-    struct StartHandlePlugin {
-        starts: Arc<AtomicUsize>,
-        handles: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl Plugin<TestCtx> for StartHandlePlugin {
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new("echo")
-        }
-
-        fn commands(&self) -> Vec<String> {
-            vec!["echo".to_string()]
-        }
-
-        fn command_prefixes(&self) -> Vec<String> {
-            vec!["/".to_string()]
-        }
-
-        async fn start(&self, _host: PluginHost<TestCtx>) -> Result<()> {
-            self.starts.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-
-        async fn handle(&self, _ctx: &TestCtx) -> Result<bool> {
-            self.handles.fetch_add(1, Ordering::SeqCst);
-            Ok(true)
-        }
-    }
-
-    #[tokio::test]
-    async fn runtime_plugin_engine_bridges_legacy_message_plugins() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
-        let services = RuntimePluginServices::new(host);
-        let state = PluginRuntimeState::default();
-        let starts = Arc::new(AtomicUsize::new(0));
-        let handles = Arc::new(AtomicUsize::new(0));
-        let plugin = Arc::new(StartHandlePlugin {
-            starts: starts.clone(),
-            handles: handles.clone(),
-        }) as Arc<dyn Plugin<TestCtx>>;
-
-        let mut engine = RuntimePluginEngine::new(services, state.clone());
-        engine.push(Box::new(LegacyMessagePluginAdapter::new("echo", plugin)));
-        engine.init_all().await.unwrap();
-        engine.start_all().await.unwrap();
-
-        let blocked = engine
-            .handle_all(&TestCtx {
-                text: "/echo hi".to_string(),
-            })
-            .await
-            .unwrap();
-        assert!(blocked);
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-        assert_eq!(handles.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            state.snapshot("echo").lifecycle_state,
-            PluginLifecycleState::Running
-        );
-        assert_eq!(
-            engine.plugins()[0].declared_handlers(),
-            vec![HandlerDecl::message_commands(["echo"], ["/"])]
-        );
-    }
-
-    struct InvocationPlugin {
-        seen: Arc<std::sync::Mutex<Option<(String, String)>>>,
-    }
-
-    #[async_trait]
-    impl Plugin<TestCtx> for InvocationPlugin {
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new("invoke")
-        }
-
-        fn commands(&self) -> Vec<String> {
-            vec!["echo".to_string()]
-        }
-
-        async fn handle(&self, _ctx: &TestCtx) -> Result<bool> {
-            let invocation = current_command_invocation().expect("command invocation should exist");
-            *self.seen.lock().unwrap() = Some((
-                invocation.command().to_string(),
-                invocation.args().to_string(),
-            ));
-            Ok(true)
-        }
-    }
-
-    #[tokio::test]
-    async fn runtime_plugin_engine_uses_global_prefixes_and_command_invocation() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
-        let services = RuntimePluginServices::new(host);
-        let state = PluginRuntimeState::default();
-        let seen = Arc::new(std::sync::Mutex::new(None));
-        let plugin = Arc::new(InvocationPlugin { seen: seen.clone() }) as Arc<dyn Plugin<TestCtx>>;
-
-        let mut engine =
-            RuntimePluginEngine::with_options(services, state, DispatchOptions::new(["/"]));
-        engine.push(Box::new(LegacyMessagePluginAdapter::new("invoke", plugin)));
-        engine.init_all().await.unwrap();
-        engine.start_all().await.unwrap();
-
-        let blocked = engine
-            .handle_all(&TestCtx {
-                text: "/echo hello world".to_string(),
-            })
-            .await
-            .unwrap();
-
-        assert!(blocked);
-        assert_eq!(
-            *seen.lock().unwrap(),
-            Some(("echo".to_string(), "hello world".to_string()))
-        );
     }
 
     struct PriorityPlugin {
@@ -1287,90 +998,5 @@ mod tests {
         let snapshot = state.snapshot("sender");
         assert!(err.to_string().contains("missing required capabilities"));
         assert_eq!(snapshot.lifecycle_state, PluginLifecycleState::Failed);
-    }
-
-    struct TestManagedPlugin {
-        starts: Arc<AtomicUsize>,
-        stops: Arc<AtomicUsize>,
-        configs: Arc<AtomicUsize>,
-        events: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl ManagedPlugin for TestManagedPlugin {
-        fn kind(&self) -> &'static str {
-            "managed-test"
-        }
-
-        async fn start(&mut self) -> Result<()> {
-            self.starts.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-
-        async fn stop(&mut self) -> Result<()> {
-            self.stops.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-
-        async fn handle_event(&self, _event: &crate::core::model::EventEnvelope) -> Result<()> {
-            self.events.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-
-        async fn apply_config(&mut self, _config: PluginConfigSnapshot) -> Result<()> {
-            self.configs.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn managed_plugin_adapter_bridges_lifecycle_and_config() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
-        let services = RuntimePluginServices::new(host)
-            .with_identity("bot-a", "console")
-            .with_sessions(Arc::new(crate::core::session::MemorySessionStore::new()))
-            .with_metrics(Arc::new(NoopMetrics));
-        let starts = Arc::new(AtomicUsize::new(0));
-        let stops = Arc::new(AtomicUsize::new(0));
-        let configs = Arc::new(AtomicUsize::new(0));
-        let events = Arc::new(AtomicUsize::new(0));
-        let mut plugin = LegacyManagedPluginAdapter::new(
-            "instance-a",
-            "managed-test",
-            Box::new(TestManagedPlugin {
-                starts: starts.clone(),
-                stops: stops.clone(),
-                configs: configs.clone(),
-                events: events.clone(),
-            }),
-        );
-
-        plugin.init(services).await.unwrap();
-        plugin.start().await.unwrap();
-        plugin
-            .apply_config(ConfigUpdate::new(2, "value='v2'"))
-            .await
-            .unwrap();
-
-        let platform = PlatformId::new("console");
-        let user = UserRef::new(platform.clone(), "u1");
-        let channel = ChannelRef::direct(platform.clone(), "u1");
-        let message = MessageEvent::new(user, channel, "hello");
-        let ctx = Context::new(
-            EventEnvelope::new("bot-a", platform).with_message(message),
-            None,
-            (),
-        );
-
-        let outcome = plugin.handle(&ctx).await.unwrap();
-        plugin.stop().await.unwrap();
-
-        assert!(!outcome.block);
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-        assert_eq!(stops.load(Ordering::SeqCst), 1);
-        assert_eq!(configs.load(Ordering::SeqCst), 1);
-        assert_eq!(events.load(Ordering::SeqCst), 1);
     }
 }

@@ -6,10 +6,10 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::core::{
     adapter::Adapter,
     observability::{MetricsSink, NoopMetrics, elapsed_ms},
-    plugin::{DispatchOptions, Plugin, PluginBox, PluginManager},
+    plugin::DispatchOptions,
     plugin_host::PluginHost,
     plugin_runtime::PluginRuntimeState,
-    plugin_system::{LegacyMessagePluginAdapter, RuntimePluginEngine, RuntimePluginServices},
+    plugin_system::{RuntimePlugin, RuntimePluginEngine, RuntimePluginServices},
     scheduler::{Scheduler, TokioScheduler},
     storage::{MemoryStore, Store},
 };
@@ -50,7 +50,7 @@ impl Default for BotRuntimeOptions {
 }
 
 pub struct Bot<A: Adapter> {
-    plugin_manager: PluginManager<A::Ctx>,
+    plugins: Vec<Box<dyn RuntimePlugin<A::Ctx>>>,
     dispatch_options: DispatchOptions,
     metrics_sink: Arc<dyn MetricsSink>,
     scheduler: Arc<dyn Scheduler>,
@@ -178,7 +178,7 @@ impl<A: Adapter> Default for Bot<A> {
 impl<A: Adapter> Bot<A> {
     pub fn new() -> Self {
         Self {
-            plugin_manager: PluginManager::new(),
+            plugins: Vec::new(),
             dispatch_options: DispatchOptions::default(),
             metrics_sink: Arc::new(NoopMetrics),
             scheduler: Arc::new(TokioScheduler::new()),
@@ -238,30 +238,30 @@ impl<A: Adapter> Bot<A> {
         self
     }
 
-    pub fn register_plugin<P: Plugin<A::Ctx>>(mut self, plugin: P) -> Self {
-        self.plugin_manager.register(plugin);
+    pub fn register_plugin<P: RuntimePlugin<A::Ctx>>(mut self, plugin: P) -> Self {
+        self.plugins.push(Box::new(plugin));
         self
     }
 
-    pub fn plugin<P: Plugin<A::Ctx> + Default>(mut self) -> Self {
-        self.plugin_manager.register(P::default());
+    pub fn plugin<P: RuntimePlugin<A::Ctx> + Default>(mut self) -> Self {
+        self.plugins.push(Box::new(P::default()));
         self
     }
 
-    pub fn command<C: Plugin<A::Ctx> + Default>(self) -> Self {
+    pub fn command<C: RuntimePlugin<A::Ctx> + Default>(self) -> Self {
         self.plugin::<C>()
     }
 
     pub fn register_plugins(
         mut self,
-        plugins: impl IntoIterator<Item = PluginBox<A::Ctx>>,
+        plugins: impl IntoIterator<Item = Box<dyn RuntimePlugin<A::Ctx>>>,
     ) -> Self {
-        self.plugin_manager.register_all(plugins);
+        self.plugins.extend(plugins);
         self
     }
 
-    pub fn plugin_manager(&self) -> &PluginManager<A::Ctx> {
-        &self.plugin_manager
+    pub fn plugin_count(&self) -> usize {
+        self.plugins.len()
     }
 
     pub async fn run(mut self, adapter: A) {
@@ -279,13 +279,8 @@ impl<A: Adapter> Bot<A> {
             runtime_state.clone(),
             self.dispatch_options.clone(),
         );
-        let plugins = self.plugin_manager.build();
-
-        for plugin in plugins.iter() {
-            engine.push(Box::new(LegacyMessagePluginAdapter::new(
-                plugin.meta().name.clone(),
-                plugin.clone(),
-            )));
+        for plugin in self.plugins.drain(..) {
+            engine.push(plugin);
         }
 
         if let Err(err) = engine.init_all().await {
@@ -298,7 +293,7 @@ impl<A: Adapter> Bot<A> {
             return;
         }
 
-        info!("Loaded {} plugins", self.plugin_manager.count());
+        info!("Loaded {} plugins", engine.plugins().len());
         let engine = Arc::new(tokio::sync::RwLock::new(engine));
         let runtime = BotRuntime::new(
             engine.clone(),

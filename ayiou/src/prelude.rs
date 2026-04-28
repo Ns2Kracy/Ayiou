@@ -14,13 +14,12 @@ pub use crate::core::observability::{
     InMemoryMetrics, MetricsSink, NoopMetrics, spawn_metrics_log_reporter,
 };
 pub use crate::core::plugin::{
-    ArgsParseError, ArgsParser, Command, CronSchedule, DispatchOptions, Dispatcher, Plugin,
-    PluginManager, PluginMetadata, RegexValidated,
+    ArgsParseError, ArgsParser, Command, CronSchedule, DispatchOptions, PluginMetadata,
+    RegexValidated,
 };
 pub use crate::core::plugin_system::{
     ApplyConfigOutcome, Capability, CapabilityNegotiation, ConcurrencyPolicy, ConfigUpdate,
-    HandleOutcome, HandlerDecl, HandlerEventKind, LegacyManagedPluginAdapter,
-    LegacyMessagePluginAdapter, Permission, RuntimePlugin, RuntimePluginEngine,
+    HandleOutcome, HandlerDecl, HandlerEventKind, Permission, RuntimePlugin, RuntimePluginEngine,
     RuntimePluginFactory, RuntimePluginManifest, RuntimePluginServices, SessionPolicy,
     negotiate_capabilities,
 };
@@ -30,9 +29,8 @@ pub use crate::core::session::{
 };
 pub use crate::core::storage::{MemoryStore, Store, StoreSerdeExt};
 pub use crate::core::supervisor::{
-    BotDefinition, BotManager, BotStatus, ConfigManager, ManagedPlugin, PluginCatalog,
-    PluginConfigSnapshot, PluginFactory, PluginHealth, PluginInstanceSpec, PluginManagerApi,
-    RuntimeServices, Supervisor,
+    BotDefinition, BotManager, BotStatus, ConfigManager, PluginCatalog, PluginConfigSnapshot,
+    PluginHealth, PluginInstanceSpec, PluginManagerApi, RuntimeServices, Supervisor,
 };
 
 pub use crate::adapter::console::adapter::ConsoleAdapter;

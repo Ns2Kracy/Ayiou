@@ -9,7 +9,7 @@ use derive_plugin::expand_derive_plugin;
 
 /// Derive macro for simple plugin definition.
 ///
-/// This macro generates `Plugin` trait implementation from struct attributes.
+/// This macro generates a `RuntimePlugin` implementation from struct attributes.
 /// By default you implement an `execute` method on your struct that handles the command.
 /// For more advanced plugins, you can also point the macro at custom `start` and `handler`
 /// methods via `#[plugin(start = "...", handler = "...")]`.
@@ -67,7 +67,7 @@ pub fn command(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
-/// Generate a full `Plugin` implementation from an `impl` block.
+/// Generate a full `RuntimePlugin` implementation from an `impl` block.
 ///
 /// # Example
 ///

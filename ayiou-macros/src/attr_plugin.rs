@@ -106,7 +106,7 @@ pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<Tok
             #(#labels)|* => {
                 #(#parser_stmts)*
                 self.#fn_name(ctx, #(#call_args),*).await?;
-                Ok(true)
+                Ok(ayiou::core::plugin_system::HandleOutcome::block())
             }
         }
     });
@@ -115,7 +115,15 @@ pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<Tok
         #item_impl
 
         #[async_trait::async_trait]
-        impl ayiou::core::plugin::Plugin<#ctx_ty> for #plugin_ty {
+        impl ayiou::core::plugin_system::RuntimePlugin<#ctx_ty> for #plugin_ty {
+            fn instance_id(&self) -> &str {
+                #plugin_name
+            }
+
+            fn kind(&self) -> &str {
+                #plugin_name
+            }
+
             fn meta(&self) -> ayiou::core::plugin::PluginMetadata {
                 ayiou::core::plugin::PluginMetadata {
                     name: #plugin_name.to_string(),
@@ -124,34 +132,26 @@ pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<Tok
                 }
             }
 
-            fn commands(&self) -> Vec<String> {
-                vec![#(#command_values),*]
+            fn declared_handlers(&self) -> Vec<ayiou::core::plugin_system::HandlerDecl> {
+                vec![ayiou::core::plugin_system::HandlerDecl::message_commands(
+                    vec![#(#command_values),*],
+                    Vec::<String>::from([#(#prefix_values),*]),
+                )]
             }
 
-            fn command_prefixes(&self) -> Vec<String> {
-                vec![#(#prefix_values),*]
+            async fn handle_with_invocation(
+                &self,
+                ctx: &#ctx_ty,
+                invocation: Option<ayiou::core::model::CommandInvocation>,
+            ) -> anyhow::Result<ayiou::core::plugin_system::HandleOutcome> {
+                let Some(line) = invocation else {
+                    return Ok(ayiou::core::plugin_system::HandleOutcome::pass());
+                };
+                self.__ayiou_dispatch_command(ctx, line.command(), line.args()).await
             }
 
-            async fn handle(&self, ctx: &#ctx_ty) -> anyhow::Result<bool> {
-                use ayiou::core::adapter::MsgContext;
-
-                if let Some(line) = ayiou::core::plugin::current_command_invocation() {
-                    return self.__ayiou_dispatch_command(ctx, line.command(), line.args()).await;
-                }
-
-                let text = ctx.text();
-                let prefixes_owned = self.command_prefixes();
-                let prefix_refs: Vec<&str> = prefixes_owned.iter().map(String::as_str).collect();
-
-                if let Some(line) = ayiou::core::plugin::parse_command_line(&text, &prefix_refs) {
-                    return self.__ayiou_dispatch_command(ctx, line.command(), line.args()).await;
-                }
-
-                if let Some(line) = ayiou::core::plugin::parse_command_line(&text, &[]) {
-                    return self.__ayiou_dispatch_command(ctx, line.command(), line.args()).await;
-                }
-
-                Ok(false)
+            async fn handle(&self, _ctx: &#ctx_ty) -> anyhow::Result<ayiou::core::plugin_system::HandleOutcome> {
+                Ok(ayiou::core::plugin_system::HandleOutcome::pass())
             }
         }
 
@@ -161,10 +161,10 @@ pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<Tok
                 ctx: &#ctx_ty,
                 command: &str,
                 args: &str,
-            ) -> anyhow::Result<bool> {
+            ) -> anyhow::Result<ayiou::core::plugin_system::HandleOutcome> {
                 match command {
                     #(#dispatch_arms,)*
-                    _ => Ok(false),
+                    _ => Ok(ayiou::core::plugin_system::HandleOutcome::pass()),
                 }
             }
         }

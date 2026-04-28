@@ -8,8 +8,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use ayiou::Bot;
 use ayiou::core::adapter::{Adapter, MsgContext};
-use ayiou::core::plugin::{Plugin, PluginMetadata};
-use ayiou::core::plugin_host::PluginHost;
+use ayiou::core::plugin::PluginMetadata;
+use ayiou::core::plugin_system::{
+    HandleOutcome, HandlerDecl, RuntimePlugin, RuntimePluginServices,
+};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -46,18 +48,30 @@ struct StartPlugin {
 }
 
 #[async_trait]
-impl Plugin<TestCtx> for StartPlugin {
+impl RuntimePlugin<TestCtx> for StartPlugin {
+    fn instance_id(&self) -> &str {
+        "start-plugin"
+    }
+
+    fn kind(&self) -> &str {
+        "start-plugin"
+    }
+
     fn meta(&self) -> PluginMetadata {
         PluginMetadata::new("start-plugin")
     }
 
-    async fn start(&self, _host: PluginHost<TestCtx>) -> Result<()> {
+    fn declared_handlers(&self) -> Vec<HandlerDecl> {
+        vec![HandlerDecl::wildcard_message()]
+    }
+
+    async fn start(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
         self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(&self, _ctx: &TestCtx) -> Result<bool> {
-        Ok(false)
+    async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        Ok(HandleOutcome::pass())
     }
 }
 

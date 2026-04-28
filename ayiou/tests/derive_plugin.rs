@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::Result;
 use ayiou::Plugin;
 use ayiou::core::adapter::MsgContext;
-use ayiou::core::plugin::Plugin as PluginTrait;
 use ayiou::core::plugin_host::PluginHost;
+use ayiou::core::plugin_system::{RuntimePlugin, RuntimePluginServices};
 use ayiou::core::scheduler::{Scheduler, TokioScheduler};
 use ayiou::core::storage::{MemoryStore, Store};
 
@@ -62,13 +62,23 @@ async fn derive_plugin_supports_custom_start_and_handler_methods() {
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
     let host = PluginHost::new(scheduler, store, None);
 
-    PluginTrait::start(&plugin, host).await.unwrap();
-    let blocked = PluginTrait::handle(&plugin, &TestCtx::default())
+    let mut plugin = plugin;
+    RuntimePlugin::start(&mut plugin, RuntimePluginServices::new(host))
         .await
         .unwrap();
+    let blocked = RuntimePlugin::handle(&plugin, &TestCtx::default())
+        .await
+        .unwrap()
+        .block;
 
     assert_eq!(plugin.starts.load(Ordering::SeqCst), 1);
     assert_eq!(plugin.handles.load(Ordering::SeqCst), 1);
     assert!(!blocked);
-    assert_eq!(PluginTrait::commands(&plugin), vec!["advanced-derived"]);
+    assert_eq!(
+        RuntimePlugin::declared_handlers(&plugin),
+        vec![ayiou::core::plugin_system::HandlerDecl::message_commands(
+            ["advanced-derived"],
+            Vec::<String>::new()
+        )]
+    );
 }

@@ -4,8 +4,7 @@ use anyhow::{Result, anyhow};
 
 use crate::core::{
     adapter::MsgContext,
-    model::{CommandInvocation, EventEnvelope, MessageEvent, OutboundMessage},
-    plugin::current_command_invocation,
+    model::{EventEnvelope, MessageEvent, OutboundMessage},
     plugin_host::OutboundSender,
 };
 
@@ -38,18 +37,6 @@ impl Context {
 
     pub fn message(&self) -> Option<&MessageEvent> {
         self.envelope.message()
-    }
-
-    pub fn command(&self) -> Option<CommandInvocation> {
-        current_command_invocation()
-    }
-
-    pub fn command_name(&self) -> Option<String> {
-        self.command().map(|command| command.command().to_string())
-    }
-
-    pub fn command_args(&self) -> Option<String> {
-        self.command().map(|command| command.args().to_string())
     }
 
     pub fn extension<T>(&self) -> Option<&T>

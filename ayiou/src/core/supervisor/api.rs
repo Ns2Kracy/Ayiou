@@ -12,9 +12,7 @@ use crate::core::{
     plugin_host::OutboundSender,
     plugin_host::PluginHost,
     plugin_runtime::{PluginInstanceState, PluginLifecycleState, PluginRuntimeState},
-    plugin_system::{
-        ConfigUpdate, LegacyManagedPluginAdapter, RuntimePlugin, RuntimePluginServices,
-    },
+    plugin_system::{ConfigUpdate, RuntimePlugin, RuntimePluginServices},
     runtime::{RuntimeController, RuntimeState},
     scheduler::{Scheduler, TokioScheduler},
     session::{MemorySessionStore, SessionStore},
@@ -135,30 +133,25 @@ impl Supervisor {
 
         let slot = self.plugin_slot(record, instance_id)?;
         let mut plugin_guard = slot.plugin.lock().await;
+        let host = PluginHost::new(
+            record.services.scheduler.clone(),
+            record.services.store.clone(),
+            record.services.outbound.clone(),
+        );
+        let services = RuntimePluginServices::new(host)
+            .with_identity(
+                record.services.bot_id.clone(),
+                record.services.platform.clone(),
+            )
+            .with_sessions(record.services.sessions.clone())
+            .with_metrics(record.services.metrics.clone());
+
         let created = if plugin_guard.is_none() {
             record
                 .plugin_state
                 .set_lifecycle(instance_id, PluginLifecycleState::Initializing);
-            let managed = self.catalog.create(&slot.spec.kind, instance_id)?;
-            let host = PluginHost::new(
-                record.services.scheduler.clone(),
-                record.services.store.clone(),
-                record.services.outbound.clone(),
-            );
-            let services = RuntimePluginServices::new(host)
-                .with_identity(
-                    record.services.bot_id.clone(),
-                    record.services.platform.clone(),
-                )
-                .with_sessions(record.services.sessions.clone())
-                .with_metrics(record.services.metrics.clone());
-            let mut plugin: Box<dyn RuntimePlugin<Context>> =
-                Box::new(LegacyManagedPluginAdapter::new(
-                    instance_id.to_string(),
-                    slot.spec.kind.clone(),
-                    managed,
-                ));
-            plugin.init(services).await?;
+            let mut plugin = self.catalog.create(&slot.spec.kind, instance_id)?;
+            plugin.init(services.clone()).await?;
             *plugin_guard = Some(plugin);
             true
         } else {
@@ -185,7 +178,7 @@ impl Supervisor {
                 record
                     .plugin_state
                     .set_lifecycle(instance_id, PluginLifecycleState::Starting);
-                plugin.start().await?;
+                plugin.start(services.clone()).await?;
             }
             record
                 .plugin_state
@@ -469,26 +462,53 @@ impl ConfigManager for Supervisor {
 mod tests {
     use super::*;
     use crate::core::config_store::TomlConfigStore;
-    use crate::core::supervisor::{ManagedPlugin, PluginFactory};
+    use crate::core::plugin::PluginMetadata;
+    use crate::core::plugin_system::{
+        ApplyConfigOutcome, ConfigUpdate, HandleOutcome, HandlerDecl, RuntimePluginFactory,
+    };
 
     struct TestFactory;
 
-    impl PluginFactory for TestFactory {
+    impl RuntimePluginFactory<Context> for TestFactory {
         fn kind(&self) -> &'static str {
             "test"
         }
 
-        fn create(&self, _instance_id: &str) -> Box<dyn ManagedPlugin> {
-            Box::new(TestPlugin)
+        fn create(&self, instance_id: &str) -> Result<Box<dyn RuntimePlugin<Context>>> {
+            Ok(Box::new(TestPlugin {
+                instance_id: instance_id.to_string(),
+            }))
         }
     }
 
-    struct TestPlugin;
+    struct TestPlugin {
+        instance_id: String,
+    }
 
     #[async_trait]
-    impl ManagedPlugin for TestPlugin {
-        fn kind(&self) -> &'static str {
+    impl RuntimePlugin<Context> for TestPlugin {
+        fn instance_id(&self) -> &str {
+            &self.instance_id
+        }
+
+        fn kind(&self) -> &str {
             "test"
+        }
+
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new(self.instance_id.clone())
+        }
+
+        fn declared_handlers(&self) -> Vec<HandlerDecl> {
+            vec![HandlerDecl::wildcard_message()]
+        }
+
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
+            Ok(HandleOutcome::pass())
+        }
+
+        async fn apply_config(&mut self, update: ConfigUpdate) -> Result<ApplyConfigOutcome> {
+            Ok(ApplyConfigOutcome::applied(update.version))
         }
     }
 

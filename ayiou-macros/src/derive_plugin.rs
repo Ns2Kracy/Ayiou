@@ -198,38 +198,6 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
         .iter()
         .map(|p| quote! { #p.to_string() })
         .collect();
-    let command_prefixes_impl = if prefixes.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            fn command_prefixes(&self) -> Vec<String> {
-                vec![#(#prefixes),*]
-            }
-        }
-    };
-
-    // Generate matches() implementation
-    let matches_impl = if attrs.regex.is_some() {
-        quote! {
-            fn matches(&self, ctx: &#ctx_type) -> bool {
-                use ayiou::core::adapter::MsgContext;
-                self.regex().is_match(&ctx.text())
-            }
-        }
-    } else if attrs.cron.is_some() {
-        // Cron plugins need special handling - they match based on schedule, not message
-        quote! {
-            fn matches(&self, _ctx: &#ctx_type) -> bool {
-                // Cron plugins don't match on messages - they're timer-based
-                // Return false for message matching; the scheduler will call execute() directly
-                false
-            }
-        }
-    } else {
-        // Default: no custom matches (use Plugin default)
-        quote! {}
-    };
-
     // Generate cron method if needed
     let cron_method = if let Some(cron_expr) = &attrs.cron {
         quote! {
@@ -266,8 +234,11 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
 
     let start_impl = if let Some(start_method) = &attrs.start_method {
         quote! {
-            async fn start(&self, host: ayiou::core::plugin_host::PluginHost<#ctx_type>) -> anyhow::Result<()> {
-                self.#start_method(host).await
+            async fn start(
+                &mut self,
+                services: ayiou::core::plugin_system::RuntimePluginServices<#ctx_type>,
+            ) -> anyhow::Result<()> {
+                self.#start_method(services.host).await
             }
         }
     } else {
@@ -276,22 +247,45 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
 
     let handle_impl = if let Some(handler_method) = &attrs.handler_method {
         quote! {
-            async fn handle(&self, ctx: &#ctx_type) -> anyhow::Result<bool> {
-                self.#handler_method(ctx).await
+            async fn handle(&self, ctx: &#ctx_type) -> anyhow::Result<ayiou::core::plugin_system::HandleOutcome> {
+                Ok(ayiou::core::plugin_system::HandleOutcome::from_block(
+                    self.#handler_method(ctx).await?
+                ))
             }
         }
     } else {
         quote! {
-            async fn handle(&self, ctx: &#ctx_type) -> anyhow::Result<bool> {
+            async fn handle(&self, ctx: &#ctx_type) -> anyhow::Result<ayiou::core::plugin_system::HandleOutcome> {
                 self.execute(ctx).await?;
-                Ok(true)
+                Ok(ayiou::core::plugin_system::HandleOutcome::block())
             }
         }
     };
 
+    let regex_patterns = attrs
+        .regex
+        .iter()
+        .map(|pattern| quote! { #pattern.to_string() });
+
+    let handler_decl_impl = if attrs.cron.is_some() {
+        quote! { Vec::new() }
+    } else if attrs.regex.is_some() {
+        quote! { vec![ayiou::core::plugin_system::HandlerDecl::message_regex(vec![#(#regex_patterns),*])] }
+    } else {
+        quote! { vec![ayiou::core::plugin_system::HandlerDecl::message_commands(#commands_impl, Vec::<String>::from([#(#prefixes),*]))] }
+    };
+
     let expanded = quote! {
         #[async_trait::async_trait]
-        impl #impl_generics ayiou::core::plugin::Plugin<#ctx_type> for #name #ty_generics #where_clause {
+        impl #impl_generics ayiou::core::plugin_system::RuntimePlugin<#ctx_type> for #name #ty_generics #where_clause {
+            fn instance_id(&self) -> &str {
+                #plugin_name
+            }
+
+            fn kind(&self) -> &str {
+                #plugin_name
+            }
+
             fn meta(&self) -> ayiou::core::plugin::PluginMetadata {
                 ayiou::core::plugin::PluginMetadata {
                     name: #plugin_name.to_string(),
@@ -300,13 +294,9 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
                 }
             }
 
-            fn commands(&self) -> Vec<String> {
-                #commands_impl
+            fn declared_handlers(&self) -> Vec<ayiou::core::plugin_system::HandlerDecl> {
+                #handler_decl_impl
             }
-
-            #command_prefixes_impl
-
-            #matches_impl
 
             #start_impl
 
