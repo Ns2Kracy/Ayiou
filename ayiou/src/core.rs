@@ -12,7 +12,6 @@ pub mod runtime;
 pub mod scheduler;
 pub mod session;
 pub mod storage;
-pub mod supervisor;
 
 pub use context::*;
 pub use model::*;
@@ -21,4 +20,3 @@ pub use plugin_host::*;
 pub use plugin_runtime::*;
 pub use plugin_system::*;
 pub use runtime::*;
-pub use supervisor::*;

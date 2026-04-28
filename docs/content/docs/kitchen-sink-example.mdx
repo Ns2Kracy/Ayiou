@@ -1,0 +1,183 @@
+---
+title: Kitchen Sink 示例
+description: 一个覆盖 RuntimePlugin、宏、Handler 管线、配置、能力协商、会话和单 Bot runtime 的完整示例
+---
+
+`ayiou/examples/kitchen_sink.rs` 是一个可编译、可运行的全特性示例。
+
+它不连接真实 OneBot，也不阻塞 Console 输入，而是用内存里的 adapter、store、session store 和 outbound sender 跑一遍 smoke flow。这样你可以安全地用它检查内核 API 是否能组合起来工作。
+
+## 运行方式
+
+在仓库根目录执行：
+
+```bash
+cargo run -p ayiou --example kitchen_sink
+```
+
+也可以只检查 example 是否能编译：
+
+```bash
+cargo test -p ayiou --example kitchen_sink
+```
+
+成功运行时会看到类似输出：
+
+```text
+capability negotiation: Degraded { missing_optional: [Reaction] }
+bonjour secure command args=admin open sesame
+conversation waiting at revision 1
+echo: hello from macro
+derive macro handled: /hello from derive
+kitchen sink example completed
+```
+
+## 覆盖了什么
+
+### 宏生成 RuntimePlugin
+
+示例里同时使用两种宏：
+
+- `#[derive(Plugin)]`：适合单命令插件
+- `#[bot_plugin] + #[command]`：适合多命令、别名和参数解析
+
+```rust
+#[derive(Default, Plugin)]
+#[plugin(name = "hello-derived", command = "hello", prefix = "/", context = "DemoCtx")]
+struct HelloDerivedPlugin;
+
+#[derive(Default)]
+struct ToolsPlugin;
+
+#[bot_plugin(name = "tools", prefix = "/", context = "DemoCtx")]
+impl ToolsPlugin {
+    #[command(name = "echo", alias = "say")]
+    async fn echo(&self, _ctx: &DemoCtx, content: String) -> anyhow::Result<()> {
+        println!("echo: {content}");
+        Ok(())
+    }
+}
+```
+
+这两个宏现在生成的是 `RuntimePlugin` 实现，而不是旧的消息插件接口。
+
+### 手写 RuntimePlugin
+
+`KitchenPlugin` 展示了手写运行时插件的完整形态：
+
+- `meta()`：插件元信息
+- `manifest()`：必需/可选能力声明
+- `declared_handlers()`：命令、正则、权限、优先级和 block
+- `init()` / `start()` / `stop()`：生命周期
+- `apply_config()`：配置 dry-run 与实际应用
+- `handle_with_invocation()`：命令处理入口
+- `handle()`：非命令 handler 入口
+- `health()`：健康状态
+
+```rust
+fn manifest(&self) -> RuntimePluginManifest {
+    RuntimePluginManifest::new(self.kind())
+        .require_capability(Capability::ProactiveSend)
+        .optional_capability(Capability::Reaction)
+}
+
+fn declared_handlers(&self) -> Vec<HandlerDecl> {
+    vec![
+        HandlerDecl::message_commands(["secure"], ["/"])
+            .require_permission(Permission::user("admin"))
+            .priority(5)
+            .block(true),
+        HandlerDecl::message_regex(["(?i)kitchen\\s+sink"])
+            .require_permission(Permission::PlatformCapability(Capability::ProactiveSend))
+            .priority(20),
+    ]
+}
+```
+
+### Handler 管线
+
+示例会依次触发：
+
+- `/secure admin open sesame`：命令 handler，带权限、优先级和 block
+- `please show the kitchen sink`：正则 handler，要求 `ProactiveSend` 能力
+- `/say hello from macro`：`#[bot_plugin]` 生成的命令 handler
+- `/hello from derive`：`#[derive(Plugin)]` 生成的命令 handler
+
+这对应 v0.2 的统一 handler 管线：adapter 产出事件，runtime 做粗筛、rule、permission、session 和 handler 执行。
+
+### 配置生命周期
+
+示例同时展示 dry-run 与实际 apply：
+
+```rust
+engine
+    .apply_config("kitchen-main", ConfigUpdate::dry_run(1, "bonjour"))
+    .await?;
+engine
+    .apply_config("kitchen-main", ConfigUpdate::new(2, "bonjour"))
+    .await?;
+```
+
+运行时状态会记录：
+
+- dry-run：进入 `validated`，不更新 applied version
+- apply：进入 `applied`，更新 applied version
+
+### 会话恢复模型
+
+`KitchenPlugin::demo_conversation()` 使用 `Conversation` 包装底层 `SessionStore`：
+
+```rust
+let mut conversation = Conversation::resume(store.as_ref(), key.clone()).await?;
+let cursor = conversation
+    .wait_next(store.as_ref(), serde_json::json!({ "question": "favorite feature?" }), None)
+    .await?;
+
+conversation.pause(store.as_ref(), "operator review", None).await?;
+conversation.reject(store.as_ref(), "please answer with text", None).await?;
+conversation.finish(store.as_ref()).await?;
+```
+
+它展示了可恢复执行所需的几个动作：
+
+- `resume()`：从 store 恢复已有状态
+- `wait_next()`：保存等待下一次输入的 cursor
+- `pause()`：暂停长流程
+- `reject()`：拒绝当前输入并保留提示
+- `finish()`：完成并清理会话
+
+### Bot builder 与手动 RuntimePluginEngine
+
+示例还覆盖两个单 Bot 运行入口：
+
+- `Bot::<ClosedAdapter>::new().register_plugin(...)`
+- 手动构造 `RuntimePluginEngine` 并注入 store、session、metrics、outbound sender
+
+```rust
+let services = RuntimePluginServices::new(host)
+    .with_identity("bot-a", "console")
+    .with_sessions(sessions)
+    .with_metrics(Arc::new(NoopMetrics));
+
+let mut engine = RuntimePluginEngine::with_options(
+    services,
+    state.clone(),
+    DispatchOptions::new(["/"]),
+);
+
+engine.push(Box::new(KitchenPlugin::new("kitchen-main")));
+```
+
+这说明 Ayiou 的核心是一个 Bot runtime。多个消息渠道应该作为 adapter/source 接入同一个 runtime，回复时根据消息来源回到原渠道。
+
+## 什么时候参考它
+
+- 你想确认某个 API 应该怎么组合使用
+- 你要写一个手动 `RuntimePlugin`
+- 你要理解 `Bot` builder 和 `RuntimePluginEngine` 的关系
+- 你想看配置、能力协商、会话和 handler 管线如何一起工作
+
+如果只想写普通命令插件，优先看：
+
+- [Plugin 宏](/docs/plugin-macro)
+- [命令系统与 DX](/docs/command-system-dx)

@@ -23,7 +23,6 @@ pub use ayiou_macros::{Plugin, bot_plugin, command};
 pub use core::context::Context;
 pub use core::model::*;
 pub use core::runtime::{RuntimeController, RuntimeState};
-pub use core::supervisor::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum QueueOverflowPolicy {

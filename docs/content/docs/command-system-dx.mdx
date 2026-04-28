@@ -16,7 +16,7 @@ struct AdminPlugin;
 
 #[bot_plugin(name = "admin", prefix = "/", prefix = "!")]
 impl AdminPlugin {
-    #[command(name = "ban", aliases = ["block"])]
+    #[command(name = "ban", alias = "block")]
     async fn ban(&self, ctx: &Context, user_id: i64, minutes: Option<u32>) -> anyhow::Result<()> {
         let minutes = minutes.unwrap_or(10);
         ctx.reply_text(format!("ban {} for {} minutes", user_id, minutes)).await?;

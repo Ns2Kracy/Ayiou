@@ -3,7 +3,7 @@ title: Plugin 宏
 description: 使用 #[derive(Plugin)] 和 #[bot_plugin] 构建通用优先的插件
 ---
 
-`#[derive(Plugin)]` 会为你的结构体自动实现 `ayiou::core::plugin::Plugin`。
+`#[derive(Plugin)]` 会为你的结构体自动实现 `ayiou::core::plugin_system::RuntimePlugin`。
 
 默认推荐直接面向通用 `Context` 编写插件；只有在你明确依赖平台专属 API 时，才切到平台上下文。
 
@@ -36,12 +36,12 @@ impl MyPlugin {
 | `regex` | 消息匹配正则 |
 | `cron` | 调度表达式 |
 | `context` | 显式指定上下文类型 |
-| `start` | 自定义启动方法，签名应为 `async fn xxx(&self, host: PluginHost<Context>) -> Result<()>` |
+| `start` | 自定义启动方法，签名应为 `async fn xxx(&mut self, host: PluginHost<Context>) -> Result<()>` |
 | `handler` | 自定义处理方法，签名应为 `async fn xxx(&self, ctx: &Context) -> Result<bool>` |
 
 ## 平台扩展
 
-默认上下文是 `Context`。当你需要平台扩展时，优先通过 `ctx.extension::<...>()` 获取。
+默认上下文是 `Context`。通用插件优先通过 `RuntimePluginManifest` 声明能力需求；当你确实需要平台专属 API 时，再通过 `ctx.extension::<...>()` 获取。
 
 ```rust
 use ayiou::adapter::onebot::v11::model::Message;
@@ -97,14 +97,13 @@ struct StatefulPlugin {
 }
 
 impl StatefulPlugin {
-    async fn start_plugin(&self, host: PluginHost<Context>) -> anyhow::Result<()> {
+    async fn start_plugin(&mut self, host: PluginHost<Context>) -> anyhow::Result<()> {
         let _ = self.store.get_or_init(|| host.store());
         Ok(())
     }
 
     async fn handle_command(&self, ctx: &Context) -> anyhow::Result<bool> {
-        let args = ctx.command_args().unwrap_or_default();
-        ctx.reply_text(format!("received: {}", args)).await?;
+        ctx.reply_text(format!("received: {}", ctx.text())).await?;
         Ok(true)
     }
 }

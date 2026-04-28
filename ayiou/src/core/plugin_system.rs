@@ -4,14 +4,12 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
 use crate::core::{
-    context::Context,
     model::{BotId, CommandInvocation, PlatformId},
     observability::MetricsSink,
     plugin::{DispatchOptions, PluginMetadata, parse_command_line},
     plugin_host::PluginHost,
     plugin_runtime::{PluginLifecycleState, PluginRuntimeState},
     session::SessionStore,
-    supervisor::{PluginHealth, RuntimeServices as SupervisorRuntimeServices},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -325,34 +323,18 @@ impl<C> RuntimePluginServices<C> {
     }
 }
 
-impl RuntimePluginServices<Context> {
-    pub fn try_as_supervisor_runtime_services(&self) -> Result<SupervisorRuntimeServices> {
-        let bot_id = self
-            .bot_id
-            .clone()
-            .ok_or_else(|| anyhow!("missing bot id in runtime plugin services"))?;
-        let platform = self
-            .platform
-            .clone()
-            .ok_or_else(|| anyhow!("missing platform in runtime plugin services"))?;
-        let sessions = self
-            .sessions
-            .clone()
-            .ok_or_else(|| anyhow!("missing session store in runtime plugin services"))?;
-        let metrics = self
-            .metrics
-            .clone()
-            .ok_or_else(|| anyhow!("missing metrics sink in runtime plugin services"))?;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginHealth {
+    pub healthy: bool,
+    pub detail: Option<String>,
+}
 
-        Ok(SupervisorRuntimeServices {
-            bot_id,
-            platform,
-            scheduler: self.host.scheduler(),
-            store: self.host.store(),
-            sessions,
-            metrics,
-            outbound: self.host.sender(),
-        })
+impl PluginHealth {
+    pub fn healthy() -> Self {
+        Self {
+            healthy: true,
+            detail: None,
+        }
     }
 }
 
@@ -405,12 +387,6 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
     fn health(&self) -> PluginHealth {
         PluginHealth::healthy()
     }
-}
-
-pub trait RuntimePluginFactory<C: Sync + 'static>: Send + Sync + 'static {
-    fn kind(&self) -> &'static str;
-
-    fn create(&self, instance_id: &str) -> Result<Box<dyn RuntimePlugin<C>>>;
 }
 
 pub fn negotiate_capabilities(

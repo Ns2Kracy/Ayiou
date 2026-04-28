@@ -19,8 +19,8 @@ pub use crate::core::plugin::{
 };
 pub use crate::core::plugin_system::{
     ApplyConfigOutcome, Capability, CapabilityNegotiation, ConcurrencyPolicy, ConfigUpdate,
-    HandleOutcome, HandlerDecl, HandlerEventKind, Permission, RuntimePlugin, RuntimePluginEngine,
-    RuntimePluginFactory, RuntimePluginManifest, RuntimePluginServices, SessionPolicy,
+    HandleOutcome, HandlerDecl, HandlerEventKind, Permission, PluginHealth, RuntimePlugin,
+    RuntimePluginEngine, RuntimePluginManifest, RuntimePluginServices, SessionPolicy,
     negotiate_capabilities,
 };
 pub use crate::core::session::{
@@ -28,10 +28,6 @@ pub use crate::core::session::{
     SessionError, SessionKey, SessionRecord, SessionStore,
 };
 pub use crate::core::storage::{MemoryStore, Store, StoreSerdeExt};
-pub use crate::core::supervisor::{
-    BotDefinition, BotManager, BotStatus, ConfigManager, PluginCatalog, PluginConfigSnapshot,
-    PluginHealth, PluginInstanceSpec, PluginManagerApi, RuntimeServices, Supervisor,
-};
 
 pub use crate::adapter::console::adapter::ConsoleAdapter;
 pub use crate::adapter::console::ctx::Ctx as ConsoleCtx;

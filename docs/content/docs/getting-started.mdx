@@ -17,7 +17,7 @@ async-trait = "0.1"
 
 - `Bot<A>`：单 Bot 运行时 builder
 - `Adapter / ProtocolAdapter`：把平台事件归一化到内核
-- `Plugin`：处理消息、命令和主动发送
+- `RuntimePlugin`：处理消息、命令、生命周期、配置和主动发送
 - `Context`：默认通用上下文
 
 ## 示例 1：OneBot v11
@@ -32,13 +32,7 @@ struct EchoPlugin;
 
 impl EchoPlugin {
     async fn execute(&self, ctx: &Context) -> anyhow::Result<()> {
-        let args = ctx.command_args().unwrap_or_default();
-        if args.is_empty() {
-            ctx.reply_text("Usage: /echo <text>").await?;
-            return Ok(());
-        }
-
-        ctx.reply_text(format!("echo: {}", args)).await?;
+        ctx.reply_text(format!("echo: {}", ctx.text())).await?;
         Ok(())
     }
 }
@@ -111,7 +105,7 @@ use ayiou::prelude::*;
 struct TickerPlugin;
 
 impl TickerPlugin {
-    async fn bootstrap(&self, _host: PluginHost<Context>) -> anyhow::Result<()> {
+    async fn bootstrap(&mut self, _host: PluginHost<Context>) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -128,5 +122,4 @@ impl TickerPlugin {
 - `ctx.user_id() -> String`
 - `ctx.group_id() -> Option<String>`
 - `ctx.reply_text("...")`
-- `ctx.command_name()` / `ctx.command_args()`
 - `ctx.extension::<ConsoleCtx>()` / `ctx.extension::<Ctx>()`
