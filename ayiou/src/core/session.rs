@@ -11,6 +11,21 @@ use thiserror::Error;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConversationScope {
+    User,
+    Channel,
+    Group,
+    PluginInstance,
+    Custom(String),
+}
+
+impl ConversationScope {
+    pub fn custom(key: impl Into<String>) -> Self {
+        Self::Custom(key.into())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionKey {
     pub bot_id: String,
     pub platform: String,
@@ -34,6 +49,137 @@ impl SessionKey {
             user_id: user_id.into(),
             channel_id: channel_id.map(Into::into),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCursor {
+    key: SessionKey,
+    revision: u64,
+}
+
+impl SessionCursor {
+    pub fn new(key: SessionKey, revision: u64) -> Self {
+        Self { key, revision }
+    }
+
+    pub fn key(&self) -> &SessionKey {
+        &self.key
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConversationStatus {
+    Waiting,
+    Paused { reason: String },
+    Rejected { prompt: String },
+    Finished,
+}
+
+#[derive(Debug, Clone)]
+pub struct Conversation {
+    key: SessionKey,
+    record: Option<SessionRecord>,
+}
+
+impl Conversation {
+    pub async fn resume(store: &dyn SessionStore, key: SessionKey) -> Result<Self> {
+        let record = store.load(&key).await?;
+        Ok(Self { key, record })
+    }
+
+    pub fn cursor(&self) -> Option<SessionCursor> {
+        self.record
+            .as_ref()
+            .map(|record| SessionCursor::new(self.key.clone(), record.revision))
+    }
+
+    pub fn state(&self) -> Option<&Value> {
+        self.record.as_ref().map(|record| &record.state)
+    }
+
+    pub async fn wait_next(
+        &mut self,
+        store: &dyn SessionStore,
+        state: Value,
+        ttl: Option<Duration>,
+    ) -> Result<SessionCursor> {
+        self.save_status(store, ConversationStatus::Waiting, state, ttl)
+            .await
+    }
+
+    pub async fn pause(
+        &mut self,
+        store: &dyn SessionStore,
+        reason: impl Into<String>,
+        ttl: Option<Duration>,
+    ) -> Result<SessionCursor> {
+        self.save_status(
+            store,
+            ConversationStatus::Paused {
+                reason: reason.into(),
+            },
+            serde_json::json!({}),
+            ttl,
+        )
+        .await
+    }
+
+    pub async fn reject(
+        &mut self,
+        store: &dyn SessionStore,
+        prompt: impl Into<String>,
+        ttl: Option<Duration>,
+    ) -> Result<SessionCursor> {
+        self.save_status(
+            store,
+            ConversationStatus::Rejected {
+                prompt: prompt.into(),
+            },
+            serde_json::json!({}),
+            ttl,
+        )
+        .await
+    }
+
+    pub async fn finish(&mut self, store: &dyn SessionStore) -> Result<bool> {
+        let deleted = store.delete(&self.key).await?;
+        self.record = None;
+        Ok(deleted)
+    }
+
+    async fn save_status(
+        &mut self,
+        store: &dyn SessionStore,
+        status: ConversationStatus,
+        state: Value,
+        ttl: Option<Duration>,
+    ) -> Result<SessionCursor> {
+        let state = serde_json::json!({
+            "status": conversation_status_value(&status),
+            "state": state,
+        });
+        let record = store.save(self.key.clone(), state, ttl).await?;
+        let cursor = SessionCursor::new(self.key.clone(), record.revision);
+        self.record = Some(record);
+        Ok(cursor)
+    }
+}
+
+fn conversation_status_value(status: &ConversationStatus) -> Value {
+    match status {
+        ConversationStatus::Waiting => serde_json::json!({"kind": "waiting"}),
+        ConversationStatus::Paused { reason } => {
+            serde_json::json!({"kind": "paused", "reason": reason})
+        }
+        ConversationStatus::Rejected { prompt } => {
+            serde_json::json!({"kind": "rejected", "prompt": prompt})
+        }
+        ConversationStatus::Finished => serde_json::json!({"kind": "finished"}),
     }
 }
 
@@ -244,5 +390,35 @@ mod tests {
                 actual: 1
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn conversation_cursor_can_pause_resume_and_finish() {
+        let store = MemorySessionStore::new();
+        let key = SessionKey::new("bot-a", "onebot", "wizard", "u1", Some("g1"));
+
+        let mut conversation = Conversation::resume(&store, key.clone()).await.unwrap();
+        assert!(conversation.cursor().is_none());
+
+        let first = conversation
+            .wait_next(&store, serde_json::json!({"step": 1}), None)
+            .await
+            .unwrap();
+        assert_eq!(first.key(), &key);
+        assert_eq!(first.revision(), 1);
+
+        let resumed = Conversation::resume(&store, key.clone()).await.unwrap();
+        assert_eq!(resumed.cursor().unwrap().revision(), 1);
+        assert_eq!(resumed.state().unwrap()["status"]["kind"], "waiting");
+
+        let mut resumed = resumed;
+        let paused = resumed
+            .pause(&store, "external review", None)
+            .await
+            .unwrap();
+        assert_eq!(paused.revision(), 2);
+
+        assert!(resumed.finish(&store).await.unwrap());
+        assert!(store.load(&key).await.unwrap().is_none());
     }
 }

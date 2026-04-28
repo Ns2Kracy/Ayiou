@@ -18,12 +18,15 @@ pub use crate::core::plugin::{
     PluginManager, PluginMetadata, RegexValidated,
 };
 pub use crate::core::plugin_system::{
-    ApplyConfigOutcome, ConfigUpdate, HandleOutcome, HandlerDecl, HandlerEventKind,
-    LegacyManagedPluginAdapter, LegacyMessagePluginAdapter, RuntimePlugin, RuntimePluginEngine,
-    RuntimePluginFactory, RuntimePluginManifest, RuntimePluginServices,
+    ApplyConfigOutcome, Capability, CapabilityNegotiation, ConcurrencyPolicy, ConfigUpdate,
+    HandleOutcome, HandlerDecl, HandlerEventKind, LegacyManagedPluginAdapter,
+    LegacyMessagePluginAdapter, Permission, RuntimePlugin, RuntimePluginEngine,
+    RuntimePluginFactory, RuntimePluginManifest, RuntimePluginServices, SessionPolicy,
+    negotiate_capabilities,
 };
 pub use crate::core::session::{
-    MemorySessionStore, SessionError, SessionKey, SessionRecord, SessionStore,
+    Conversation, ConversationScope, ConversationStatus, MemorySessionStore, SessionCursor,
+    SessionError, SessionKey, SessionRecord, SessionStore,
 };
 pub use crate::core::storage::{MemoryStore, Store, StoreSerdeExt};
 pub use crate::core::supervisor::{

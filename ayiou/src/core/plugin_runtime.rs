@@ -14,11 +14,21 @@ pub enum PluginLifecycleState {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ConfigLifecycleState {
+    Draft,
+    Validated,
+    #[default]
+    Applied,
+    Rejected,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginInstanceState {
     pub enabled: bool,
     pub desired_config_version: u64,
     pub applied_config_version: u64,
+    pub config_lifecycle_state: ConfigLifecycleState,
     pub lifecycle_state: PluginLifecycleState,
     pub last_error: Option<String>,
 }
@@ -29,6 +39,7 @@ impl Default for PluginInstanceState {
             enabled: true,
             desired_config_version: 0,
             applied_config_version: 0,
+            config_lifecycle_state: ConfigLifecycleState::Applied,
             lifecycle_state: PluginLifecycleState::Registered,
             last_error: None,
         }
@@ -72,13 +83,32 @@ impl PluginRuntimeState {
     }
 
     pub fn set_desired_config_version(&self, plugin: &str, version: u64) {
-        self.update(plugin, |state| state.desired_config_version = version);
+        self.update(plugin, |state| {
+            state.desired_config_version = version;
+            state.config_lifecycle_state = ConfigLifecycleState::Draft;
+        });
+    }
+
+    pub fn mark_config_validated(&self, plugin: &str, version: u64) {
+        self.update(plugin, |state| {
+            state.desired_config_version = state.desired_config_version.max(version);
+            state.config_lifecycle_state = ConfigLifecycleState::Validated;
+        });
     }
 
     pub fn mark_config_applied(&self, plugin: &str, version: u64) {
         self.update(plugin, |state| {
             state.applied_config_version = version;
             state.desired_config_version = state.desired_config_version.max(version);
+            state.config_lifecycle_state = ConfigLifecycleState::Applied;
+        });
+    }
+
+    pub fn reject_config(&self, plugin: &str, version: u64, error: impl Into<String>) {
+        self.update(plugin, |state| {
+            state.desired_config_version = state.desired_config_version.max(version);
+            state.config_lifecycle_state = ConfigLifecycleState::Rejected;
+            state.last_error = Some(error.into());
         });
     }
 

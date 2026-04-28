@@ -7,7 +7,9 @@ use crate::core::{
     context::Context,
     model::{BotId, CommandInvocation, PlatformId},
     observability::MetricsSink,
-    plugin::{DispatchOptions, Plugin, PluginMetadata, parse_command_line, with_command_invocation},
+    plugin::{
+        DispatchOptions, Plugin, PluginMetadata, parse_command_line, with_command_invocation,
+    },
     plugin_host::PluginHost,
     plugin_runtime::{PluginLifecycleState, PluginRuntimeState},
     session::SessionStore,
@@ -22,8 +24,8 @@ pub struct RuntimePluginManifest {
     pub kind: String,
     pub description: String,
     pub version: String,
-    pub required_capabilities: Vec<String>,
-    pub optional_capabilities: Vec<String>,
+    pub required_capabilities: Vec<Capability>,
+    pub optional_capabilities: Vec<Capability>,
 }
 
 impl RuntimePluginManifest {
@@ -46,6 +48,39 @@ impl RuntimePluginManifest {
         self.version = version.into();
         self
     }
+
+    pub fn require_capability(mut self, capability: Capability) -> Self {
+        self.required_capabilities.push(capability);
+        self
+    }
+
+    pub fn optional_capability(mut self, capability: Capability) -> Self {
+        self.optional_capabilities.push(capability);
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Capability {
+    ProactiveSend,
+    MessageDelete,
+    Reaction,
+    GroupModeration,
+    RichSegments,
+    Custom(String),
+}
+
+impl Capability {
+    pub fn custom(name: impl Into<String>) -> Self {
+        Self::Custom(name.into())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CapabilityNegotiation {
+    Ready,
+    Degraded { missing_optional: Vec<Capability> },
+    Failed { missing_required: Vec<Capability> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -60,9 +95,13 @@ pub struct HandlerDecl {
     pub event_kind: HandlerEventKind,
     pub commands: Vec<String>,
     pub command_prefixes: Vec<String>,
+    pub regex_patterns: Vec<String>,
+    pub permissions: Vec<Permission>,
     pub priority: i32,
     pub block: bool,
     pub wildcard: bool,
+    pub concurrency: ConcurrencyPolicy,
+    pub session: SessionPolicy,
 }
 
 impl HandlerDecl {
@@ -71,9 +110,13 @@ impl HandlerDecl {
             event_kind: HandlerEventKind::Message,
             commands: Vec::new(),
             command_prefixes: Vec::new(),
+            regex_patterns: Vec::new(),
+            permissions: Vec::new(),
             priority: 0,
             block: false,
             wildcard: true,
+            concurrency: ConcurrencyPolicy::Parallel,
+            session: SessionPolicy::None,
         }
     }
 
@@ -85,17 +128,90 @@ impl HandlerDecl {
             event_kind: HandlerEventKind::Message,
             commands: commands.into_iter().map(Into::into).collect(),
             command_prefixes: command_prefixes.into_iter().map(Into::into).collect(),
+            regex_patterns: Vec::new(),
+            permissions: Vec::new(),
             priority: 0,
             block: false,
             wildcard: false,
+            concurrency: ConcurrencyPolicy::Parallel,
+            session: SessionPolicy::None,
         }
     }
+
+    pub fn message_regex(patterns: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            event_kind: HandlerEventKind::Message,
+            commands: Vec::new(),
+            command_prefixes: Vec::new(),
+            regex_patterns: patterns.into_iter().map(Into::into).collect(),
+            permissions: Vec::new(),
+            priority: 0,
+            block: false,
+            wildcard: false,
+            concurrency: ConcurrencyPolicy::Parallel,
+            session: SessionPolicy::None,
+        }
+    }
+
+    pub fn require_permission(mut self, permission: Permission) -> Self {
+        self.permissions.push(permission);
+        self
+    }
+
+    pub fn priority(mut self, priority: i32) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    pub fn block(mut self, block: bool) -> Self {
+        self.block = block;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Permission {
+    Any,
+    User(String),
+    Group(String),
+    Bot(String),
+    PlatformCapability(Capability),
+}
+
+impl Permission {
+    pub fn user(user_id: impl Into<String>) -> Self {
+        Self::User(user_id.into())
+    }
+
+    pub fn group(group_id: impl Into<String>) -> Self {
+        Self::Group(group_id.into())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ConcurrencyPolicy {
+    #[default]
+    Parallel,
+    Serialize,
+    Drop,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum SessionPolicy {
+    #[default]
+    None,
+    User,
+    Channel,
+    Group,
+    PluginInstance,
+    Custom(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfigUpdate {
     pub version: u64,
     pub content: String,
+    pub dry_run: bool,
 }
 
 impl ConfigUpdate {
@@ -103,6 +219,15 @@ impl ConfigUpdate {
         Self {
             version,
             content: content.into(),
+            dry_run: false,
+        }
+    }
+
+    pub fn dry_run(version: u64, content: impl Into<String>) -> Self {
+        Self {
+            version,
+            content: content.into(),
+            dry_run: true,
         }
     }
 }
@@ -195,6 +320,14 @@ impl<C> RuntimePluginServices<C> {
         self.metrics = Some(metrics);
         self
     }
+
+    pub fn provided_capabilities(&self) -> Vec<Capability> {
+        let mut capabilities = Vec::new();
+        if self.host.sender().is_some() {
+            capabilities.push(Capability::ProactiveSend);
+        }
+        capabilities
+    }
 }
 
 impl RuntimePluginServices<Context> {
@@ -285,6 +418,33 @@ pub trait RuntimePluginFactory<C: Sync + 'static>: Send + Sync + 'static {
     fn create(&self, instance_id: &str) -> Result<Box<dyn RuntimePlugin<C>>>;
 }
 
+pub fn negotiate_capabilities(
+    manifest: &RuntimePluginManifest,
+    provided: &[Capability],
+) -> CapabilityNegotiation {
+    let missing_required: Vec<_> = manifest
+        .required_capabilities
+        .iter()
+        .filter(|capability| !provided.contains(*capability))
+        .cloned()
+        .collect();
+    if !missing_required.is_empty() {
+        return CapabilityNegotiation::Failed { missing_required };
+    }
+
+    let missing_optional: Vec<_> = manifest
+        .optional_capabilities
+        .iter()
+        .filter(|capability| !provided.contains(*capability))
+        .cloned()
+        .collect();
+    if missing_optional.is_empty() {
+        CapabilityNegotiation::Ready
+    } else {
+        CapabilityNegotiation::Degraded { missing_optional }
+    }
+}
+
 pub struct RuntimePluginEngine<C> {
     services: RuntimePluginServices<C>,
     runtime_state: PluginRuntimeState,
@@ -324,10 +484,24 @@ where
     }
 
     pub async fn init_all(&mut self) -> Result<()> {
+        let provided_capabilities = self.services.provided_capabilities();
         for plugin in &mut self.plugins {
             let instance_id = plugin.instance_id().to_string();
             self.runtime_state
                 .set_lifecycle(&instance_id, PluginLifecycleState::Initializing);
+
+            if let CapabilityNegotiation::Failed { missing_required } =
+                negotiate_capabilities(&plugin.manifest(), &provided_capabilities)
+            {
+                let err = anyhow!(
+                    "plugin `{}` missing required capabilities: {:?}",
+                    instance_id,
+                    missing_required
+                );
+                self.runtime_state
+                    .record_error(&instance_id, err.to_string());
+                return Err(err);
+            }
 
             if let Err(err) = plugin.init(self.services.clone()).await {
                 self.runtime_state
@@ -402,6 +576,12 @@ where
 
         self.runtime_state
             .set_desired_config_version(instance_id, update.version);
+        if update.dry_run {
+            self.runtime_state
+                .mark_config_validated(instance_id, update.version);
+            self.runtime_state.clear_error(instance_id);
+            return Ok(ApplyConfigOutcome::skipped());
+        }
         let outcome = plugin.apply_config(update).await?;
 
         if let Some(version) = outcome.applied_version {
@@ -487,10 +667,19 @@ where
         handler: HandlerDecl,
         global_prefixes: &[String],
     ) -> Option<MatchedHandler> {
+        if !permissions_match(&handler.permissions, text, &self.services) {
+            return None;
+        }
+
         let command_match = if handler.commands.is_empty() {
             None
         } else {
-            match_handler_command(text, &handler.commands, &handler.command_prefixes, global_prefixes)
+            match_handler_command(
+                text,
+                &handler.commands,
+                &handler.command_prefixes,
+                global_prefixes,
+            )
         };
 
         if let Some(invocation) = command_match {
@@ -510,6 +699,16 @@ where
                 block: handler.block,
                 invocation: None,
                 match_rank: 1,
+            });
+        }
+
+        if regex_patterns_match(text, &handler.regex_patterns) {
+            return Some(MatchedHandler {
+                plugin_index,
+                priority: handler.priority,
+                block: handler.block,
+                invocation: None,
+                match_rank: 2,
             });
         }
 
@@ -536,15 +735,57 @@ fn match_handler_command(
     let global_prefix_refs: Vec<&str> = global_prefixes.iter().map(String::as_str).collect();
 
     parse_command_line(text, &handler_prefix_refs)
-        .filter(|invocation| commands.iter().any(|command| command == invocation.command()))
-        .or_else(|| {
-            parse_command_line(text, &global_prefix_refs)
-                .filter(|invocation| commands.iter().any(|command| command == invocation.command()))
+        .filter(|invocation| {
+            commands
+                .iter()
+                .any(|command| command == invocation.command())
         })
         .or_else(|| {
-            parse_command_line(text, &[])
-                .filter(|invocation| commands.iter().any(|command| command == invocation.command()))
+            parse_command_line(text, &global_prefix_refs).filter(|invocation| {
+                commands
+                    .iter()
+                    .any(|command| command == invocation.command())
+            })
         })
+        .or_else(|| {
+            parse_command_line(text, &[]).filter(|invocation| {
+                commands
+                    .iter()
+                    .any(|command| command == invocation.command())
+            })
+        })
+}
+
+fn regex_patterns_match(text: &str, patterns: &[String]) -> bool {
+    !patterns.is_empty()
+        && patterns
+            .iter()
+            .any(|pattern| regex::Regex::new(pattern).is_ok_and(|regex| regex.is_match(text)))
+}
+
+fn permissions_match<C>(
+    permissions: &[Permission],
+    text: &str,
+    services: &RuntimePluginServices<C>,
+) -> bool {
+    permissions.iter().all(|permission| match permission {
+        Permission::Any => true,
+        Permission::User(user_id) => {
+            services
+                .bot_id
+                .as_ref()
+                .is_some_and(|bot_id| bot_id.as_str() == user_id)
+                || text.contains(user_id)
+        }
+        Permission::Group(group_id) => text.contains(group_id),
+        Permission::Bot(bot_id) => services
+            .bot_id
+            .as_ref()
+            .is_some_and(|current| current.as_str() == bot_id),
+        Permission::PlatformCapability(capability) => {
+            services.provided_capabilities().contains(capability)
+        }
+    })
 }
 
 pub struct LegacyMessagePluginAdapter<C> {
@@ -665,14 +906,9 @@ impl RuntimePlugin<Context> for LegacyManagedPluginAdapter {
     }
 
     fn declared_handlers(&self) -> Vec<HandlerDecl> {
-        vec![HandlerDecl {
-            event_kind: HandlerEventKind::Any,
-            commands: Vec::new(),
-            command_prefixes: Vec::new(),
-            priority: 0,
-            block: false,
-            wildcard: true,
-        }]
+        let mut handler = HandlerDecl::wildcard_message();
+        handler.event_kind = HandlerEventKind::Any;
+        vec![handler]
     }
 
     async fn init(&mut self, services: RuntimePluginServices<Context>) -> Result<()> {
@@ -875,6 +1111,8 @@ mod tests {
         instance_id: &'static str,
         priority: i32,
         block_decl: bool,
+        handler: HandlerDecl,
+        manifest: RuntimePluginManifest,
         hits: Arc<std::sync::Mutex<Vec<&'static str>>>,
     }
 
@@ -892,15 +1130,15 @@ mod tests {
             PluginMetadata::new(self.instance_id)
         }
 
+        fn manifest(&self) -> RuntimePluginManifest {
+            self.manifest.clone()
+        }
+
         fn declared_handlers(&self) -> Vec<HandlerDecl> {
-            vec![HandlerDecl {
-                event_kind: HandlerEventKind::Message,
-                commands: Vec::new(),
-                command_prefixes: Vec::new(),
-                priority: self.priority,
-                block: self.block_decl,
-                wildcard: true,
-            }]
+            let mut handler = self.handler.clone();
+            handler.priority = self.priority;
+            handler.block = self.block_decl;
+            vec![handler]
         }
 
         async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
@@ -923,18 +1161,24 @@ mod tests {
             instance_id: "late",
             priority: 20,
             block_decl: false,
+            handler: HandlerDecl::wildcard_message(),
+            manifest: RuntimePluginManifest::new("late"),
             hits: hits.clone(),
         }));
         engine.push(Box::new(PriorityPlugin {
             instance_id: "first",
             priority: 5,
             block_decl: true,
+            handler: HandlerDecl::wildcard_message(),
+            manifest: RuntimePluginManifest::new("first"),
             hits: hits.clone(),
         }));
         engine.push(Box::new(PriorityPlugin {
             instance_id: "never",
             priority: 30,
             block_decl: false,
+            handler: HandlerDecl::wildcard_message(),
+            manifest: RuntimePluginManifest::new("never"),
             hits: hits.clone(),
         }));
         engine.init_all().await.unwrap();
@@ -944,6 +1188,105 @@ mod tests {
 
         assert!(blocked);
         assert_eq!(*hits.lock().unwrap(), vec!["first"]);
+    }
+
+    #[tokio::test]
+    async fn runtime_plugin_engine_filters_by_regex_and_permission() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let host = PluginHost::new(scheduler, store, None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "regex",
+            priority: 0,
+            block_decl: false,
+            handler: HandlerDecl::message_regex(["^hello\\s+\\w+$"]),
+            manifest: RuntimePluginManifest::new("regex"),
+            hits: hits.clone(),
+        }));
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "admin-only",
+            priority: 0,
+            block_decl: false,
+            handler: HandlerDecl::wildcard_message().require_permission(Permission::user("admin")),
+            manifest: RuntimePluginManifest::new("admin-only"),
+            hits: hits.clone(),
+        }));
+        engine.init_all().await.unwrap();
+        engine.start_all().await.unwrap();
+
+        engine
+            .handle_all(&TestCtx {
+                text: "hello world".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(*hits.lock().unwrap(), vec!["regex"]);
+    }
+
+    #[tokio::test]
+    async fn runtime_plugin_engine_supports_dry_run_config_lifecycle() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let host = PluginHost::new(scheduler, store, None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "configurable",
+            priority: 0,
+            block_decl: false,
+            handler: HandlerDecl::wildcard_message(),
+            manifest: RuntimePluginManifest::new("configurable"),
+            hits,
+        }));
+
+        let outcome = engine
+            .apply_config("configurable", ConfigUpdate::dry_run(7, "enabled=true"))
+            .await
+            .unwrap();
+
+        let snapshot = state.snapshot("configurable");
+        assert_eq!(outcome, ApplyConfigOutcome::skipped());
+        assert_eq!(snapshot.desired_config_version, 7);
+        assert_eq!(snapshot.applied_config_version, 0);
+        assert_eq!(
+            snapshot.config_lifecycle_state,
+            crate::core::plugin_runtime::ConfigLifecycleState::Validated
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_plugin_engine_fails_startup_when_required_capability_is_missing() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let host = PluginHost::new(scheduler, store, None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "sender",
+            priority: 0,
+            block_decl: false,
+            handler: HandlerDecl::wildcard_message(),
+            manifest: RuntimePluginManifest::new("sender")
+                .require_capability(Capability::ProactiveSend),
+            hits,
+        }));
+
+        let err = engine.init_all().await.unwrap_err();
+        let snapshot = state.snapshot("sender");
+        assert!(err.to_string().contains("missing required capabilities"));
+        assert_eq!(snapshot.lifecycle_state, PluginLifecycleState::Failed);
     }
 
     struct TestManagedPlugin {
