@@ -67,7 +67,7 @@ v0.2 追求的结果是：
 
 v0.2 不再保留这两套平行体系，而是统一为：
 
-- `RuntimePlugin`：插件实例、生命周期、配置应用、事件处理、健康状态
+- `RuntimePlugin`：插件行为、生命周期、配置应用、事件处理、健康状态
 - `RuntimePluginEngine`：单 Bot 内的插件运行时与 handler 调度器
 
 一个简化轮廓如下：
@@ -75,7 +75,6 @@ v0.2 不再保留这两套平行体系，而是统一为：
 ```rust
 #[async_trait::async_trait]
 pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
-    fn instance_id(&self) -> &str;
     fn kind(&self) -> &str;
     fn meta(&self) -> PluginMetadata;
     fn manifest(&self) -> RuntimePluginManifest;
@@ -89,6 +88,8 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
     fn health(&self) -> PluginHealth { PluginHealth::healthy() }
 }
 ```
+
+`instance_id` 不属于插件 trait。默认实例 ID 来自 `meta().name`，需要同类型多实例时由 `Bot::with_plugin_as(...)` 或 `RuntimePluginEngine::push_as(...)` 指定。
 
 这里最关键的不是 trait 名字，而是“命令插件、正则插件、状态插件，最后都进入同一个实例运行时”。
 

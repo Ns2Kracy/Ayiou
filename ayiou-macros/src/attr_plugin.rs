@@ -116,10 +116,6 @@ pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<Tok
 
         #[async_trait::async_trait]
         impl ayiou::core::plugin_system::RuntimePlugin<#ctx_ty> for #plugin_ty {
-            fn instance_id(&self) -> &str {
-                #plugin_name
-            }
-
             fn kind(&self) -> &str {
                 #plugin_name
             }

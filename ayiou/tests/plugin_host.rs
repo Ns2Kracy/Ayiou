@@ -49,10 +49,6 @@ struct StartPlugin {
 
 #[async_trait]
 impl RuntimePlugin<TestCtx> for StartPlugin {
-    fn instance_id(&self) -> &str {
-        "start-plugin"
-    }
-
     fn kind(&self) -> &str {
         "start-plugin"
     }

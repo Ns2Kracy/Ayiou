@@ -9,13 +9,13 @@ use crate::core::{
     plugin::DispatchOptions,
     plugin_host::PluginHost,
     plugin_runtime::PluginRuntimeState,
-    plugin_system::{NamedPlugin, RuntimePlugin, RuntimePluginEngine, RuntimePluginServices},
+    plugin_system::{RegisteredPlugin, RuntimePlugin, RuntimePluginEngine, RuntimePluginServices},
     scheduler::{Scheduler, TokioScheduler},
     storage::{MemoryStore, Store},
 };
 
-pub mod advanced;
 pub mod adapter;
+pub mod advanced;
 pub mod core;
 pub mod driver;
 pub mod prelude;
@@ -50,7 +50,7 @@ impl Default for BotRuntimeOptions {
 }
 
 pub struct Bot<A: Adapter> {
-    plugins: Vec<Box<dyn RuntimePlugin<A::Ctx>>>,
+    plugins: Vec<RegisteredPlugin<A::Ctx>>,
     dispatch_options: DispatchOptions,
     metrics_sink: Arc<dyn MetricsSink>,
     scheduler: Arc<dyn Scheduler>,
@@ -239,7 +239,8 @@ impl<A: Adapter> Bot<A> {
     }
 
     pub fn with_plugin<P: RuntimePlugin<A::Ctx>>(mut self, plugin: P) -> Self {
-        self.plugins.push(Box::new(plugin));
+        self.plugins
+            .push(RegisteredPlugin::from_plugin(Box::new(plugin)));
         self
     }
 
@@ -248,10 +249,8 @@ impl<A: Adapter> Bot<A> {
         instance_id: impl Into<String>,
         plugin: P,
     ) -> Self {
-        self.plugins.push(Box::new(NamedPlugin::new(
-            instance_id,
-            Box::new(plugin),
-        )));
+        self.plugins
+            .push(RegisteredPlugin::new(instance_id, Box::new(plugin)));
         self
     }
 
@@ -259,7 +258,8 @@ impl<A: Adapter> Bot<A> {
         mut self,
         plugins: impl IntoIterator<Item = Box<dyn RuntimePlugin<A::Ctx>>>,
     ) -> Self {
-        self.plugins.extend(plugins);
+        self.plugins
+            .extend(plugins.into_iter().map(RegisteredPlugin::from_plugin));
         self
     }
 
@@ -279,14 +279,14 @@ impl<A: Adapter> Bot<A> {
             adapter_runtime.sender.clone(),
         );
         let mut engine = RuntimePluginEngine::with_options(
-            RuntimePluginServices::new(plugin_host).with_capabilities(
-                adapter_capabilities_to_runtime(&adapter_capabilities),
-            ),
+            RuntimePluginServices::new(plugin_host)
+                .with_capabilities(adapter_capabilities_to_runtime(&adapter_capabilities)),
             runtime_state.clone(),
             self.dispatch_options.clone(),
         );
-        for plugin in self.plugins.drain(..) {
-            engine.push(plugin);
+        for registered in self.plugins.drain(..) {
+            let (instance_id, plugin) = registered.into_parts();
+            engine.push_as(instance_id, plugin);
         }
 
         if let Err(err) = engine.init_all().await {

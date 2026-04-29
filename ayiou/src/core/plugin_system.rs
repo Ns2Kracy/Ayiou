@@ -265,6 +265,7 @@ impl HandleOutcome {
 
 pub struct RuntimePluginServices<C> {
     pub host: PluginHost<C>,
+    pub instance_id: Option<String>,
     pub bot_id: Option<BotId>,
     pub platform: Option<PlatformId>,
     pub sessions: Option<Arc<dyn SessionStore>>,
@@ -276,6 +277,7 @@ impl<C> Clone for RuntimePluginServices<C> {
     fn clone(&self) -> Self {
         Self {
             host: self.host.clone(),
+            instance_id: self.instance_id.clone(),
             bot_id: self.bot_id.clone(),
             platform: self.platform.clone(),
             sessions: self.sessions.clone(),
@@ -289,12 +291,18 @@ impl<C> RuntimePluginServices<C> {
     pub fn new(host: PluginHost<C>) -> Self {
         Self {
             host,
+            instance_id: None,
             bot_id: None,
             platform: None,
             sessions: None,
             metrics: None,
             capabilities: Vec::new(),
         }
+    }
+
+    pub fn with_instance_id(mut self, instance_id: impl Into<String>) -> Self {
+        self.instance_id = Some(instance_id.into());
+        self
     }
 
     pub fn with_identity(
@@ -317,10 +325,7 @@ impl<C> RuntimePluginServices<C> {
         self
     }
 
-    pub fn with_capabilities(
-        mut self,
-        capabilities: impl IntoIterator<Item = Capability>,
-    ) -> Self {
+    pub fn with_capabilities(mut self, capabilities: impl IntoIterator<Item = Capability>) -> Self {
         self.capabilities = capabilities.into_iter().collect();
         self
     }
@@ -351,8 +356,6 @@ impl PluginHealth {
 
 #[async_trait]
 pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
-    fn instance_id(&self) -> &str;
-
     fn kind(&self) -> &str;
 
     fn meta(&self) -> PluginMetadata;
@@ -400,78 +403,53 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
     }
 }
 
-pub struct NamedPlugin<C> {
+pub struct RegisteredPlugin<C> {
     instance_id: String,
-    inner: Box<dyn RuntimePlugin<C>>,
+    plugin: Box<dyn RuntimePlugin<C>>,
 }
 
-impl<C> NamedPlugin<C>
+impl<C> RegisteredPlugin<C>
 where
     C: Sync + 'static,
 {
-    pub fn new(instance_id: impl Into<String>, inner: Box<dyn RuntimePlugin<C>>) -> Self {
+    pub fn new(instance_id: impl Into<String>, plugin: Box<dyn RuntimePlugin<C>>) -> Self {
         Self {
             instance_id: instance_id.into(),
-            inner,
+            plugin,
         }
     }
-}
 
-#[async_trait]
-impl<C> RuntimePlugin<C> for NamedPlugin<C>
-where
-    C: Sync + 'static,
-{
-    fn instance_id(&self) -> &str {
+    pub fn from_plugin(plugin: Box<dyn RuntimePlugin<C>>) -> Self {
+        let instance_id = default_instance_id(plugin.as_ref());
+        Self::new(instance_id, plugin)
+    }
+
+    pub fn instance_id(&self) -> &str {
         &self.instance_id
     }
 
-    fn kind(&self) -> &str {
-        self.inner.kind()
+    pub fn plugin(&self) -> &dyn RuntimePlugin<C> {
+        self.plugin.as_ref()
     }
 
-    fn meta(&self) -> PluginMetadata {
-        self.inner.meta()
+    pub fn plugin_mut(&mut self) -> &mut dyn RuntimePlugin<C> {
+        self.plugin.as_mut()
     }
 
-    fn manifest(&self) -> RuntimePluginManifest {
-        self.inner.manifest()
+    pub fn into_parts(self) -> (String, Box<dyn RuntimePlugin<C>>) {
+        (self.instance_id, self.plugin)
     }
+}
 
-    fn declared_handlers(&self) -> Vec<HandlerDecl> {
-        self.inner.declared_handlers()
-    }
-
-    async fn init(&mut self, services: RuntimePluginServices<C>) -> Result<()> {
-        self.inner.init(services).await
-    }
-
-    async fn start(&mut self, services: RuntimePluginServices<C>) -> Result<()> {
-        self.inner.start(services).await
-    }
-
-    async fn stop(&mut self) -> Result<()> {
-        self.inner.stop().await
-    }
-
-    async fn apply_config(&mut self, update: ConfigUpdate) -> Result<ApplyConfigOutcome> {
-        self.inner.apply_config(update).await
-    }
-
-    async fn handle(&self, ctx: &C) -> Result<HandleOutcome> {
-        self.inner.handle(ctx).await
-    }
-
-    async fn handle_with_invocation(
-        &self,
-        ctx: &C,
-        invocation: Option<CommandInvocation>,
-    ) -> Result<HandleOutcome> {
-        self.inner.handle_with_invocation(ctx, invocation).await
-    }
-
-    fn health(&self) -> PluginHealth {
-        self.inner.health()
+fn default_instance_id<C>(plugin: &dyn RuntimePlugin<C>) -> String
+where
+    C: Sync + 'static,
+{
+    let meta = plugin.meta();
+    if meta.name.trim().is_empty() {
+        plugin.kind().to_string()
+    } else {
+        meta.name
     }
 }
 
@@ -506,7 +484,7 @@ pub struct RuntimePluginEngine<C> {
     services: RuntimePluginServices<C>,
     runtime_state: PluginRuntimeState,
     dispatch_options: DispatchOptions,
-    plugins: Vec<Box<dyn RuntimePlugin<C>>>,
+    plugins: Vec<RegisteredPlugin<C>>,
 }
 
 impl<C> RuntimePluginEngine<C>
@@ -531,24 +509,32 @@ where
     }
 
     pub fn push(&mut self, plugin: Box<dyn RuntimePlugin<C>>) {
+        self.push_registered(RegisteredPlugin::from_plugin(plugin));
+    }
+
+    pub fn push_as(&mut self, instance_id: impl Into<String>, plugin: Box<dyn RuntimePlugin<C>>) {
+        self.push_registered(RegisteredPlugin::new(instance_id, plugin));
+    }
+
+    fn push_registered(&mut self, plugin: RegisteredPlugin<C>) {
         self.runtime_state
             .set_lifecycle(plugin.instance_id(), PluginLifecycleState::Registered);
         self.plugins.push(plugin);
     }
 
-    pub fn plugins(&self) -> &[Box<dyn RuntimePlugin<C>>] {
+    pub fn plugins(&self) -> &[RegisteredPlugin<C>] {
         &self.plugins
     }
 
     pub async fn init_all(&mut self) -> Result<()> {
         let provided_capabilities = self.services.provided_capabilities();
-        for plugin in &mut self.plugins {
-            let instance_id = plugin.instance_id().to_string();
+        for registered in &mut self.plugins {
+            let instance_id = registered.instance_id().to_string();
             self.runtime_state
                 .set_lifecycle(&instance_id, PluginLifecycleState::Initializing);
 
             if let CapabilityNegotiation::Failed { missing_required } =
-                negotiate_capabilities(&plugin.manifest(), &provided_capabilities)
+                negotiate_capabilities(&registered.plugin().manifest(), &provided_capabilities)
             {
                 let err = anyhow!(
                     "plugin `{}` missing required capabilities: {:?}",
@@ -560,7 +546,11 @@ where
                 return Err(err);
             }
 
-            if let Err(err) = plugin.init(self.services.clone()).await {
+            if let Err(err) = registered
+                .plugin_mut()
+                .init(self.services.clone().with_instance_id(instance_id.clone()))
+                .await
+            {
                 self.runtime_state
                     .record_error(&instance_id, err.to_string());
                 return Err(err);
@@ -573,12 +563,16 @@ where
     }
 
     pub async fn start_all(&mut self) -> Result<()> {
-        for plugin in &mut self.plugins {
-            let instance_id = plugin.instance_id().to_string();
+        for registered in &mut self.plugins {
+            let instance_id = registered.instance_id().to_string();
             self.runtime_state
                 .set_lifecycle(&instance_id, PluginLifecycleState::Starting);
 
-            if let Err(err) = plugin.start(self.services.clone()).await {
+            if let Err(err) = registered
+                .plugin_mut()
+                .start(self.services.clone().with_instance_id(instance_id.clone()))
+                .await
+            {
                 self.runtime_state
                     .record_error(&instance_id, err.to_string());
                 return Err(err);
@@ -595,12 +589,12 @@ where
     pub async fn stop_all(&mut self) -> Result<()> {
         let mut first_error = None;
 
-        for plugin in self.plugins.iter_mut().rev() {
-            let instance_id = plugin.instance_id().to_string();
+        for registered in self.plugins.iter_mut().rev() {
+            let instance_id = registered.instance_id().to_string();
             self.runtime_state
                 .set_lifecycle(&instance_id, PluginLifecycleState::Stopping);
 
-            if let Err(err) = plugin.stop().await {
+            if let Err(err) = registered.plugin_mut().stop().await {
                 self.runtime_state
                     .record_error(&instance_id, err.to_string());
                 if first_error.is_none() {
@@ -625,10 +619,10 @@ where
         instance_id: &str,
         update: ConfigUpdate,
     ) -> Result<ApplyConfigOutcome> {
-        let plugin = self
+        let registered = self
             .plugins
             .iter_mut()
-            .find(|plugin| plugin.instance_id() == instance_id)
+            .find(|registered| registered.instance_id() == instance_id)
             .ok_or_else(|| anyhow!("plugin instance `{}` is not registered", instance_id))?;
 
         self.runtime_state
@@ -639,7 +633,7 @@ where
             self.runtime_state.clear_error(instance_id);
             return Ok(ApplyConfigOutcome::skipped());
         }
-        let outcome = plugin.apply_config(update).await?;
+        let outcome = registered.plugin_mut().apply_config(update).await?;
 
         if let Some(version) = outcome.applied_version {
             self.runtime_state.mark_config_applied(instance_id, version);
@@ -662,20 +656,21 @@ where
         });
 
         for candidate in matched {
-            let plugin = &self.plugins[candidate.plugin_index];
-            match plugin
+            let registered = &self.plugins[candidate.plugin_index];
+            match registered
+                .plugin()
                 .handle_with_invocation(ctx, candidate.invocation.clone())
                 .await
             {
                 Ok(outcome) => {
-                    self.runtime_state.clear_error(plugin.instance_id());
+                    self.runtime_state.clear_error(registered.instance_id());
                     if outcome.block || candidate.block {
                         return Ok(true);
                     }
                 }
                 Err(err) => {
                     self.runtime_state
-                        .record_error(plugin.instance_id(), err.to_string());
+                        .record_error(registered.instance_id(), err.to_string());
                     return Err(err);
                 }
             }
@@ -692,12 +687,13 @@ where
         let global_prefixes = self.dispatch_options.command_prefixes();
         let mut matched = Vec::new();
 
-        for (plugin_index, plugin) in self.plugins.iter().enumerate() {
-            if !self.runtime_state.is_enabled(plugin.instance_id()) {
+        for (plugin_index, registered) in self.plugins.iter().enumerate() {
+            if !self.runtime_state.is_enabled(registered.instance_id()) {
                 continue;
             }
 
-            let best = plugin
+            let best = registered
+                .plugin()
                 .declared_handlers()
                 .into_iter()
                 .filter_map(|handler| {
@@ -898,10 +894,6 @@ mod tests {
 
     #[async_trait]
     impl RuntimePlugin<TestCtx> for PriorityPlugin {
-        fn instance_id(&self) -> &str {
-            self.instance_id
-        }
-
         fn kind(&self) -> &str {
             self.instance_id
         }
@@ -1141,7 +1133,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn named_plugin_overrides_runtime_instance_id() {
+    async fn engine_can_register_plugin_with_explicit_instance_id() {
         let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
         let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
         let host = PluginHost::new(scheduler, store, None);
@@ -1149,7 +1141,8 @@ mod tests {
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let plugin = NamedPlugin::new(
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
             "custom.instance",
             Box::new(PriorityPlugin {
                 instance_id: "macro-default",
@@ -1160,12 +1153,74 @@ mod tests {
                 hits,
             }),
         );
-
-        let mut engine = RuntimePluginEngine::new(services, state.clone());
-        engine.push(Box::new(plugin));
         engine.init_all().await.unwrap();
 
-        assert_ne!(state.snapshot("custom.instance").lifecycle_state, PluginLifecycleState::Failed);
-        assert_eq!(state.snapshot("macro-default").lifecycle_state, PluginLifecycleState::Registered);
+        let snapshots = state.snapshots();
+        assert!(snapshots.iter().any(|(id, _)| id == "custom.instance"));
+        assert!(!snapshots.iter().any(|(id, _)| id == "macro-default"));
+    }
+
+    struct ServiceProbePlugin {
+        seen_instance_ids: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    }
+
+    #[async_trait]
+    impl RuntimePlugin<TestCtx> for ServiceProbePlugin {
+        fn kind(&self) -> &str {
+            "service-probe"
+        }
+
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new("service-probe")
+        }
+
+        async fn init(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
+            self.seen_instance_ids
+                .lock()
+                .unwrap()
+                .push(services.instance_id);
+            Ok(())
+        }
+
+        async fn start(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
+            self.seen_instance_ids
+                .lock()
+                .unwrap()
+                .push(services.instance_id);
+            Ok(())
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+            Ok(HandleOutcome::pass())
+        }
+    }
+
+    #[tokio::test]
+    async fn engine_scopes_services_to_runtime_instance_id() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let host = PluginHost::new(scheduler, store, None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let seen_instance_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        engine.push_as(
+            "runtime-id",
+            Box::new(ServiceProbePlugin {
+                seen_instance_ids: seen_instance_ids.clone(),
+            }),
+        );
+
+        engine.init_all().await.unwrap();
+        engine.start_all().await.unwrap();
+
+        assert_eq!(
+            *seen_instance_ids.lock().unwrap(),
+            vec![
+                Some("runtime-id".to_string()),
+                Some("runtime-id".to_string())
+            ]
+        );
     }
 }

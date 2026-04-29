@@ -278,10 +278,6 @@ pub fn expand_derive_plugin(input: DeriveInput) -> Result<TokenStream> {
     let expanded = quote! {
         #[async_trait::async_trait]
         impl #impl_generics ayiou::core::plugin_system::RuntimePlugin<#ctx_type> for #name #ty_generics #where_clause {
-            fn instance_id(&self) -> &str {
-                #plugin_name
-            }
-
             fn kind(&self) -> &str {
                 #plugin_name
             }

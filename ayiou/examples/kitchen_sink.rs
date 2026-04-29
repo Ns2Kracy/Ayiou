@@ -102,16 +102,14 @@ struct KitchenConfig {
 }
 
 struct KitchenPlugin {
-    instance_id: String,
     config: KitchenConfig,
     seen: Arc<Mutex<Vec<String>>>,
     services: Option<RuntimePluginServices<DemoCtx>>,
 }
 
 impl KitchenPlugin {
-    fn new(instance_id: impl Into<String>) -> Self {
+    fn new() -> Self {
         Self {
-            instance_id: instance_id.into(),
             config: KitchenConfig {
                 greeting: "hello".to_string(),
             },
@@ -140,7 +138,7 @@ impl KitchenPlugin {
                 .as_ref()
                 .map(PlatformId::as_str)
                 .unwrap_or("console"),
-            self.instance_id(),
+            services.instance_id.as_deref().unwrap_or("kitchen"),
             ctx.user_id(),
             ctx.group_id(),
         );
@@ -169,16 +167,12 @@ impl KitchenPlugin {
 
 #[async_trait]
 impl RuntimePlugin<DemoCtx> for KitchenPlugin {
-    fn instance_id(&self) -> &str {
-        &self.instance_id
-    }
-
     fn kind(&self) -> &str {
         "kitchen"
     }
 
     fn meta(&self) -> PluginMetadata {
-        PluginMetadata::new(self.instance_id.clone())
+        PluginMetadata::new("kitchen")
             .description(
                 "manual RuntimePlugin covering manifest, handlers, config, session, health",
             )
@@ -337,7 +331,7 @@ async fn run_engine_demo() -> Result<()> {
 
     engine.push(Box::new(HelloDerivedPlugin));
     engine.push(Box::new(ToolsPlugin));
-    engine.push(Box::new(KitchenPlugin::new("kitchen-main")));
+    engine.push_as("kitchen-main", Box::new(KitchenPlugin::new()));
 
     engine.init_all().await?;
     engine.start_all().await?;

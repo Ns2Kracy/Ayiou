@@ -167,7 +167,7 @@ let mut engine = RuntimePluginEngine::with_options(
     DispatchOptions::new(["/"]),
 );
 
-engine.push(Box::new(KitchenPlugin::new("kitchen-main")));
+engine.push_as("kitchen-main", Box::new(KitchenPlugin::new()));
 ```
 
 这说明 Ayiou 的核心是一个 Bot runtime。多个消息渠道应该作为 adapter/source 接入同一个 runtime，回复时根据消息来源回到原渠道。
