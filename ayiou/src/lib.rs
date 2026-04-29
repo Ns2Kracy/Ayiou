@@ -266,6 +266,7 @@ impl<A: Adapter> Bot<A> {
     pub async fn run(mut self, adapter: A) {
         info!("Starting Bot...");
 
+        let adapter_capabilities = adapter.capabilities();
         let adapter_runtime = adapter.start_with_runtime().await;
         let runtime_state = PluginRuntimeState::default();
         let plugin_host = PluginHost::new(
@@ -274,7 +275,9 @@ impl<A: Adapter> Bot<A> {
             adapter_runtime.sender.clone(),
         );
         let mut engine = RuntimePluginEngine::with_options(
-            RuntimePluginServices::new(plugin_host),
+            RuntimePluginServices::new(plugin_host).with_capabilities(
+                adapter_capabilities_to_runtime(&adapter_capabilities),
+            ),
             runtime_state.clone(),
             self.dispatch_options.clone(),
         );
@@ -306,6 +309,30 @@ impl<A: Adapter> Bot<A> {
             error!("Plugin shutdown error: {}", err);
         }
     }
+}
+
+fn adapter_capabilities_to_runtime(
+    capabilities: &crate::core::adapter::AdapterCapabilities,
+) -> Vec<crate::core::plugin_system::Capability> {
+    let mut out = Vec::new();
+
+    if capabilities.proactive_send {
+        out.push(crate::core::plugin_system::Capability::ProactiveSend);
+    }
+
+    if capabilities.attachments {
+        out.push(crate::core::plugin_system::Capability::RichSegments);
+    }
+
+    out.extend(
+        capabilities
+            .platform_extensions
+            .iter()
+            .cloned()
+            .map(crate::core::plugin_system::Capability::custom),
+    );
+
+    out
 }
 
 pub type OneBotV11Bot = Bot<adapter::onebot::v11::adapter::OneBotV11Adapter>;

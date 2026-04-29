@@ -269,6 +269,7 @@ pub struct RuntimePluginServices<C> {
     pub platform: Option<PlatformId>,
     pub sessions: Option<Arc<dyn SessionStore>>,
     pub metrics: Option<Arc<dyn MetricsSink>>,
+    pub capabilities: Vec<Capability>,
 }
 
 impl<C> Clone for RuntimePluginServices<C> {
@@ -279,6 +280,7 @@ impl<C> Clone for RuntimePluginServices<C> {
             platform: self.platform.clone(),
             sessions: self.sessions.clone(),
             metrics: self.metrics.clone(),
+            capabilities: self.capabilities.clone(),
         }
     }
 }
@@ -291,6 +293,7 @@ impl<C> RuntimePluginServices<C> {
             platform: None,
             sessions: None,
             metrics: None,
+            capabilities: Vec::new(),
         }
     }
 
@@ -314,9 +317,17 @@ impl<C> RuntimePluginServices<C> {
         self
     }
 
+    pub fn with_capabilities(
+        mut self,
+        capabilities: impl IntoIterator<Item = Capability>,
+    ) -> Self {
+        self.capabilities = capabilities.into_iter().collect();
+        self
+    }
+
     pub fn provided_capabilities(&self) -> Vec<Capability> {
-        let mut capabilities = Vec::new();
-        if self.host.sender().is_some() {
+        let mut capabilities = self.capabilities.clone();
+        if self.host.sender().is_some() && !capabilities.contains(&Capability::ProactiveSend) {
             capabilities.push(Capability::ProactiveSend);
         }
         capabilities
@@ -615,7 +626,7 @@ where
                 .declared_handlers()
                 .into_iter()
                 .filter_map(|handler| {
-                    self.match_handler(&text, plugin_index, handler, global_prefixes)
+                    self.match_handler(ctx, &text, plugin_index, handler, global_prefixes)
                 })
                 .min_by(|left, right| {
                     left.priority
@@ -633,12 +644,16 @@ where
 
     fn match_handler(
         &self,
+        ctx: &C,
         text: &str,
         plugin_index: usize,
         handler: HandlerDecl,
         global_prefixes: &[String],
-    ) -> Option<MatchedHandler> {
-        if !permissions_match(&handler.permissions, text, &self.services) {
+    ) -> Option<MatchedHandler>
+    where
+        C: crate::core::adapter::MsgContext,
+    {
+        if !permissions_match(&handler.permissions, ctx, &self.services) {
             return None;
         }
 
@@ -736,19 +751,16 @@ fn regex_patterns_match(text: &str, patterns: &[String]) -> bool {
 
 fn permissions_match<C>(
     permissions: &[Permission],
-    text: &str,
+    ctx: &C,
     services: &RuntimePluginServices<C>,
-) -> bool {
+) -> bool
+where
+    C: crate::core::adapter::MsgContext,
+{
     permissions.iter().all(|permission| match permission {
         Permission::Any => true,
-        Permission::User(user_id) => {
-            services
-                .bot_id
-                .as_ref()
-                .is_some_and(|bot_id| bot_id.as_str() == user_id)
-                || text.contains(user_id)
-        }
-        Permission::Group(group_id) => text.contains(group_id),
+        Permission::User(user_id) => ctx.user_id() == *user_id,
+        Permission::Group(group_id) => ctx.group_id().as_deref() == Some(group_id.as_str()),
         Permission::Bot(bot_id) => services
             .bot_id
             .as_ref()
@@ -778,6 +790,8 @@ mod tests {
     #[derive(Clone, Default)]
     struct TestCtx {
         text: String,
+        user_id: String,
+        group_id: Option<String>,
     }
 
     impl MsgContext for TestCtx {
@@ -786,11 +800,15 @@ mod tests {
         }
 
         fn user_id(&self) -> String {
-            "user".to_string()
+            if self.user_id.is_empty() {
+                "user".to_string()
+            } else {
+                self.user_id.clone()
+            }
         }
 
         fn group_id(&self) -> Option<String> {
-            None
+            self.group_id.clone()
         }
     }
 
@@ -909,11 +927,55 @@ mod tests {
         engine
             .handle_all(&TestCtx {
                 text: "hello world".to_string(),
+                user_id: "user".to_string(),
+                group_id: Some("g1".to_string()),
             })
             .await
             .unwrap();
 
         assert_eq!(*hits.lock().unwrap(), vec!["regex"]);
+    }
+
+    #[tokio::test]
+    async fn runtime_plugin_engine_uses_context_ids_for_permission_checks() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let host = PluginHost::new(scheduler, store, None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "user-guard",
+            priority: 0,
+            block_decl: false,
+            handler: HandlerDecl::wildcard_message().require_permission(Permission::user("admin")),
+            manifest: RuntimePluginManifest::new("user-guard"),
+            hits: hits.clone(),
+        }));
+        engine.init_all().await.unwrap();
+        engine.start_all().await.unwrap();
+
+        engine
+            .handle_all(&TestCtx {
+                text: "admin said hello".to_string(),
+                user_id: "guest".to_string(),
+                group_id: None,
+            })
+            .await
+            .unwrap();
+
+        engine
+            .handle_all(&TestCtx {
+                text: "plain text".to_string(),
+                user_id: "admin".to_string(),
+                group_id: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(*hits.lock().unwrap(), vec!["user-guard"]);
     }
 
     #[tokio::test]
@@ -974,5 +1036,32 @@ mod tests {
         let snapshot = state.snapshot("sender");
         assert!(err.to_string().contains("missing required capabilities"));
         assert_eq!(snapshot.lifecycle_state, PluginLifecycleState::Failed);
+    }
+
+    #[tokio::test]
+    async fn runtime_plugin_engine_accepts_declared_services_capabilities() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let host = PluginHost::new(scheduler, store, None);
+        let services = RuntimePluginServices::new(host)
+            .with_capabilities([Capability::GroupModeration, Capability::Reaction]);
+        let state = PluginRuntimeState::default();
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "moderator",
+            priority: 0,
+            block_decl: false,
+            handler: HandlerDecl::wildcard_message(),
+            manifest: RuntimePluginManifest::new("moderator")
+                .require_capability(Capability::GroupModeration),
+            hits,
+        }));
+
+        engine.init_all().await.unwrap();
+        let snapshot = state.snapshot("moderator");
+        assert_ne!(snapshot.lifecycle_state, PluginLifecycleState::Failed);
+        assert!(snapshot.last_error.is_none());
     }
 }
