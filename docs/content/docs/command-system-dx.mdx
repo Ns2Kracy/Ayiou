@@ -8,7 +8,6 @@ description: 使用 #[plugin] + #[command] 构建可维护的命令型插件
 ## 快速示例
 
 ```rust
-use ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter;
 use ayiou::prelude::*;
 
 #[derive(Default)]
@@ -32,11 +31,11 @@ impl AdminPlugin {
 
 #[tokio::main]
 async fn main() {
-    let bot = Bot::<OneBotV11Adapter>::new()
+    let bot = OneBotV11Bot::ws("ws://127.0.0.1:8080")
         .command_prefixes(["/", "!", "."])
         .with_plugin(AdminPlugin::default());
 
-    bot.run(OneBotV11Adapter::new("ws://127.0.0.1:8080")).await;
+    bot.run().await;
 }
 ```
 

@@ -50,6 +50,7 @@ impl Default for BotRuntimeOptions {
 }
 
 pub struct Bot<A: Adapter> {
+    adapter: A,
     plugins: Vec<RegisteredPlugin<A::Ctx>>,
     dispatch_options: DispatchOptions,
     metrics_sink: Arc<dyn MetricsSink>,
@@ -169,15 +170,10 @@ where
     }
 }
 
-impl<A: Adapter> Default for Bot<A> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<A: Adapter> Bot<A> {
-    pub fn new() -> Self {
+    pub fn new(adapter: A) -> Self {
         Self {
+            adapter,
             plugins: Vec::new(),
             dispatch_options: DispatchOptions::default(),
             metrics_sink: Arc::new(NoopMetrics),
@@ -267,11 +263,11 @@ impl<A: Adapter> Bot<A> {
         self.plugins.len()
     }
 
-    pub async fn run(mut self, adapter: A) {
+    pub async fn run(mut self) {
         info!("Starting Bot...");
 
-        let adapter_capabilities = adapter.capabilities();
-        let adapter_runtime = adapter.start_with_runtime().await;
+        let adapter_capabilities = self.adapter.capabilities();
+        let adapter_runtime = self.adapter.start_with_runtime().await;
         let runtime_state = PluginRuntimeState::default();
         let plugin_host = PluginHost::new(
             self.scheduler.clone(),
@@ -343,34 +339,22 @@ pub type OneBotV11Bot = Bot<adapter::onebot::v11::adapter::OneBotV11Adapter>;
 pub type ConsoleBot = Bot<adapter::console::adapter::ConsoleAdapter>;
 
 impl ConsoleBot {
-    pub fn stdio() -> Self {
-        Self::new().command_prefixes(["/", "!", "."])
-    }
-
-    pub async fn run_console(self) {
-        self.run(adapter::console::adapter::ConsoleAdapter::new())
-            .await;
+    pub fn console() -> Self {
+        Self::new(adapter::console::adapter::ConsoleAdapter::new())
+            .command_prefixes(["/", "!", "."])
     }
 }
 
 impl OneBotV11Bot {
-    pub fn onebot() -> Self {
-        Self::new().command_prefixes(["/", "!", "."])
+    pub fn ws(url: impl Into<String> + Send) -> Self {
+        Self::new(adapter::onebot::v11::adapter::OneBotV11Adapter::new(url))
+            .command_prefixes(["/", "!", "."])
     }
 
-    pub async fn run_ws(self, url: impl Into<String> + Send) {
-        self.run(adapter::onebot::v11::adapter::OneBotV11Adapter::new(url))
-            .await;
-    }
-
-    pub async fn run_ws_with_token(
-        self,
-        url: impl Into<String> + Send,
-        token: impl Into<String> + Send,
-    ) {
-        self.run(adapter::onebot::v11::adapter::OneBotV11Adapter::with_token(
+    pub fn ws_with_token(url: impl Into<String> + Send, token: impl Into<String> + Send) -> Self {
+        Self::new(adapter::onebot::v11::adapter::OneBotV11Adapter::with_token(
             url, token,
         ))
-        .await;
+        .command_prefixes(["/", "!", "."])
     }
 }

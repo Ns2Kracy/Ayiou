@@ -372,12 +372,12 @@ async fn run_engine_demo() -> Result<()> {
 }
 
 async fn run_bot_builder_demo() {
-    Bot::<ClosedAdapter>::new()
+    Bot::new(ClosedAdapter)
         .with_plugin(HelloPlugin)
         .with_plugin(ToolsPlugin)
         .workers(1)
         .queue_capacity(4)
-        .run(ClosedAdapter)
+        .run()
         .await;
 }
 

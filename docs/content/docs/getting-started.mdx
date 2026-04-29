@@ -40,11 +40,11 @@ impl EchoPlugin {
 
 #[tokio::main]
 async fn main() {
-    let bot = OneBotV11Bot::onebot()
+    let bot = OneBotV11Bot::ws("ws://127.0.0.1:8080")
         .command_prefixes(["/", "!", "."])
         .with_plugin(EchoPlugin::default());
 
-    bot.run_ws("ws://127.0.0.1:8080").await;
+    bot.run().await;
 }
 ```
 
@@ -66,8 +66,8 @@ impl HelpPlugin {
 
 #[tokio::main]
 async fn main() {
-    let bot = ConsoleBot::stdio().with_plugin(HelpPlugin::default());
-    bot.run_console().await;
+    let bot = ConsoleBot::console().with_plugin(HelpPlugin::default());
+    bot.run().await;
 }
 ```
 

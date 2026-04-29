@@ -36,7 +36,7 @@ async fn main() {
     spawn_metrics_log_reporter(metrics.clone(), Duration::from_secs(30));
 
     // 以 OneBot 为例
-    // let bot = Bot::<OneBotV11Adapter>::new().with_metrics_sink(metrics);
+    // let bot = OneBotV11Bot::ws("ws://127.0.0.1:8080").with_metrics_sink(metrics);
     // ...
 }
 ```

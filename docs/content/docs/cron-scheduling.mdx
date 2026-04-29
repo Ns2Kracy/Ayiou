@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
 
 ```rust
 let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-let bot = Bot::<OneBotV11Adapter>::new().with_scheduler(scheduler);
+let bot = OneBotV11Bot::ws("ws://127.0.0.1:8080").with_scheduler(scheduler);
 ```
 
 在收到 Ctrl+C 退出时，`Bot` 会自动调用 `scheduler.shutdown()`。
