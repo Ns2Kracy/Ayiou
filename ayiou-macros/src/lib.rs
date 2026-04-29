@@ -1,73 +1,14 @@
 use proc_macro::TokenStream;
-use syn::{DeriveInput, Meta, parse_macro_input, punctuated::Punctuated};
+use syn::{Meta, parse_macro_input, punctuated::Punctuated};
 
 mod attr_plugin;
-mod derive_plugin;
 
-use attr_plugin::expand_bot_plugin;
-use derive_plugin::expand_derive_plugin;
+use attr_plugin::expand_plugin;
 
-/// Derive macro for simple plugin definition.
+/// Generate a `RuntimePlugin` implementation from an `impl` block.
 ///
-/// This macro generates a `RuntimePlugin` implementation from struct attributes.
-/// By default you implement an `execute` method on your struct that handles the command.
-/// For more advanced plugins, you can also point the macro at custom `start` and `handler`
-/// methods via `#[plugin(start = "...", handler = "...")]`.
-///
-/// # Example
-///
-/// ```ignore
-/// use ayiou::prelude::*;
-///
-/// #[derive(Plugin)]
-/// #[plugin(name = "echo", command = "echo", description = "Repeats your message")]
-/// struct EchoPlugin;
-///
-/// impl EchoPlugin {
-///     async fn execute(&self, ctx: &Ctx) -> anyhow::Result<()> {
-///         let text = ctx.text();
-///         ctx.reply_text(format!("Echo: {}", text)).await?;
-///         Ok(())
-///     }
-/// }
-///
-/// // Register with bot
-/// use ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter;
-///
-/// Bot::<OneBotV11Adapter>::new()
-///     .with_plugin(EchoPlugin)
-///     .run(OneBotV11Adapter::new("ws://...")).await;
-/// ```
-///
-/// # Attributes
-///
-/// - `name`: Plugin name (defaults to struct name in lowercase)
-/// - `description`: Plugin description
-/// - `version`: Plugin version (defaults to "0.1.0")
-/// - `command`: Command that triggers the plugin (defaults to name)
-/// - `prefix`: Command prefix accepted by this plugin (repeatable)
-/// - `regex`: Regex pattern for message matching
-/// - `cron`: Cron expression for scheduled execution
-/// - `context`: Custom context type (defaults to `Ctx` or generic `C`)
-/// - `start`: Custom startup method name returning `Result<()>`
-/// - `handler`: Custom handler method name returning `Result<bool>`
-#[proc_macro_derive(Plugin, attributes(plugin))]
-pub fn derive_plugin(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    expand_derive_plugin(input)
-        .unwrap_or_else(|err| err.to_compile_error())
-        .into()
-}
-
-/// Mark a method in `#[bot_plugin] impl` as a command handler.
-///
-/// This attribute is only consumed by `#[bot_plugin]` and is otherwise a no-op.
-#[proc_macro_attribute]
-pub fn command(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    item
-}
-
-/// Generate a full `RuntimePlugin` implementation from an `impl` block.
+/// `#[plugin]` is the default authoring entrypoint. Put it on an `impl` block and
+/// mark command handlers with `#[command]`.
 ///
 /// # Example
 ///
@@ -75,21 +16,37 @@ pub fn command(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// use ayiou::prelude::*;
 ///
 /// #[derive(Default)]
-/// struct ToolPlugin;
+/// struct EchoPlugin;
 ///
-/// #[bot_plugin(name = "tool", prefix = "/", prefix = "!")]
-/// impl ToolPlugin {
-///     #[command(name = "echo", alias = "say")]
-///     async fn echo(&self, ctx: &Ctx, content: String) -> anyhow::Result<()> {
-///         ctx.reply_text(content).await
+/// #[plugin(name = "echo", prefix = "/")]
+/// impl EchoPlugin {
+///     #[command(name = "echo")]
+///     async fn echo(&self, ctx: &Context, text: String) -> anyhow::Result<()> {
+///         ctx.reply_text(format!("Echo: {}", text)).await
 ///     }
 /// }
 /// ```
+///
+/// # Attributes
+///
+/// - `name`: Plugin name (defaults to struct name in lowercase)
+/// - `description`: Plugin description
+/// - `version`: Plugin version (defaults to "0.1.0")
+/// - `prefix`: Command prefix accepted by this plugin (repeatable)
+/// - `context`: Custom context type (defaults to `Context`)
 #[proc_macro_attribute]
-pub fn bot_plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attrs = parse_macro_input!(attr with Punctuated::<Meta, syn::Token![,]>::parse_terminated);
     let item_impl = parse_macro_input!(item as syn::ItemImpl);
-    expand_bot_plugin(attrs.into_iter().collect(), item_impl)
+    expand_plugin(attrs.into_iter().collect(), item_impl)
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
+}
+
+/// Mark a method in `#[plugin] impl` as a command handler.
+///
+/// This attribute is only consumed by `#[plugin]` and is otherwise a no-op.
+#[proc_macro_attribute]
+pub fn command(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
 }

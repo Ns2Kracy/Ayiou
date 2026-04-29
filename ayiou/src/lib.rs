@@ -20,7 +20,7 @@ pub mod core;
 pub mod driver;
 pub mod prelude;
 
-pub use ayiou_macros::{Plugin, bot_plugin, command};
+pub use ayiou_macros::{command, plugin};
 pub use core::context::Context;
 pub use core::model::*;
 pub use core::runtime::{RuntimeController, RuntimeState};

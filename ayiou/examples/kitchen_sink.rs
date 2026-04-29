@@ -55,20 +55,20 @@ impl MsgContext for DemoCtx {
     }
 }
 
-#[derive(Default, Plugin)]
+#[derive(Default)]
+struct HelloPlugin;
+
 #[plugin(
-    name = "hello-derived",
-    description = "single-command derive macro plugin",
+    name = "hello",
+    description = "single-command plugin macro",
     version = "0.2.0",
-    command = "hello",
     prefix = "/",
     context = "DemoCtx"
 )]
-struct HelloDerivedPlugin;
-
-impl HelloDerivedPlugin {
+impl HelloPlugin {
+    #[command(name = "hello")]
     async fn execute(&self, ctx: &DemoCtx) -> Result<()> {
-        println!("derive macro handled: {}", ctx.text());
+        println!("plugin macro handled: {}", ctx.text());
         Ok(())
     }
 }
@@ -76,7 +76,7 @@ impl HelloDerivedPlugin {
 #[derive(Default)]
 struct ToolsPlugin;
 
-#[bot_plugin(
+#[plugin(
     name = "tools",
     description = "multi-command attribute macro plugin",
     prefix = "/",
@@ -329,7 +329,7 @@ async fn run_engine_demo() -> Result<()> {
     let mut engine =
         RuntimePluginEngine::with_options(services, state.clone(), DispatchOptions::new(["/"]));
 
-    engine.push(Box::new(HelloDerivedPlugin));
+    engine.push(Box::new(HelloPlugin));
     engine.push(Box::new(ToolsPlugin));
     engine.push_as("kitchen-main", Box::new(KitchenPlugin::new()));
 
@@ -354,8 +354,8 @@ async fn run_engine_demo() -> Result<()> {
     let echo_ctx = DemoCtx::message("bot-a", "/say hello from macro", "guest", "group-a");
     engine.handle_all(&echo_ctx).await?;
 
-    let derived_ctx = DemoCtx::message("bot-a", "/hello from derive", "guest", "group-a");
-    engine.handle_all(&derived_ctx).await?;
+    let hello_ctx = DemoCtx::message("bot-a", "/hello from macro", "guest", "group-a");
+    engine.handle_all(&hello_ctx).await?;
 
     let snapshot = state.snapshot("kitchen-main");
     assert_eq!(snapshot.applied_config_version, 2);
@@ -373,7 +373,7 @@ async fn run_engine_demo() -> Result<()> {
 
 async fn run_bot_builder_demo() {
     Bot::<ClosedAdapter>::new()
-        .with_plugin(HelloDerivedPlugin)
+        .with_plugin(HelloPlugin)
         .with_plugin(ToolsPlugin)
         .workers(1)
         .queue_capacity(4)

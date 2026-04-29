@@ -33,8 +33,8 @@ pub use crate::adapter::onebot::v11::model::{
 };
 pub use crate::adapter::onebot::v11::sender::OneBotSender;
 
-// Re-export derive macros
-pub use ayiou_macros::{Plugin, bot_plugin, command};
+// Re-export plugin authoring macros
+pub use ayiou_macros::{command, plugin};
 
 // Re-export async_trait for CommandHandler impl
 pub use async_trait::async_trait;

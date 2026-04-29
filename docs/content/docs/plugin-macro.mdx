@@ -1,25 +1,25 @@
 ---
 title: Plugin 宏
-description: 使用 #[derive(Plugin)] 和 #[bot_plugin] 构建通用优先的插件
+description: 使用 #[plugin] + #[command] 构建默认插件入口
 ---
 
-`#[derive(Plugin)]` 会为你的结构体自动实现 `ayiou::core::plugin_system::RuntimePlugin`。
+`#[plugin]` 是默认插件编写方式。它放在 `impl` 块上，`#[command]` 标记具体命令方法，宏会生成 `RuntimePlugin` 实现。
 
-默认推荐直接面向通用 `Context` 编写插件；只有在你明确依赖平台专属 API 时，才切到平台上下文。
+高级场景仍然可以手写 `RuntimePlugin`，但默认文档只推荐这一套宏入口。
 
 ## 基本用法
 
 ```rust
 use ayiou::prelude::*;
 
-#[derive(Plugin)]
-#[plugin(name = "my_plugin", command = "hello", prefix = "/")]
+#[derive(Default)]
 struct MyPlugin;
 
+#[plugin(name = "my_plugin", prefix = "/")]
 impl MyPlugin {
-    async fn execute(&self, ctx: &Context) -> anyhow::Result<()> {
-        ctx.reply_text("hello").await?;
-        Ok(())
+    #[command(name = "hello")]
+    async fn hello(&self, ctx: &Context) -> anyhow::Result<()> {
+        ctx.reply_text("hello").await
     }
 }
 ```
@@ -31,28 +31,44 @@ impl MyPlugin {
 | `name` | 插件名，默认是结构体名的小写 |
 | `description` | 插件描述 |
 | `version` | 插件版本，默认 `0.1.0` |
-| `command` | 命令名；如果未提供且不是 `regex/cron` 插件，则默认使用 `name` |
 | `prefix` | 插件级命令前缀，可重复声明 |
-| `regex` | 消息匹配正则 |
-| `cron` | 调度表达式 |
-| `context` | 显式指定上下文类型 |
-| `start` | 自定义启动方法，签名应为 `async fn xxx(&mut self, host: PluginHost<Context>) -> Result<()>` |
-| `handler` | 自定义处理方法，签名应为 `async fn xxx(&self, ctx: &Context) -> Result<bool>` |
+| `context` | 显式指定上下文类型，默认 `Context` |
+
+`#[command]` 支持：
+
+| 属性 | 说明 |
+|---|---|
+| `name` | 命令名，默认是方法名 |
+| `alias` | 命令别名，可重复声明 |
+| `aliases` | 命令别名数组 |
+
+## 参数解析
+
+```rust
+#[command(name = "ban", alias = "block")]
+async fn ban(&self, ctx: &Context, user_id: i64, minutes: Option<u32>) -> anyhow::Result<()> {
+    let minutes = minutes.unwrap_or(10);
+    ctx.reply_text(format!("ban {user_id} for {minutes} minutes")).await
+}
+```
+
+命令参数会按方法签名自动解析。支持任意 `FromStr` 类型、`Option<T>`、尾部 `String` 和尾部 `Vec<String>`。
 
 ## 平台扩展
 
-默认上下文是 `Context`。通用插件优先通过 `RuntimePluginManifest` 声明能力需求；当你确实需要平台专属 API 时，再通过 `ctx.extension::<...>()` 获取。
+默认上下文是 `Context`。通用插件优先通过 `Context` 的通用 API 写；确实需要平台专属 API 时，再通过 `ctx.extension::<...>()` 获取。
 
 ```rust
 use ayiou::adapter::onebot::v11::model::Message;
 use ayiou::prelude::*;
 
-#[derive(Plugin)]
-#[plugin(name = "whoami", command = "whoami")]
+#[derive(Default)]
 struct WhoAmI;
 
+#[plugin(name = "whoami", prefix = "/")]
 impl WhoAmI {
-    async fn execute(&self, ctx: &Context) -> anyhow::Result<()> {
+    #[command(name = "whoami")]
+    async fn whoami(&self, ctx: &Context) -> anyhow::Result<()> {
         if let Some(onebot) = ctx.extension::<Ctx>() {
             let login = onebot.get_login_info_data().await?;
             onebot
@@ -69,56 +85,21 @@ impl WhoAmI {
 }
 ```
 
-如果平台上下文本身就是你的主入口，也仍然可以使用：
+如果平台上下文本身就是你的主入口，也可以指定 `context`：
 
 ```rust
-#[derive(Plugin)]
-#[plugin(context = "ayiou::prelude::Ctx")]
+#[derive(Default)]
 struct OneBotOnlyPlugin;
-```
 
-## 高级用法
-
-```rust
-use std::sync::OnceLock;
-
-use ayiou::core::plugin_host::PluginHost;
-use ayiou::prelude::*;
-
-#[derive(Plugin)]
-#[plugin(
-    name = "stateful",
-    description = "stateful plugin",
-    start = "start_plugin",
-    handler = "handle_command"
-)]
-struct StatefulPlugin {
-    store: OnceLock<std::sync::Arc<dyn ayiou::core::storage::Store>>,
-}
-
-impl StatefulPlugin {
-    async fn start_plugin(&mut self, host: PluginHost<Context>) -> anyhow::Result<()> {
-        let _ = self.store.get_or_init(|| host.store());
-        Ok(())
-    }
-
-    async fn handle_command(&self, ctx: &Context) -> anyhow::Result<bool> {
-        ctx.reply_text(format!("received: {}", ctx.text())).await?;
-        Ok(true)
+#[plugin(name = "onebot-only", context = "ayiou::prelude::Ctx")]
+impl OneBotOnlyPlugin {
+    #[command(name = "ping")]
+    async fn ping(&self, ctx: &Ctx) -> anyhow::Result<()> {
+        ctx.reply_text("pong").await
     }
 }
 ```
 
-## 什么时候用 #[bot_plugin]
+## 高级路径
 
-`#[derive(Plugin)]` 更适合：
-
-- 单入口命令插件
-- 通用业务插件
-- 需要 `start` / `handler` 的状态型插件
-
-`#[bot_plugin] + #[command]` 更适合：
-
-- 多命令插件
-- 需要自动参数解析的命令型插件
-- 命令签名较多、希望方法级分发更清晰的场景
+需要声明非命令 handler、能力依赖、配置生命周期或复杂会话控制时，手写 `RuntimePlugin`，并从 `ayiou::advanced::*` 引入运行时类型。

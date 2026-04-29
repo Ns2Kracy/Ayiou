@@ -26,12 +26,13 @@ async-trait = "0.1"
 use ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter;
 use ayiou::prelude::*;
 
-#[derive(Plugin)]
-#[plugin(name = "echo", command = "echo", prefix = "/")]
+#[derive(Default)]
 struct EchoPlugin;
 
+#[plugin(name = "echo", prefix = "/")]
 impl EchoPlugin {
-    async fn execute(&self, ctx: &Context) -> anyhow::Result<()> {
+    #[command(name = "echo")]
+    async fn echo(&self, ctx: &Context) -> anyhow::Result<()> {
         ctx.reply_text(format!("echo: {}", ctx.text())).await?;
         Ok(())
     }
@@ -41,7 +42,7 @@ impl EchoPlugin {
 async fn main() {
     let bot = OneBotV11Bot::onebot()
         .command_prefixes(["/", "!", "."])
-        .with_plugin(EchoPlugin);
+        .with_plugin(EchoPlugin::default());
 
     bot.run_ws("ws://127.0.0.1:8080").await;
 }
@@ -52,19 +53,20 @@ async fn main() {
 ```rust
 use ayiou::prelude::*;
 
-#[derive(Plugin)]
-#[plugin(name = "help", command = "help", prefix = "/")]
+#[derive(Default)]
 struct HelpPlugin;
 
+#[plugin(name = "help", prefix = "/")]
 impl HelpPlugin {
-    async fn execute(&self, ctx: &Context) -> anyhow::Result<()> {
+    #[command(name = "help")]
+    async fn help(&self, ctx: &Context) -> anyhow::Result<()> {
         ctx.reply_text("Commands: /help").await
     }
 }
 
 #[tokio::main]
 async fn main() {
-    let bot = ConsoleBot::stdio().with_plugin(HelpPlugin);
+    let bot = ConsoleBot::stdio().with_plugin(HelpPlugin::default());
     bot.run_console().await;
 }
 ```
@@ -89,32 +91,9 @@ if let Some(onebot) = ctx.extension::<Ctx>() {
 }
 ```
 
-## 自定义 start / handler
+## 高级插件
 
-```rust
-use ayiou::core::plugin_host::PluginHost;
-use ayiou::prelude::*;
-
-#[derive(Plugin)]
-#[plugin(
-    name = "ticker",
-    command = "tick",
-    start = "bootstrap",
-    handler = "dispatch"
-)]
-struct TickerPlugin;
-
-impl TickerPlugin {
-    async fn bootstrap(&mut self, _host: PluginHost<Context>) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn dispatch(&self, ctx: &Context) -> anyhow::Result<bool> {
-        ctx.reply_text("tick").await?;
-        Ok(true)
-    }
-}
-```
+默认入口只推荐 `#[plugin] + #[command]`。如果需要非命令 handler、能力声明、配置生命周期或复杂会话控制，手写 `RuntimePlugin` 并从 `ayiou::advanced::*` 引入运行时类型。
 
 ## 常用 Context API
 

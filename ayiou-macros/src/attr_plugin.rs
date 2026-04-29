@@ -6,7 +6,7 @@ use syn::{
 };
 
 #[derive(Default)]
-struct BotPluginAttrs {
+struct PluginAttrs {
     name: Option<String>,
     description: Option<String>,
     version: Option<String>,
@@ -27,8 +27,8 @@ struct CommandMethod {
     call_args: Vec<syn::Ident>,
 }
 
-pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenStream> {
-    let plugin_attrs = parse_bot_plugin_attrs(args)?;
+pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenStream> {
+    let plugin_attrs = parse_plugin_attrs(args)?;
 
     let plugin_ty = item_impl.self_ty.clone();
     let plugin_ident = extract_self_type_ident(&plugin_ty)?;
@@ -73,7 +73,7 @@ pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<Tok
     if methods.is_empty() {
         return Err(syn::Error::new_spanned(
             &item_impl,
-            "#[bot_plugin] requires at least one #[command] method",
+            "#[plugin] requires at least one #[command] method",
         ));
     }
 
@@ -169,8 +169,8 @@ pub fn expand_bot_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<Tok
     Ok(plugin_impl)
 }
 
-fn parse_bot_plugin_attrs(args: Vec<Meta>) -> Result<BotPluginAttrs> {
-    let mut out = BotPluginAttrs::default();
+fn parse_plugin_attrs(args: Vec<Meta>) -> Result<PluginAttrs> {
+    let mut out = PluginAttrs::default();
 
     for meta in args {
         match meta {
@@ -178,7 +178,7 @@ fn parse_bot_plugin_attrs(args: Vec<Meta>) -> Result<BotPluginAttrs> {
                 let key = path
                     .get_ident()
                     .map(|ident| ident.to_string())
-                    .ok_or_else(|| syn::Error::new_spanned(path, "Unsupported bot_plugin key"))?;
+                    .ok_or_else(|| syn::Error::new_spanned(path, "Unsupported plugin key"))?;
 
                 match key.as_str() {
                     "name" => out.name = Some(expect_string_expr(value)?),
@@ -192,7 +192,7 @@ fn parse_bot_plugin_attrs(args: Vec<Meta>) -> Result<BotPluginAttrs> {
                     _ => {
                         return Err(syn::Error::new(
                             Span::call_site(),
-                            format!("Unsupported bot_plugin key `{}`", key),
+                            format!("Unsupported plugin key `{}`", key),
                         ));
                     }
                 }
@@ -200,7 +200,7 @@ fn parse_bot_plugin_attrs(args: Vec<Meta>) -> Result<BotPluginAttrs> {
             other => {
                 return Err(syn::Error::new_spanned(
                     other,
-                    "Unsupported bot_plugin attribute format",
+                    "Unsupported plugin attribute format",
                 ));
             }
         }

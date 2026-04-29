@@ -1,9 +1,9 @@
 ---
 title: 命令系统与 DX
-description: 使用 #[bot_plugin] + #[command] 构建可维护的命令型插件
+description: 使用 #[plugin] + #[command] 构建可维护的命令型插件
 ---
 
-`#[bot_plugin] + #[command]` 适合“多命令、强签名、自动参数解析”的插件。
+`#[plugin] + #[command]` 适合“多命令、强签名、自动参数解析”的插件。
 
 ## 快速示例
 
@@ -14,7 +14,7 @@ use ayiou::prelude::*;
 #[derive(Default)]
 struct AdminPlugin;
 
-#[bot_plugin(name = "admin", prefix = "/", prefix = "!")]
+#[plugin(name = "admin", prefix = "/", prefix = "!")]
 impl AdminPlugin {
     #[command(name = "ban", alias = "block")]
     async fn ban(&self, ctx: &Context, user_id: i64, minutes: Option<u32>) -> anyhow::Result<()> {
@@ -61,14 +61,14 @@ async fn main() {
 - `#[command(name = "kick", alias = "k")]` 会注册 `kick` 和 `k`
 - 运行时会依次尝试：
 - 全局前缀：`Bot::command_prefixes(...)`
-- 插件前缀：`#[bot_plugin(prefix = "...")]`
+- 插件前缀：`#[plugin(prefix = "...")]`
 
 默认推荐把第二个参数写成 `&Context`，这样命令解析、回复和跨平台插件体验最稳定。
 
 如果确实需要平台原生 API，再通过：
 
 - `ctx.extension::<Ctx>()`
-- `#[bot_plugin(context = "...")]`
+- `#[plugin(context = "...")]`
 
 访问平台上下文。
 

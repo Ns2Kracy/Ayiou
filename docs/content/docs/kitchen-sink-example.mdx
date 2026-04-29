@@ -28,7 +28,7 @@ capability negotiation: Degraded { missing_optional: [Reaction] }
 bonjour secure command args=admin open sesame
 conversation waiting at revision 1
 echo: hello from macro
-derive macro handled: /hello from derive
+plugin macro handled: /hello from macro
 kitchen sink example completed
 ```
 
@@ -36,20 +36,28 @@ kitchen sink example completed
 
 ### 宏生成 RuntimePlugin
 
-示例里同时使用两种宏：
+示例里使用同一套默认宏入口：
 
-- `#[derive(Plugin)]`：适合单命令插件
-- `#[bot_plugin] + #[command]`：适合多命令、别名和参数解析
+- `#[plugin]`：声明插件元信息和默认上下文
+- `#[command]`：声明命令、别名和参数解析入口
 
 ```rust
-#[derive(Default, Plugin)]
-#[plugin(name = "hello-derived", command = "hello", prefix = "/", context = "DemoCtx")]
-struct HelloDerivedPlugin;
+#[derive(Default)]
+struct HelloPlugin;
+
+#[plugin(name = "hello", prefix = "/", context = "DemoCtx")]
+impl HelloPlugin {
+    #[command(name = "hello")]
+    async fn execute(&self, ctx: &DemoCtx) -> anyhow::Result<()> {
+        println!("plugin macro handled: {}", ctx.text());
+        Ok(())
+    }
+}
 
 #[derive(Default)]
 struct ToolsPlugin;
 
-#[bot_plugin(name = "tools", prefix = "/", context = "DemoCtx")]
+#[plugin(name = "tools", prefix = "/", context = "DemoCtx")]
 impl ToolsPlugin {
     #[command(name = "echo", alias = "say")]
     async fn echo(&self, _ctx: &DemoCtx, content: String) -> anyhow::Result<()> {
@@ -59,7 +67,7 @@ impl ToolsPlugin {
 }
 ```
 
-这两个宏现在生成的是 `RuntimePlugin` 实现，而不是旧的消息插件接口。
+这个宏入口生成的是 `RuntimePlugin` 实现，而不是旧的消息插件接口。
 
 ### 手写 RuntimePlugin
 
@@ -100,8 +108,8 @@ fn declared_handlers(&self) -> Vec<HandlerDecl> {
 
 - `/secure admin open sesame`：命令 handler，带权限、优先级和 block
 - `please show the kitchen sink`：正则 handler，要求 `ProactiveSend` 能力
-- `/say hello from macro`：`#[bot_plugin]` 生成的命令 handler
-- `/hello from derive`：`#[derive(Plugin)]` 生成的命令 handler
+- `/say hello from macro`：`#[plugin] + #[command]` 生成的命令 handler
+- `/hello from macro`：同一套宏生成的另一个命令 handler
 
 这对应 v0.2 的统一 handler 管线：adapter 产出事件，runtime 做粗筛、rule、permission、session 和 handler 执行。
 
