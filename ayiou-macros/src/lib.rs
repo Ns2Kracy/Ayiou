@@ -35,7 +35,7 @@ use derive_plugin::expand_derive_plugin;
 /// use ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter;
 ///
 /// Bot::<OneBotV11Adapter>::new()
-///     .register_plugin(EchoPlugin)
+///     .with_plugin(EchoPlugin)
 ///     .run(OneBotV11Adapter::new("ws://...")).await;
 /// ```
 ///

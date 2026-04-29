@@ -34,7 +34,7 @@ impl AdminPlugin {
 async fn main() {
     let bot = Bot::<OneBotV11Adapter>::new()
         .command_prefixes(["/", "!", "."])
-        .register_plugin(AdminPlugin::default());
+        .with_plugin(AdminPlugin::default());
 
     bot.run(OneBotV11Adapter::new("ws://127.0.0.1:8080")).await;
 }

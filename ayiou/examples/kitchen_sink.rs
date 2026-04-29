@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use ayiou::advanced::*;
 use ayiou::prelude::*;
 use tokio::sync::mpsc;
 
@@ -378,8 +379,8 @@ async fn run_engine_demo() -> Result<()> {
 
 async fn run_bot_builder_demo() {
     Bot::<ClosedAdapter>::new()
-        .register_plugin(HelloDerivedPlugin)
-        .register_plugin(ToolsPlugin)
+        .with_plugin(HelloDerivedPlugin)
+        .with_plugin(ToolsPlugin)
         .workers(1)
         .queue_capacity(4)
         .run(ClosedAdapter)

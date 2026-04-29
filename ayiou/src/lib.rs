@@ -14,6 +14,7 @@ use crate::core::{
     storage::{MemoryStore, Store},
 };
 
+pub mod advanced;
 pub mod adapter;
 pub mod core;
 pub mod driver;
@@ -237,26 +238,45 @@ impl<A: Adapter> Bot<A> {
         self
     }
 
-    pub fn register_plugin<P: RuntimePlugin<A::Ctx>>(mut self, plugin: P) -> Self {
+    pub fn with_plugin<P: RuntimePlugin<A::Ctx>>(mut self, plugin: P) -> Self {
         self.plugins.push(Box::new(plugin));
         self
     }
 
-    pub fn plugin<P: RuntimePlugin<A::Ctx> + Default>(mut self) -> Self {
+    pub fn with_default_plugin<P: RuntimePlugin<A::Ctx> + Default>(mut self) -> Self {
         self.plugins.push(Box::new(P::default()));
         self
     }
 
-    pub fn command<C: RuntimePlugin<A::Ctx> + Default>(self) -> Self {
-        self.plugin::<C>()
-    }
-
-    pub fn register_plugins(
+    pub fn with_plugins(
         mut self,
         plugins: impl IntoIterator<Item = Box<dyn RuntimePlugin<A::Ctx>>>,
     ) -> Self {
         self.plugins.extend(plugins);
         self
+    }
+
+    #[doc(hidden)]
+    pub fn register_plugin<P: RuntimePlugin<A::Ctx>>(self, plugin: P) -> Self {
+        self.with_plugin(plugin)
+    }
+
+    #[doc(hidden)]
+    pub fn plugin<P: RuntimePlugin<A::Ctx> + Default>(self) -> Self {
+        self.with_default_plugin::<P>()
+    }
+
+    #[doc(hidden)]
+    pub fn command<C: RuntimePlugin<A::Ctx> + Default>(self) -> Self {
+        self.with_default_plugin::<C>()
+    }
+
+    #[doc(hidden)]
+    pub fn register_plugins(
+        self,
+        plugins: impl IntoIterator<Item = Box<dyn RuntimePlugin<A::Ctx>>>,
+    ) -> Self {
+        self.with_plugins(plugins)
     }
 
     pub fn plugin_count(&self) -> usize {
@@ -339,13 +359,42 @@ pub type OneBotV11Bot = Bot<adapter::onebot::v11::adapter::OneBotV11Adapter>;
 pub type ConsoleBot = Bot<adapter::console::adapter::ConsoleAdapter>;
 
 impl ConsoleBot {
+    pub fn stdio() -> Self {
+        Self::new().command_prefixes(["/", "!", "."])
+    }
+
     pub fn console() -> Self {
-        use crate::adapter::console::ext::ConsoleBotExt;
-        Self::new().with_console_defaults()
+        Self::stdio()
+    }
+
+    pub async fn run_console(self) {
+        self.run(adapter::console::adapter::ConsoleAdapter::new())
+            .await;
     }
 
     pub async fn run_stdio(self) {
-        use crate::adapter::console::ext::ConsoleBotExt;
         self.run_console().await;
+    }
+}
+
+impl OneBotV11Bot {
+    pub fn onebot() -> Self {
+        Self::new().command_prefixes(["/", "!", "."])
+    }
+
+    pub async fn run_ws(self, url: impl Into<String> + Send) {
+        self.run(adapter::onebot::v11::adapter::OneBotV11Adapter::new(url))
+            .await;
+    }
+
+    pub async fn run_ws_with_token(
+        self,
+        url: impl Into<String> + Send,
+        token: impl Into<String> + Send,
+    ) {
+        self.run(adapter::onebot::v11::adapter::OneBotV11Adapter::with_token(
+            url, token,
+        ))
+        .await;
     }
 }

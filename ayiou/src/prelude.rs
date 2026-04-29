@@ -17,12 +17,6 @@ pub use crate::core::plugin::{
     ArgsParseError, ArgsParser, Command, CronSchedule, DispatchOptions, PluginMetadata,
     RegexValidated,
 };
-pub use crate::core::plugin_system::{
-    ApplyConfigOutcome, Capability, CapabilityNegotiation, ConcurrencyPolicy, ConfigUpdate,
-    HandleOutcome, HandlerDecl, HandlerEventKind, Permission, PluginHealth, RuntimePlugin,
-    RuntimePluginEngine, RuntimePluginManifest, RuntimePluginServices, SessionPolicy,
-    negotiate_capabilities,
-};
 pub use crate::core::session::{
     Conversation, ConversationScope, ConversationStatus, MemorySessionStore, SessionCursor,
     SessionError, SessionKey, SessionRecord, SessionStore,
@@ -31,10 +25,8 @@ pub use crate::core::storage::{MemoryStore, Store, StoreSerdeExt};
 
 pub use crate::adapter::console::adapter::ConsoleAdapter;
 pub use crate::adapter::console::ctx::Ctx as ConsoleCtx;
-pub use crate::adapter::console::ext::ConsoleBotExt;
 pub use crate::adapter::console::sender::ConsoleSender;
 pub use crate::adapter::onebot::v11::ctx::Ctx;
-pub use crate::adapter::onebot::v11::ext::OneBotV11BotExt;
 pub use crate::adapter::onebot::v11::model::{
     ApiResponse, GroupInfoData, GroupMemberInfoData, LoginInfoData, Message, MessageSegment,
     OneBotAction, SendMessageData,

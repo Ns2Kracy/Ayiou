@@ -150,10 +150,12 @@ conversation.finish(store.as_ref()).await?;
 
 示例还覆盖两个单 Bot 运行入口：
 
-- `Bot::<ClosedAdapter>::new().register_plugin(...)`
-- 手动构造 `RuntimePluginEngine` 并注入 store、session、metrics、outbound sender
+- 默认入口：`Bot::<ClosedAdapter>::new().with_plugin(...)`
+- 高级入口：手动构造 `RuntimePluginEngine` 并注入 store、session、metrics、outbound sender
 
 ```rust
+use ayiou::advanced::*;
+
 let services = RuntimePluginServices::new(host)
     .with_identity("bot-a", "console")
     .with_sessions(sessions)
