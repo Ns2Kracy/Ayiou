@@ -9,7 +9,7 @@ use crate::core::{
     plugin::DispatchOptions,
     plugin_host::PluginHost,
     plugin_runtime::PluginRuntimeState,
-    plugin_system::{RuntimePlugin, RuntimePluginEngine, RuntimePluginServices},
+    plugin_system::{NamedPlugin, RuntimePlugin, RuntimePluginEngine, RuntimePluginServices},
     scheduler::{Scheduler, TokioScheduler},
     storage::{MemoryStore, Store},
 };
@@ -243,8 +243,15 @@ impl<A: Adapter> Bot<A> {
         self
     }
 
-    pub fn with_default_plugin<P: RuntimePlugin<A::Ctx> + Default>(mut self) -> Self {
-        self.plugins.push(Box::new(P::default()));
+    pub fn with_plugin_as<P: RuntimePlugin<A::Ctx>>(
+        mut self,
+        instance_id: impl Into<String>,
+        plugin: P,
+    ) -> Self {
+        self.plugins.push(Box::new(NamedPlugin::new(
+            instance_id,
+            Box::new(plugin),
+        )));
         self
     }
 
@@ -254,29 +261,6 @@ impl<A: Adapter> Bot<A> {
     ) -> Self {
         self.plugins.extend(plugins);
         self
-    }
-
-    #[doc(hidden)]
-    pub fn register_plugin<P: RuntimePlugin<A::Ctx>>(self, plugin: P) -> Self {
-        self.with_plugin(plugin)
-    }
-
-    #[doc(hidden)]
-    pub fn plugin<P: RuntimePlugin<A::Ctx> + Default>(self) -> Self {
-        self.with_default_plugin::<P>()
-    }
-
-    #[doc(hidden)]
-    pub fn command<C: RuntimePlugin<A::Ctx> + Default>(self) -> Self {
-        self.with_default_plugin::<C>()
-    }
-
-    #[doc(hidden)]
-    pub fn register_plugins(
-        self,
-        plugins: impl IntoIterator<Item = Box<dyn RuntimePlugin<A::Ctx>>>,
-    ) -> Self {
-        self.with_plugins(plugins)
     }
 
     pub fn plugin_count(&self) -> usize {
@@ -363,17 +347,9 @@ impl ConsoleBot {
         Self::new().command_prefixes(["/", "!", "."])
     }
 
-    pub fn console() -> Self {
-        Self::stdio()
-    }
-
     pub async fn run_console(self) {
         self.run(adapter::console::adapter::ConsoleAdapter::new())
             .await;
-    }
-
-    pub async fn run_stdio(self) {
-        self.run_console().await;
     }
 }
 

@@ -78,7 +78,7 @@ impl RuntimePlugin<TestCtx> for StartPlugin {
 #[tokio::test]
 async fn bot_invokes_plugin_start_once_before_exit() {
     let starts = Arc::new(AtomicUsize::new(0));
-    let bot = Bot::<ClosedAdapter>::new().register_plugin(StartPlugin {
+    let bot = Bot::<ClosedAdapter>::new().with_plugin(StartPlugin {
         starts: starts.clone(),
     });
 

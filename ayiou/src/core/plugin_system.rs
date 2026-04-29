@@ -400,6 +400,81 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
     }
 }
 
+pub struct NamedPlugin<C> {
+    instance_id: String,
+    inner: Box<dyn RuntimePlugin<C>>,
+}
+
+impl<C> NamedPlugin<C>
+where
+    C: Sync + 'static,
+{
+    pub fn new(instance_id: impl Into<String>, inner: Box<dyn RuntimePlugin<C>>) -> Self {
+        Self {
+            instance_id: instance_id.into(),
+            inner,
+        }
+    }
+}
+
+#[async_trait]
+impl<C> RuntimePlugin<C> for NamedPlugin<C>
+where
+    C: Sync + 'static,
+{
+    fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    fn kind(&self) -> &str {
+        self.inner.kind()
+    }
+
+    fn meta(&self) -> PluginMetadata {
+        self.inner.meta()
+    }
+
+    fn manifest(&self) -> RuntimePluginManifest {
+        self.inner.manifest()
+    }
+
+    fn declared_handlers(&self) -> Vec<HandlerDecl> {
+        self.inner.declared_handlers()
+    }
+
+    async fn init(&mut self, services: RuntimePluginServices<C>) -> Result<()> {
+        self.inner.init(services).await
+    }
+
+    async fn start(&mut self, services: RuntimePluginServices<C>) -> Result<()> {
+        self.inner.start(services).await
+    }
+
+    async fn stop(&mut self) -> Result<()> {
+        self.inner.stop().await
+    }
+
+    async fn apply_config(&mut self, update: ConfigUpdate) -> Result<ApplyConfigOutcome> {
+        self.inner.apply_config(update).await
+    }
+
+    async fn handle(&self, ctx: &C) -> Result<HandleOutcome> {
+        self.inner.handle(ctx).await
+    }
+
+    async fn handle_with_invocation(
+        &self,
+        ctx: &C,
+        invocation: Option<CommandInvocation>,
+    ) -> Result<HandleOutcome> {
+        self.inner.handle_with_invocation(ctx, invocation).await
+    }
+
+    fn health(&self) -> PluginHealth {
+        self.inner.health()
+    }
+}
+
 pub fn negotiate_capabilities(
     manifest: &RuntimePluginManifest,
     provided: &[Capability],
@@ -1063,5 +1138,34 @@ mod tests {
         let snapshot = state.snapshot("moderator");
         assert_ne!(snapshot.lifecycle_state, PluginLifecycleState::Failed);
         assert!(snapshot.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn named_plugin_overrides_runtime_instance_id() {
+        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
+        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+        let host = PluginHost::new(scheduler, store, None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let plugin = NamedPlugin::new(
+            "custom.instance",
+            Box::new(PriorityPlugin {
+                instance_id: "macro-default",
+                priority: 0,
+                block_decl: false,
+                handler: HandlerDecl::wildcard_message(),
+                manifest: RuntimePluginManifest::new("named"),
+                hits,
+            }),
+        );
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push(Box::new(plugin));
+        engine.init_all().await.unwrap();
+
+        assert_ne!(state.snapshot("custom.instance").lifecycle_state, PluginLifecycleState::Failed);
+        assert_eq!(state.snapshot("macro-default").lifecycle_state, PluginLifecycleState::Registered);
     }
 }
