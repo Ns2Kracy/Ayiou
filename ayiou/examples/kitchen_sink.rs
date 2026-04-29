@@ -2,8 +2,28 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use ayiou::advanced::*;
-use ayiou::prelude::*;
+#[allow(unused_imports)]
+use ayiou::command;
+use ayiou::{
+    Bot,
+    core::{
+        adapter::{Adapter, MsgContext},
+        model::{
+            BotId, ChannelKind, ChannelRef, CommandInvocation, EventEnvelope, MessageEvent,
+            OutboundMessage, OutboundReceipt, PlatformId, UserRef,
+        },
+        observability::NoopMetrics,
+        plugin::{DispatchOptions, PluginMetadata},
+        plugin_system::{
+            ApplyConfigOutcome, Capability, ConfigUpdate, HandleOutcome, HandlerDecl, Permission,
+            PluginHealth, RuntimePlugin, RuntimePluginEngine, RuntimePluginManifest,
+            RuntimePluginServices, negotiate_capabilities,
+        },
+        session::{Conversation, MemorySessionStore, SessionKey, SessionStore},
+        storage::{MemoryStore, Store, StoreSerdeExt},
+    },
+    plugin,
+};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]

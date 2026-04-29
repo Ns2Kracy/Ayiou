@@ -162,7 +162,7 @@ conversation.finish(store.as_ref()).await?;
 - 高级入口：手动构造 `RuntimePluginEngine` 并注入 store、session、metrics、outbound sender
 
 ```rust
-use ayiou::advanced::*;
+use ayiou::core::plugin_system::*;
 
 let services = RuntimePluginServices::new(host)
     .with_identity("bot-a", "console")

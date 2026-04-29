@@ -15,10 +15,8 @@ use crate::core::{
 };
 
 pub mod adapter;
-pub mod advanced;
 pub mod core;
 pub mod driver;
-pub mod prelude;
 
 pub use ayiou_macros::{command, plugin};
 pub use core::context::Context;

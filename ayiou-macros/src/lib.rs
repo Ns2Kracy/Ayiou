@@ -13,7 +13,7 @@ use attr_plugin::expand_plugin;
 /// # Example
 ///
 /// ```ignore
-/// use ayiou::prelude::*;
+/// use ayiou::{command, plugin, Context};
 ///
 /// #[derive(Default)]
 /// struct EchoPlugin;

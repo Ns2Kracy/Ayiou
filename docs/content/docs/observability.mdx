@@ -27,7 +27,8 @@ description: 轻量 metrics + tracing，不强绑定 Prometheus
 ## 快速接入
 
 ```rust
-use ayiou::prelude::*;
+use ayiou::OneBotV11Bot;
+use ayiou::core::observability::{InMemoryMetrics, spawn_metrics_log_reporter};
 use std::{sync::Arc, time::Duration};
 
 #[tokio::main]

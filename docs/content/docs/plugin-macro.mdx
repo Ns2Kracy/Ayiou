@@ -10,7 +10,7 @@ description: 使用 #[plugin] + #[command] 构建默认插件入口
 ## 基本用法
 
 ```rust
-use ayiou::prelude::*;
+use ayiou::{command, plugin, Context};
 
 #[derive(Default)]
 struct MyPlugin;
@@ -59,8 +59,8 @@ async fn ban(&self, ctx: &Context, user_id: i64, minutes: Option<u32>) -> anyhow
 默认上下文是 `Context`。通用插件优先通过 `Context` 的通用 API 写；确实需要平台专属 API 时，再通过 `ctx.extension::<...>()` 获取。
 
 ```rust
-use ayiou::adapter::onebot::v11::model::Message;
-use ayiou::prelude::*;
+use ayiou::adapter::onebot::v11::{ctx::Ctx, model::Message};
+use ayiou::{command, plugin, Context};
 
 #[derive(Default)]
 struct WhoAmI;
@@ -91,7 +91,7 @@ impl WhoAmI {
 #[derive(Default)]
 struct OneBotOnlyPlugin;
 
-#[plugin(name = "onebot-only", context = "ayiou::prelude::Ctx")]
+#[plugin(name = "onebot-only", context = "ayiou::adapter::onebot::v11::ctx::Ctx")]
 impl OneBotOnlyPlugin {
     #[command(name = "ping")]
     async fn ping(&self, ctx: &Ctx) -> anyhow::Result<()> {
@@ -102,4 +102,4 @@ impl OneBotOnlyPlugin {
 
 ## 高级路径
 
-需要声明非命令 handler、能力依赖、配置生命周期或复杂会话控制时，手写 `RuntimePlugin`，并从 `ayiou::advanced::*` 引入运行时类型。
+需要声明非命令 handler、能力依赖、配置生命周期或复杂会话控制时，手写 `RuntimePlugin`，并从 `ayiou::core::plugin_system` 引入运行时类型。

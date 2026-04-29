@@ -8,7 +8,7 @@ description: 使用 #[plugin] + #[command] 构建可维护的命令型插件
 ## 快速示例
 
 ```rust
-use ayiou::prelude::*;
+use ayiou::{command, plugin, Context, OneBotV11Bot};
 
 #[derive(Default)]
 struct AdminPlugin;

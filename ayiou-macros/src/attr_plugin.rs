@@ -36,7 +36,7 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
     let ctx_ty = plugin_attrs
         .context
         .clone()
-        .unwrap_or_else(|| syn::parse_quote!(ayiou::prelude::Context));
+        .unwrap_or_else(|| syn::parse_quote!(ayiou::Context));
 
     let mut methods = Vec::new();
 

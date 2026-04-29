@@ -48,7 +48,8 @@ description: 为插件提供可持久化数据和长流程交互控制
 ## 最小示例
 
 ```rust
-use ayiou::prelude::*;
+use ayiou::core::session::{MemorySessionStore, SessionKey, SessionStore};
+use ayiou::core::storage::{MemoryStore, StoreSerdeExt};
 use std::sync::Arc;
 
 #[tokio::main]

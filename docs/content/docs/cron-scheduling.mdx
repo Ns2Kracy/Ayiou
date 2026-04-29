@@ -12,7 +12,8 @@ Ayiou 现在内置了完整 runtime 调度抽象：
 ## 快速示例
 
 ```rust
-use ayiou::prelude::*;
+use ayiou::OneBotV11Bot;
+use ayiou::core::scheduler::{Scheduler, TokioScheduler, schedule_job};
 use std::{sync::Arc, time::Duration};
 
 #[tokio::main]

@@ -23,8 +23,7 @@ async-trait = "0.1"
 ## 示例 1：OneBot v11
 
 ```rust
-use ayiou::adapter::onebot::v11::adapter::OneBotV11Adapter;
-use ayiou::prelude::*;
+use ayiou::{command, plugin, Context, OneBotV11Bot};
 
 #[derive(Default)]
 struct EchoPlugin;
@@ -51,7 +50,7 @@ async fn main() {
 ## 示例 2：Console
 
 ```rust
-use ayiou::prelude::*;
+use ayiou::{command, plugin, ConsoleBot, Context};
 
 #[derive(Default)]
 struct HelpPlugin;
@@ -93,7 +92,7 @@ if let Some(onebot) = ctx.extension::<Ctx>() {
 
 ## 高级插件
 
-默认入口只推荐 `#[plugin] + #[command]`。如果需要非命令 handler、能力声明、配置生命周期或复杂会话控制，手写 `RuntimePlugin` 并从 `ayiou::advanced::*` 引入运行时类型。
+默认入口只推荐 `#[plugin] + #[command]`。如果需要非命令 handler、能力声明、配置生命周期或复杂会话控制，手写 `RuntimePlugin` 并从 `ayiou::core::plugin_system` 引入运行时类型。
 
 ## 常用 Context API
 
