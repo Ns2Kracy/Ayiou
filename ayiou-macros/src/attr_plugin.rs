@@ -120,8 +120,8 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
                 #plugin_name
             }
 
-            fn meta(&self) -> ayiou::core::plugin::PluginMetadata {
-                ayiou::core::plugin::PluginMetadata {
+            fn meta(&self) -> ayiou::core::plugin_system::PluginMetadata {
+                ayiou::core::plugin_system::PluginMetadata {
                     name: #plugin_name.to_string(),
                     description: #plugin_description.to_string(),
                     version: #plugin_version.to_string(),
@@ -291,7 +291,7 @@ fn parse_command_method(
     let args_inputs: Vec<_> = inputs.collect();
 
     let mut parser_stmts = vec![quote! {
-        let __ayiou_tokens = ayiou::core::plugin::tokenize_command_args(args)?;
+        let __ayiou_tokens = ayiou::core::command::tokenize_command_args(args)?;
         let mut __ayiou_index = 0usize;
     }];
 
@@ -317,7 +317,7 @@ fn parse_command_method(
         if let Some(inner_ty) = unwrap_option_type(ty) {
             parser_stmts.push(quote! {
                 let #var = if __ayiou_index < __ayiou_tokens.len() {
-                    Some(ayiou::core::plugin::parse_typed_arg::<#inner_ty>(
+                    Some(ayiou::core::command::parse_typed_arg::<#inner_ty>(
                         &__ayiou_tokens,
                         &mut __ayiou_index,
                         #arg_name,
@@ -338,7 +338,7 @@ fn parse_command_method(
             });
         } else {
             parser_stmts.push(quote! {
-                let #var = ayiou::core::plugin::parse_typed_arg::<#ty>(
+                let #var = ayiou::core::command::parse_typed_arg::<#ty>(
                     &__ayiou_tokens,
                     &mut __ayiou_index,
                     #arg_name,
@@ -350,7 +350,7 @@ fn parse_command_method(
     }
 
     parser_stmts.push(quote! {
-        ayiou::core::plugin::ensure_no_extra_args(&__ayiou_tokens, __ayiou_index)?;
+        ayiou::core::command::ensure_no_extra_args(&__ayiou_tokens, __ayiou_index)?;
     });
 
     Ok(CommandMethod {

@@ -6,10 +6,12 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::core::{
     adapter::Adapter,
     observability::{MetricsSink, NoopMetrics, elapsed_ms},
-    plugin::DispatchOptions,
     plugin_host::PluginHost,
     plugin_runtime::PluginRuntimeState,
-    plugin_system::{RegisteredPlugin, RuntimePlugin, RuntimePluginEngine, RuntimePluginServices},
+    plugin_system::{
+        DispatchOptions, RegisteredPlugin, RuntimePlugin, RuntimePluginEngine,
+        RuntimePluginServices,
+    },
     scheduler::{Scheduler, TokioScheduler},
     storage::{MemoryStore, Store},
 };

@@ -1,10 +1,10 @@
 pub mod adapter;
+pub mod command;
 pub mod config_store;
 pub mod context;
 pub mod driver;
 pub mod model;
 pub mod observability;
-pub mod plugin;
 pub mod plugin_host;
 pub mod plugin_runtime;
 pub mod plugin_system;
@@ -13,9 +13,9 @@ pub mod scheduler;
 pub mod session;
 pub mod storage;
 
+pub use command::*;
 pub use context::*;
 pub use model::*;
-pub use plugin::*;
 pub use plugin_host::*;
 pub use plugin_runtime::*;
 pub use plugin_system::*;

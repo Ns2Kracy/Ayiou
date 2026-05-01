@@ -1,12 +1,5 @@
-use std::sync::Arc;
-
 use crate::core::model::CommandInvocation;
 
-// ============================================================================
-// Args parsing types
-// ============================================================================
-
-/// Error returned when argument parsing fails
 #[derive(Debug, Clone)]
 pub struct ArgsParseError {
     message: String,
@@ -43,9 +36,6 @@ impl std::fmt::Display for ArgsParseError {
 
 impl std::error::Error for ArgsParseError {}
 
-/// Parse command line from text.
-///
-/// `prefixes` will be stripped from the first token when matched.
 pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandInvocation> {
     let trimmed = text.trim_start();
     if trimmed.is_empty() {
@@ -76,9 +66,6 @@ pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandInvoca
     Some(CommandInvocation::new(command, args, matched_prefix))
 }
 
-/// Split command arguments into tokens.
-///
-/// Supports both single and double quotes, and `\\` escape.
 pub fn tokenize_command_args(args: &str) -> std::result::Result<Vec<String>, ArgsParseError> {
     let mut out = Vec::new();
     let mut buf = String::new();
@@ -156,80 +143,6 @@ pub fn ensure_no_extra_args(
     }
 
     Ok(())
-}
-
-// ============================================================================
-// Plugin metadata
-// ============================================================================
-
-#[derive(Clone, Debug)]
-pub struct PluginMetadata {
-    pub name: String,
-    pub description: String,
-    pub version: String,
-}
-
-impl PluginMetadata {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            description: String::new(),
-            version: "0.0.0".to_string(),
-        }
-    }
-
-    pub fn description(mut self, desc: impl Into<String>) -> Self {
-        self.description = desc.into();
-        self
-    }
-
-    pub fn version(mut self, version: impl Into<String>) -> Self {
-        self.version = version.into();
-        self
-    }
-}
-
-impl Default for PluginMetadata {
-    fn default() -> Self {
-        Self {
-            name: "unnamed".to_string(),
-            description: String::new(),
-            version: "0.0.0".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DispatchOptions {
-    command_prefixes: Arc<[String]>,
-}
-
-impl DispatchOptions {
-    pub fn new(command_prefixes: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        let mut prefixes: Vec<String> = command_prefixes
-            .into_iter()
-            .map(Into::into)
-            .filter(|p| !p.is_empty())
-            .collect();
-        prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
-        prefixes.dedup();
-
-        Self {
-            command_prefixes: prefixes.into(),
-        }
-    }
-
-    pub fn command_prefixes(&self) -> &[String] {
-        self.command_prefixes.as_ref()
-    }
-}
-
-impl Default for DispatchOptions {
-    fn default() -> Self {
-        Self {
-            command_prefixes: Arc::from([]),
-        }
-    }
 }
 
 #[cfg(test)]

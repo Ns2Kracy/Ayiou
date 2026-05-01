@@ -8,9 +8,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use ayiou::Bot;
 use ayiou::core::adapter::{Adapter, MsgContext};
-use ayiou::core::plugin::PluginMetadata;
 use ayiou::core::plugin_system::{
-    HandleOutcome, HandlerDecl, RuntimePlugin, RuntimePluginServices,
+    HandleOutcome, HandlerDecl, PluginMetadata, RuntimePlugin, RuntimePluginServices,
 };
 use tokio::sync::mpsc;
 

@@ -4,13 +4,83 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
 use crate::core::{
+    command::parse_command_line,
     model::{BotId, CommandInvocation, PlatformId},
     observability::MetricsSink,
-    plugin::{DispatchOptions, PluginMetadata, parse_command_line},
     plugin_host::PluginHost,
     plugin_runtime::{PluginLifecycleState, PluginRuntimeState},
     session::SessionStore,
 };
+
+#[derive(Clone, Debug)]
+pub struct PluginMetadata {
+    pub name: String,
+    pub description: String,
+    pub version: String,
+}
+
+impl PluginMetadata {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: String::new(),
+            version: "0.0.0".to_string(),
+        }
+    }
+
+    pub fn description(mut self, desc: impl Into<String>) -> Self {
+        self.description = desc.into();
+        self
+    }
+
+    pub fn version(mut self, version: impl Into<String>) -> Self {
+        self.version = version.into();
+        self
+    }
+}
+
+impl Default for PluginMetadata {
+    fn default() -> Self {
+        Self {
+            name: "unnamed".to_string(),
+            description: String::new(),
+            version: "0.0.0".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DispatchOptions {
+    command_prefixes: Arc<[String]>,
+}
+
+impl DispatchOptions {
+    pub fn new(command_prefixes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        let mut prefixes: Vec<String> = command_prefixes
+            .into_iter()
+            .map(Into::into)
+            .filter(|p| !p.is_empty())
+            .collect();
+        prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
+        prefixes.dedup();
+
+        Self {
+            command_prefixes: prefixes.into(),
+        }
+    }
+
+    pub fn command_prefixes(&self) -> &[String] {
+        self.command_prefixes.as_ref()
+    }
+}
+
+impl Default for DispatchOptions {
+    fn default() -> Self {
+        Self {
+            command_prefixes: Arc::from([]),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimePluginManifest {
@@ -850,7 +920,6 @@ mod tests {
 
     use crate::core::{
         adapter::MsgContext,
-        plugin::PluginMetadata,
         plugin_host::PluginHost,
         scheduler::{Scheduler, TokioScheduler},
         storage::{MemoryStore, Store},
