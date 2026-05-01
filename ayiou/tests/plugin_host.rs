@@ -42,6 +42,21 @@ impl Adapter for ClosedAdapter {
     }
 }
 
+struct OneEventAdapter;
+
+#[async_trait]
+impl Adapter for OneEventAdapter {
+    type Ctx = TestCtx;
+
+    async fn start(self) -> mpsc::Receiver<Self::Ctx> {
+        let (tx, rx) = mpsc::channel(1);
+        tokio::spawn(async move {
+            let _ = tx.send(TestCtx).await;
+        });
+        rx
+    }
+}
+
 struct StartPlugin {
     starts: Arc<AtomicUsize>,
 }
@@ -70,6 +85,30 @@ impl RuntimePlugin<TestCtx> for StartPlugin {
     }
 }
 
+struct HandlePlugin {
+    handles: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl RuntimePlugin<TestCtx> for HandlePlugin {
+    fn kind(&self) -> &str {
+        "handle-plugin"
+    }
+
+    fn meta(&self) -> PluginMetadata {
+        PluginMetadata::new("handle-plugin")
+    }
+
+    fn declared_handlers(&self) -> Vec<HandlerDecl> {
+        vec![HandlerDecl::wildcard_message()]
+    }
+
+    async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        self.handles.fetch_add(1, Ordering::SeqCst);
+        Ok(HandleOutcome::pass())
+    }
+}
+
 #[tokio::test]
 async fn bot_invokes_plugin_start_once_before_exit() {
     let starts = Arc::new(AtomicUsize::new(0));
@@ -82,4 +121,18 @@ async fn bot_invokes_plugin_start_once_before_exit() {
         .expect("bot should exit when adapter channel closes");
 
     assert_eq!(starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn bot_drains_queued_events_when_adapter_closes() {
+    let handles = Arc::new(AtomicUsize::new(0));
+    let bot = Bot::new(OneEventAdapter).with_plugin(HandlePlugin {
+        handles: handles.clone(),
+    });
+
+    tokio::time::timeout(Duration::from_millis(200), bot.run())
+        .await
+        .expect("bot should exit when adapter channel closes");
+
+    assert_eq!(handles.load(Ordering::SeqCst), 1);
 }

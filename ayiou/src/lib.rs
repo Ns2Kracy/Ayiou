@@ -73,6 +73,7 @@ where
         let (work_tx, work_rx) = mpsc::channel::<C>(self.options.queue_capacity);
         let worker_rx = Arc::new(tokio::sync::Mutex::new(work_rx));
         let mut worker_handles = self.spawn_workers(worker_rx);
+        let mut drain_workers = true;
 
         info!("Bot is running, press Ctrl+C to exit.");
 
@@ -100,6 +101,7 @@ where
                 }
                 _ = tokio::signal::ctrl_c() => {
                     info!("Bot is shutting down.");
+                    drain_workers = false;
                     break;
                 }
             }
@@ -107,7 +109,9 @@ where
 
         drop(work_tx);
         for handle in worker_handles.drain(..) {
-            handle.abort();
+            if !drain_workers {
+                handle.abort();
+            }
             let _ = handle.await;
         }
     }
@@ -197,19 +201,6 @@ impl<A: Adapter> Bot<A> {
         self.plugins
             .push(RegisteredPlugin::new(instance_id, Box::new(plugin)));
         self
-    }
-
-    pub fn with_plugins(
-        mut self,
-        plugins: impl IntoIterator<Item = Box<dyn RuntimePlugin<A::Ctx>>>,
-    ) -> Self {
-        self.plugins
-            .extend(plugins.into_iter().map(RegisteredPlugin::from_plugin));
-        self
-    }
-
-    pub fn plugin_count(&self) -> usize {
-        self.plugins.len()
     }
 
     pub async fn run(mut self) {

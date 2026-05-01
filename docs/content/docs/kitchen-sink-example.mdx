@@ -27,7 +27,7 @@ cargo test -p ayiou --example kitchen_sink
 capability negotiation: Degraded { missing_optional: [Reaction] }
 bonjour secure command args=admin open sesame
 echo: hello from macro
-plugin macro handled: /hello from macro
+plugin macro handled: /hello
 kitchen sink example completed
 ```
 
@@ -108,7 +108,7 @@ fn declared_handlers(&self) -> Vec<HandlerDecl> {
 - `/secure admin open sesame`：命令 handler，带权限、优先级和 block
 - `please show the kitchen sink`：正则 handler，要求 `ProactiveSend` 能力
 - `/say hello from macro`：`#[plugin] + #[command]` 生成的命令 handler
-- `/hello from macro`：同一套宏生成的另一个命令 handler
+- `/hello`：同一套宏生成的另一个命令 handler
 
 这对应 v0.2 的统一 handler 管线：adapter 产出事件，runtime 做粗筛、rule、permission 和 handler 执行。
 
@@ -117,12 +117,8 @@ fn declared_handlers(&self) -> Vec<HandlerDecl> {
 示例同时展示 dry-run 与实际 apply：
 
 ```rust
-engine
-    .apply_config("kitchen-main", ConfigUpdate::dry_run(1, "bonjour"))
-    .await?;
-engine
-    .apply_config("kitchen-main", ConfigUpdate::new(2, "bonjour"))
-    .await?;
+self.apply_config(ConfigUpdate::dry_run(1, "bonjour")).await?;
+self.apply_config(ConfigUpdate::new(2, "bonjour")).await?;
 ```
 
 运行时状态会记录：
@@ -130,34 +126,27 @@ engine
 - dry-run：进入 `validated`，不更新 applied version
 - apply：进入 `applied`，更新 applied version
 
-### Bot builder 与手动 RuntimePluginEngine
-
-示例还覆盖两个单 Bot 运行入口：
-
-- 默认入口：`Bot::new(adapter).with_plugin(...).run().await`
-- 手动入口：构造 `RuntimePluginEngine` 并注入身份、能力和 outbound sender
+### Bot builder
 
 ```rust
-use ayiou::core::plugin_system::*;
-
-let services = RuntimePluginServices::new(host).with_identity("bot-a", "console");
-
-let mut engine = RuntimePluginEngine::with_options(
-    services,
-    state.clone(),
-    DispatchOptions::new(["/"]),
-);
-
-engine.push_as("kitchen-main", Box::new(KitchenPlugin::new()));
+Bot::new(adapter)
+    .with_plugin(HelloPlugin)
+    .with_plugin(ToolsPlugin)
+    .with_plugin_as("kitchen-main", KitchenPlugin::new())
+    .workers(1)
+    .queue_capacity(8)
+    .command_prefixes(["/"])
+    .run()
+    .await;
 ```
 
-这说明 Ayiou 的核心是一个 Bot runtime。多个消息渠道应该作为 adapter/source 接入同一个 runtime，回复时根据消息来源回到原渠道。
+这说明 Ayiou 的公开主路径是一个 Bot runtime。多个消息渠道应该作为 adapter/source 接入同一个 runtime，回复时根据消息来源回到原渠道。
 
 ## 什么时候参考它
 
 - 你想确认某个 API 应该怎么组合使用
 - 你要写一个手动 `RuntimePlugin`
-- 你要理解 `Bot` builder 和 `RuntimePluginEngine` 的关系
+- 你要理解 `Bot` builder 如何承载插件注册和运行时启动
 - 你想看配置、能力协商和 handler 管线如何一起工作
 
 如果只想写普通命令插件，优先看：

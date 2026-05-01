@@ -7,16 +7,15 @@ use ayiou::command;
 use ayiou::{
     Bot,
     core::{
-        adapter::{Adapter, MsgContext},
+        adapter::{Adapter, AdapterCapabilities, AdapterRuntime, MsgContext},
         model::{
             ChannelKind, ChannelRef, CommandInvocation, EventEnvelope, MessageEvent,
             OutboundMessage, OutboundReceipt, PlatformId, UserRef,
         },
         plugin_system::{
-            ApplyConfigOutcome, Capability, ConfigUpdate, DispatchOptions, HandleOutcome,
-            HandlerDecl, Permission, PluginHealth, PluginMetadata, RuntimePlugin,
-            RuntimePluginEngine, RuntimePluginManifest, RuntimePluginServices,
-            negotiate_capabilities,
+            ApplyConfigOutcome, Capability, ConfigUpdate, HandleOutcome, HandlerDecl, Permission,
+            PluginHealth, PluginMetadata, RuntimePlugin, RuntimePluginManifest,
+            RuntimePluginServices, negotiate_capabilities,
         },
     },
     plugin,
@@ -26,7 +25,6 @@ use tokio::sync::mpsc;
 #[derive(Clone)]
 struct DemoCtx {
     envelope: EventEnvelope,
-    sender: Option<Arc<dyn ayiou::core::plugin_host::OutboundSender>>,
 }
 
 impl DemoCtx {
@@ -37,13 +35,7 @@ impl DemoCtx {
         let message = MessageEvent::new(user, channel, text.into());
         Self {
             envelope: EventEnvelope::new(bot_id, platform).with_message(message),
-            sender: None,
         }
-    }
-
-    fn with_sender(mut self, sender: Arc<dyn ayiou::core::plugin_host::OutboundSender>) -> Self {
-        self.sender = Some(sender);
-        self
     }
 }
 
@@ -179,6 +171,9 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
     }
 
     async fn start(&mut self, _services: RuntimePluginServices<DemoCtx>) -> Result<()> {
+        self.apply_config(ConfigUpdate::dry_run(1, "bonjour"))
+            .await?;
+        self.apply_config(ConfigUpdate::new(2, "bonjour")).await?;
         Ok(())
     }
 
@@ -259,60 +254,68 @@ impl ayiou::core::plugin_host::OutboundSender for RecordingSender {
     }
 }
 
-struct ClosedAdapter;
+struct DemoAdapter {
+    sender: Arc<RecordingSender>,
+}
 
 #[async_trait]
-impl Adapter for ClosedAdapter {
+impl Adapter for DemoAdapter {
     type Ctx = DemoCtx;
 
     async fn start(self) -> mpsc::Receiver<Self::Ctx> {
-        let (_tx, rx) = mpsc::channel(1);
-        rx
+        self.start_with_runtime().await.events
+    }
+
+    async fn start_with_runtime(self) -> AdapterRuntime<Self::Ctx> {
+        let (tx, rx) = mpsc::channel(8);
+        let sender: Arc<dyn ayiou::core::plugin_host::OutboundSender> = self.sender.clone();
+
+        let events = [
+            DemoCtx::message("bot-a", "/secure admin open sesame", "admin", "group-a"),
+            DemoCtx::message("bot-a", "please show the kitchen sink", "guest", "group-a"),
+            DemoCtx::message("bot-a", "/say hello from macro", "guest", "group-a"),
+            DemoCtx::message("bot-a", "/hello", "guest", "group-a"),
+        ];
+
+        tokio::spawn(async move {
+            for event in events {
+                if tx.send(event).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        AdapterRuntime {
+            events: rx,
+            sender: Some(sender),
+        }
+    }
+
+    fn capabilities(&self) -> AdapterCapabilities {
+        AdapterCapabilities {
+            proactive_send: true,
+            attachments: false,
+            platform_extensions: Vec::new(),
+        }
     }
 }
 
-async fn run_engine_demo() -> Result<()> {
+async fn run_bot_demo() -> Result<()> {
     let sent_messages = Arc::new(Mutex::new(Vec::new()));
     let sender = Arc::new(RecordingSender {
         messages: sent_messages.clone(),
     });
 
-    let host = ayiou::core::plugin_host::PluginHost::new(Some(sender.clone()));
-    let services = RuntimePluginServices::new(host).with_identity("bot-a", "console");
-    let state = ayiou::core::plugin_runtime::PluginRuntimeState::default();
-    let mut engine =
-        RuntimePluginEngine::with_options(services, state.clone(), DispatchOptions::new(["/"]));
+    Bot::new(DemoAdapter { sender })
+        .with_plugin(HelloPlugin)
+        .with_plugin(ToolsPlugin)
+        .with_plugin_as("kitchen-main", KitchenPlugin::new())
+        .workers(1)
+        .queue_capacity(8)
+        .command_prefixes(["/"])
+        .run()
+        .await;
 
-    engine.push(Box::new(HelloPlugin));
-    engine.push(Box::new(ToolsPlugin));
-    engine.push_as("kitchen-main", Box::new(KitchenPlugin::new()));
-
-    engine.init_all().await?;
-    engine.start_all().await?;
-    engine
-        .apply_config("kitchen-main", ConfigUpdate::dry_run(1, "bonjour"))
-        .await?;
-    engine
-        .apply_config("kitchen-main", ConfigUpdate::new(2, "bonjour"))
-        .await?;
-
-    let admin_ctx = DemoCtx::message("bot-a", "/secure admin open sesame", "admin", "group-a")
-        .with_sender(sender.clone());
-    let blocked = engine.handle_all(&admin_ctx).await?;
-    assert!(blocked);
-
-    let regex_ctx = DemoCtx::message("bot-a", "please show the kitchen sink", "guest", "group-a")
-        .with_sender(sender.clone());
-    engine.handle_all(&regex_ctx).await?;
-
-    let echo_ctx = DemoCtx::message("bot-a", "/say hello from macro", "guest", "group-a");
-    engine.handle_all(&echo_ctx).await?;
-
-    let hello_ctx = DemoCtx::message("bot-a", "/hello from macro", "guest", "group-a");
-    engine.handle_all(&hello_ctx).await?;
-
-    let snapshot = state.snapshot("kitchen-main");
-    assert_eq!(snapshot.applied_config_version, 2);
     assert!(
         sent_messages
             .lock()
@@ -320,25 +323,12 @@ async fn run_engine_demo() -> Result<()> {
             .iter()
             .any(|message| message.contains("bonjour"))
     );
-
-    engine.stop_all().await?;
     Ok(())
-}
-
-async fn run_bot_builder_demo() {
-    Bot::new(ClosedAdapter)
-        .with_plugin(HelloPlugin)
-        .with_plugin(ToolsPlugin)
-        .workers(1)
-        .queue_capacity(4)
-        .run()
-        .await;
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    run_engine_demo().await?;
-    run_bot_builder_demo().await;
+    run_bot_demo().await?;
     println!("kitchen sink example completed");
     Ok(())
 }
