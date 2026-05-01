@@ -9,18 +9,15 @@ use ayiou::{
     core::{
         adapter::{Adapter, MsgContext},
         model::{
-            BotId, ChannelKind, ChannelRef, CommandInvocation, EventEnvelope, MessageEvent,
+            ChannelKind, ChannelRef, CommandInvocation, EventEnvelope, MessageEvent,
             OutboundMessage, OutboundReceipt, PlatformId, UserRef,
         },
-        observability::NoopMetrics,
         plugin_system::{
             ApplyConfigOutcome, Capability, ConfigUpdate, DispatchOptions, HandleOutcome,
             HandlerDecl, Permission, PluginHealth, PluginMetadata, RuntimePlugin,
             RuntimePluginEngine, RuntimePluginManifest, RuntimePluginServices,
             negotiate_capabilities,
         },
-        session::{Conversation, MemorySessionStore, SessionKey, SessionStore},
-        storage::{MemoryStore, Store, StoreSerdeExt},
     },
     plugin,
 };
@@ -137,52 +134,6 @@ impl KitchenPlugin {
             services: None,
         }
     }
-
-    async fn demo_conversation(&self, ctx: &DemoCtx) -> Result<()> {
-        let services = self
-            .services
-            .as_ref()
-            .ok_or_else(|| anyhow!("plugin has not been initialized"))?;
-        let store = services
-            .sessions
-            .as_ref()
-            .ok_or_else(|| anyhow!("session store missing"))?;
-        let key = SessionKey::new(
-            services
-                .bot_id
-                .as_ref()
-                .map(BotId::as_str)
-                .unwrap_or("bot-a"),
-            services
-                .platform
-                .as_ref()
-                .map(PlatformId::as_str)
-                .unwrap_or("console"),
-            services.instance_id.as_deref().unwrap_or("kitchen"),
-            ctx.user_id(),
-            ctx.group_id(),
-        );
-
-        let mut conversation = Conversation::resume(store.as_ref(), key.clone()).await?;
-        let cursor = conversation
-            .wait_next(
-                store.as_ref(),
-                serde_json::json!({ "question": "favorite feature?" }),
-                None,
-            )
-            .await?;
-        println!("conversation waiting at revision {}", cursor.revision());
-
-        conversation
-            .pause(store.as_ref(), "operator review", None)
-            .await?;
-        conversation
-            .reject(store.as_ref(), "please answer with text", None)
-            .await?;
-        conversation.finish(store.as_ref()).await?;
-        assert!(store.load(&key).await?.is_none());
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -227,12 +178,7 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
         Ok(())
     }
 
-    async fn start(&mut self, services: RuntimePluginServices<DemoCtx>) -> Result<()> {
-        services
-            .host
-            .store()
-            .set_json("example:kitchen:start", &true)
-            .await?;
+    async fn start(&mut self, _services: RuntimePluginServices<DemoCtx>) -> Result<()> {
         Ok(())
     }
 
@@ -261,7 +207,6 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
                 self.config.greeting,
                 invocation.args()
             );
-            self.demo_conversation(ctx).await?;
             return Ok(HandleOutcome::block());
         }
 
@@ -327,24 +272,13 @@ impl Adapter for ClosedAdapter {
 }
 
 async fn run_engine_demo() -> Result<()> {
-    let scheduler: Arc<dyn ayiou::core::scheduler::Scheduler> =
-        Arc::new(ayiou::core::scheduler::TokioScheduler::new());
-    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let sessions: Arc<dyn SessionStore> = Arc::new(MemorySessionStore::new());
     let sent_messages = Arc::new(Mutex::new(Vec::new()));
     let sender = Arc::new(RecordingSender {
         messages: sent_messages.clone(),
     });
 
-    let host = ayiou::core::plugin_host::PluginHost::new(
-        scheduler.clone(),
-        store.clone(),
-        Some(sender.clone()),
-    );
-    let services = RuntimePluginServices::new(host)
-        .with_identity("bot-a", "console")
-        .with_sessions(sessions.clone())
-        .with_metrics(Arc::new(NoopMetrics));
+    let host = ayiou::core::plugin_host::PluginHost::new(Some(sender.clone()));
+    let services = RuntimePluginServices::new(host).with_identity("bot-a", "console");
     let state = ayiou::core::plugin_runtime::PluginRuntimeState::default();
     let mut engine =
         RuntimePluginEngine::with_options(services, state.clone(), DispatchOptions::new(["/"]));

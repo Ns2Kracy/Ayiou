@@ -5,8 +5,6 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 
 use crate::core::model::{ChannelRef, OutboundMessage, OutboundReceipt};
-use crate::core::scheduler::Scheduler;
-use crate::core::storage::Store;
 
 #[async_trait]
 pub trait OutboundSender: Send + Sync {
@@ -16,8 +14,6 @@ pub trait OutboundSender: Send + Sync {
 pub use OutboundSender as MessageSender;
 
 pub struct PluginHost<C> {
-    scheduler: Arc<dyn Scheduler>,
-    store: Arc<dyn Store>,
     sender: Option<Arc<dyn OutboundSender>>,
     _marker: PhantomData<fn() -> C>,
 }
@@ -25,8 +21,6 @@ pub struct PluginHost<C> {
 impl<C> Clone for PluginHost<C> {
     fn clone(&self) -> Self {
         Self {
-            scheduler: self.scheduler.clone(),
-            store: self.store.clone(),
             sender: self.sender.clone(),
             _marker: PhantomData,
         }
@@ -34,25 +28,11 @@ impl<C> Clone for PluginHost<C> {
 }
 
 impl<C> PluginHost<C> {
-    pub fn new(
-        scheduler: Arc<dyn Scheduler>,
-        store: Arc<dyn Store>,
-        sender: Option<Arc<dyn OutboundSender>>,
-    ) -> Self {
+    pub fn new(sender: Option<Arc<dyn OutboundSender>>) -> Self {
         Self {
-            scheduler,
-            store,
             sender,
             _marker: PhantomData,
         }
-    }
-
-    pub fn scheduler(&self) -> Arc<dyn Scheduler> {
-        self.scheduler.clone()
-    }
-
-    pub fn store(&self) -> Arc<dyn Store> {
-        self.store.clone()
     }
 
     pub fn sender(&self) -> Option<Arc<dyn OutboundSender>> {

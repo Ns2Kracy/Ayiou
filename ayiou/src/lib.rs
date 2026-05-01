@@ -1,19 +1,16 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
 use log::{error, info};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::core::{
     adapter::Adapter,
-    observability::{MetricsSink, NoopMetrics, elapsed_ms},
     plugin_host::PluginHost,
     plugin_runtime::PluginRuntimeState,
     plugin_system::{
         DispatchOptions, RegisteredPlugin, RuntimePlugin, RuntimePluginEngine,
         RuntimePluginServices,
     },
-    scheduler::{Scheduler, TokioScheduler},
-    storage::{MemoryStore, Store},
 };
 
 pub mod adapter;
@@ -53,16 +50,11 @@ pub struct Bot<A: Adapter> {
     adapter: A,
     plugins: Vec<RegisteredPlugin<A::Ctx>>,
     dispatch_options: DispatchOptions,
-    metrics_sink: Arc<dyn MetricsSink>,
-    scheduler: Arc<dyn Scheduler>,
-    store: Arc<dyn Store>,
     runtime_options: BotRuntimeOptions,
 }
 
 struct BotRuntime<C> {
     engine: Arc<tokio::sync::RwLock<RuntimePluginEngine<C>>>,
-    metrics_sink: Arc<dyn MetricsSink>,
-    scheduler: Arc<dyn Scheduler>,
     options: BotRuntimeOptions,
 }
 
@@ -72,16 +64,9 @@ where
 {
     fn new(
         engine: Arc<tokio::sync::RwLock<RuntimePluginEngine<C>>>,
-        metrics_sink: Arc<dyn MetricsSink>,
-        scheduler: Arc<dyn Scheduler>,
         options: BotRuntimeOptions,
     ) -> Self {
-        Self {
-            engine,
-            metrics_sink,
-            scheduler,
-            options,
-        }
+        Self { engine, options }
     }
 
     async fn run(self, mut event_rx: mpsc::Receiver<C>) {
@@ -98,7 +83,6 @@ where
                         info!("Adapter channel closed.");
                         break;
                     };
-                    self.metrics_sink.incr_counter("events_in_total", 1, &[]);
                     match self.options.overflow_policy {
                         QueueOverflowPolicy::Backpressure => {
                             if work_tx.send(ctx).await.is_err() {
@@ -106,17 +90,16 @@ where
                             }
                         }
                         QueueOverflowPolicy::DropNewest => {
-                            if work_tx.try_send(ctx).is_err() {
-                                self.metrics_sink.incr_counter("event_queue_rejected_total", 1, &[]);
+                            match work_tx.try_send(ctx) {
+                                Ok(()) => {}
+                                Err(mpsc::error::TrySendError::Full(_)) => {}
+                                Err(mpsc::error::TrySendError::Closed(_)) => break,
                             }
                         }
                     }
                 }
                 _ = tokio::signal::ctrl_c() => {
                     info!("Bot is shutting down.");
-                    if let Err(err) = self.scheduler.shutdown().await {
-                        error!("Scheduler shutdown error: {}", err);
-                    }
                     break;
                 }
             }
@@ -136,7 +119,6 @@ where
         (0..self.options.worker_count)
             .map(|_| {
                 let engine = self.engine.clone();
-                let metrics = self.metrics_sink.clone();
                 let worker_rx = worker_rx.clone();
                 tokio::spawn(async move {
                     loop {
@@ -149,20 +131,13 @@ where
                             break;
                         };
 
-                        let start = Instant::now();
                         let dispatch_result = {
                             let engine = engine.read().await;
                             engine.handle_all(&ctx).await
                         };
                         if let Err(err) = dispatch_result {
-                            metrics.incr_counter("plugin_errors_total", 1, &[]);
                             error!("Plugin dispatch error: {}", err);
                         }
-                        metrics.observe_duration_ms(
-                            "plugin_handle_duration_ms",
-                            elapsed_ms(start),
-                            &[],
-                        );
                     }
                 })
             })
@@ -176,34 +151,8 @@ impl<A: Adapter> Bot<A> {
             adapter,
             plugins: Vec::new(),
             dispatch_options: DispatchOptions::default(),
-            metrics_sink: Arc::new(NoopMetrics),
-            scheduler: Arc::new(TokioScheduler::new()),
-            store: Arc::new(MemoryStore::new()),
             runtime_options: BotRuntimeOptions::default(),
         }
-    }
-
-    pub fn with_metrics_sink(mut self, metrics_sink: Arc<dyn MetricsSink>) -> Self {
-        self.metrics_sink = metrics_sink;
-        self
-    }
-
-    pub fn with_scheduler(mut self, scheduler: Arc<dyn Scheduler>) -> Self {
-        self.scheduler = scheduler;
-        self
-    }
-
-    pub fn with_store(mut self, store: Arc<dyn Store>) -> Self {
-        self.store = store;
-        self
-    }
-
-    pub fn scheduler(&self) -> Arc<dyn Scheduler> {
-        self.scheduler.clone()
-    }
-
-    pub fn store(&self) -> Arc<dyn Store> {
-        self.store.clone()
     }
 
     pub fn workers(mut self, worker_count: usize) -> Self {
@@ -269,11 +218,7 @@ impl<A: Adapter> Bot<A> {
         let adapter_capabilities = self.adapter.capabilities();
         let adapter_runtime = self.adapter.start_with_runtime().await;
         let runtime_state = PluginRuntimeState::default();
-        let plugin_host = PluginHost::new(
-            self.scheduler.clone(),
-            self.store.clone(),
-            adapter_runtime.sender.clone(),
-        );
+        let plugin_host = PluginHost::new(adapter_runtime.sender.clone());
         let mut engine = RuntimePluginEngine::with_options(
             RuntimePluginServices::new(plugin_host)
                 .with_capabilities(adapter_capabilities_to_runtime(&adapter_capabilities)),
@@ -297,12 +242,7 @@ impl<A: Adapter> Bot<A> {
 
         info!("Loaded {} plugins", engine.plugins().len());
         let engine = Arc::new(tokio::sync::RwLock::new(engine));
-        let runtime = BotRuntime::new(
-            engine.clone(),
-            self.metrics_sink.clone(),
-            self.scheduler.clone(),
-            self.runtime_options.clone(),
-        );
+        let runtime = BotRuntime::new(engine.clone(), self.runtime_options.clone());
         runtime.run(adapter_runtime.events).await;
 
         if let Err(err) = engine.write().await.stop_all().await {

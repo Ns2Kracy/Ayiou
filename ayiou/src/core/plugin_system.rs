@@ -6,10 +6,8 @@ use async_trait::async_trait;
 use crate::core::{
     command::parse_command_line,
     model::{BotId, CommandInvocation, PlatformId},
-    observability::MetricsSink,
     plugin_host::PluginHost,
     plugin_runtime::{PluginLifecycleState, PluginRuntimeState},
-    session::SessionStore,
 };
 
 #[derive(Clone, Debug)]
@@ -338,8 +336,6 @@ pub struct RuntimePluginServices<C> {
     pub instance_id: Option<String>,
     pub bot_id: Option<BotId>,
     pub platform: Option<PlatformId>,
-    pub sessions: Option<Arc<dyn SessionStore>>,
-    pub metrics: Option<Arc<dyn MetricsSink>>,
     pub capabilities: Vec<Capability>,
 }
 
@@ -350,8 +346,6 @@ impl<C> Clone for RuntimePluginServices<C> {
             instance_id: self.instance_id.clone(),
             bot_id: self.bot_id.clone(),
             platform: self.platform.clone(),
-            sessions: self.sessions.clone(),
-            metrics: self.metrics.clone(),
             capabilities: self.capabilities.clone(),
         }
     }
@@ -364,8 +358,6 @@ impl<C> RuntimePluginServices<C> {
             instance_id: None,
             bot_id: None,
             platform: None,
-            sessions: None,
-            metrics: None,
             capabilities: Vec::new(),
         }
     }
@@ -382,16 +374,6 @@ impl<C> RuntimePluginServices<C> {
     ) -> Self {
         self.bot_id = Some(bot_id.into());
         self.platform = Some(platform.into());
-        self
-    }
-
-    pub fn with_sessions(mut self, sessions: Arc<dyn SessionStore>) -> Self {
-        self.sessions = Some(sessions);
-        self
-    }
-
-    pub fn with_metrics(mut self, metrics: Arc<dyn MetricsSink>) -> Self {
-        self.metrics = Some(metrics);
         self
     }
 
@@ -918,12 +900,7 @@ mod tests {
 
     use anyhow::Result;
 
-    use crate::core::{
-        adapter::MsgContext,
-        plugin_host::PluginHost,
-        scheduler::{Scheduler, TokioScheduler},
-        storage::{MemoryStore, Store},
-    };
+    use crate::core::{adapter::MsgContext, plugin_host::PluginHost};
 
     use super::*;
 
@@ -990,9 +967,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_orders_handlers_by_priority_and_respects_block() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
+        let host = PluginHost::new(None);
         let services = RuntimePluginServices::new(host);
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1033,9 +1008,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_filters_by_regex_and_permission() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
+        let host = PluginHost::new(None);
         let services = RuntimePluginServices::new(host);
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1074,9 +1047,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_uses_context_ids_for_permission_checks() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
+        let host = PluginHost::new(None);
         let services = RuntimePluginServices::new(host);
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1116,9 +1087,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_supports_dry_run_config_lifecycle() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
+        let host = PluginHost::new(None);
         let services = RuntimePluginServices::new(host);
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1150,9 +1119,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_fails_startup_when_required_capability_is_missing() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
+        let host = PluginHost::new(None);
         let services = RuntimePluginServices::new(host);
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1176,9 +1143,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_accepts_declared_services_capabilities() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
+        let host = PluginHost::new(None);
         let services = RuntimePluginServices::new(host)
             .with_capabilities([Capability::GroupModeration, Capability::Reaction]);
         let state = PluginRuntimeState::default();
@@ -1203,9 +1168,7 @@ mod tests {
 
     #[tokio::test]
     async fn engine_can_register_plugin_with_explicit_instance_id() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
+        let host = PluginHost::new(None);
         let services = RuntimePluginServices::new(host);
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1266,9 +1229,7 @@ mod tests {
 
     #[tokio::test]
     async fn engine_scopes_services_to_runtime_instance_id() {
-        let scheduler: Arc<dyn Scheduler> = Arc::new(TokioScheduler::new());
-        let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-        let host = PluginHost::new(scheduler, store, None);
+        let host = PluginHost::new(None);
         let services = RuntimePluginServices::new(host);
         let state = PluginRuntimeState::default();
         let seen_instance_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
