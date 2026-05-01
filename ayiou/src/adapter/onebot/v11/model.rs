@@ -124,39 +124,38 @@ impl MessageSegment {
     pub fn write_preview(&self, buf: &mut String) {
         use std::fmt::Write;
         match self {
-            MessageSegment::Text { text } => buf.push_str(text),
-            MessageSegment::Face { id } => {
-                let _ = write!(buf, "[表情:{}]", id);
+            Self::Text { text } => buf.push_str(text),
+            Self::Face { id } => {
+                let _ = write!(buf, "[表情:{id}]");
             }
-            MessageSegment::Image { .. } => buf.push_str("[图片]"),
-            MessageSegment::Record { .. } => buf.push_str("[语音]"),
-            MessageSegment::Video { .. } => buf.push_str("[视频]"),
-            MessageSegment::At { qq } => {
-                let _ = write!(buf, "[@{}]", qq);
+            Self::Image { .. } => buf.push_str("[图片]"),
+            Self::Record { .. } => buf.push_str("[语音]"),
+            Self::Video { .. } => buf.push_str("[视频]"),
+            Self::At { qq } => {
+                let _ = write!(buf, "[@{qq}]");
             }
-            MessageSegment::Rps => buf.push_str("[猜拳]"),
-            MessageSegment::Dice => buf.push_str("[骰子]"),
-            MessageSegment::Shake => buf.push_str("[戳一戳]"),
-            MessageSegment::Poke { .. } => buf.push_str("[戳一戳]"),
-            MessageSegment::Anonymous => buf.push_str("[匿名]"),
-            MessageSegment::Share { title, .. } => {
-                let _ = write!(buf, "[分享:{}]", title);
+            Self::Rps => buf.push_str("[猜拳]"),
+            Self::Dice => buf.push_str("[骰子]"),
+            Self::Shake | Self::Poke { .. } => buf.push_str("[戳一戳]"),
+            Self::Anonymous => buf.push_str("[匿名]"),
+            Self::Share { title, .. } => {
+                let _ = write!(buf, "[分享:{title}]");
             }
-            MessageSegment::Contact { contact_type, id } => {
-                let _ = write!(buf, "[推荐{}:{}]", contact_type, id);
+            Self::Contact { contact_type, id } => {
+                let _ = write!(buf, "[推荐{contact_type}:{id}]");
             }
-            MessageSegment::Location { .. } => buf.push_str("[位置]"),
-            MessageSegment::Music { music_type, .. } => {
-                let _ = write!(buf, "[音乐:{}]", music_type);
+            Self::Location { .. } => buf.push_str("[位置]"),
+            Self::Music { music_type, .. } => {
+                let _ = write!(buf, "[音乐:{music_type}]");
             }
-            MessageSegment::Reply { id } => {
-                let _ = write!(buf, "[回复:{}]", id);
+            Self::Reply { id } => {
+                let _ = write!(buf, "[回复:{id}]");
             }
-            MessageSegment::Forward { .. } => buf.push_str("[转发消息]"),
-            MessageSegment::Node { .. } => buf.push_str("[消息节点]"),
-            MessageSegment::Xml { .. } => buf.push_str("[XML消息]"),
-            MessageSegment::Json { .. } => buf.push_str("[JSON消息]"),
-            MessageSegment::Unknown => buf.push_str("[未知消息]"),
+            Self::Forward { .. } => buf.push_str("[转发消息]"),
+            Self::Node { .. } => buf.push_str("[消息节点]"),
+            Self::Xml { .. } => buf.push_str("[XML消息]"),
+            Self::Json { .. } => buf.push_str("[JSON消息]"),
+            Self::Unknown => buf.push_str("[未知消息]"),
         }
     }
 }
@@ -243,7 +242,7 @@ pub enum NoticeEvent {
     Essence(EssenceNoticeEvent),
     #[serde(rename = "notify")]
     Notify(NotifyEvent),
-    /// Unknown notice types (extensions like group_msg_emoji_like)
+    /// Unknown notice types (extensions like `group_msg_emoji_like`)
     #[serde(other)]
     Unknown,
 }
@@ -333,7 +332,7 @@ pub enum NotifyEvent {
     Honor(HonorNotifyEvent),
     #[serde(rename = "title")]
     Title(TitleNotifyEvent),
-    /// Unknown notify sub_types
+    /// Unknown notify `sub_types`
     #[serde(other)]
     Unknown,
 }
@@ -541,6 +540,7 @@ pub struct ApiResponse {
     pub echo: Option<serde_json::Value>,
 }
 
+#[must_use]
 pub fn echo_key(echo: &serde_json::Value) -> Option<String> {
     match echo {
         serde_json::Value::Null => None,
@@ -550,6 +550,7 @@ pub fn echo_key(echo: &serde_json::Value) -> Option<String> {
 }
 
 impl ApiResponse {
+    #[must_use]
     pub fn is_ok(&self) -> bool {
         self.status == "ok" && self.retcode == 0
     }
@@ -570,7 +571,7 @@ impl ApiResponse {
 
     pub fn data_as<T: DeserializeOwned>(&self) -> anyhow::Result<T> {
         serde_json::from_value(self.data.clone())
-            .map_err(|e| anyhow!("Failed to decode OneBot response data: {}", e))
+            .map_err(|e| anyhow!("Failed to decode OneBot response data: {e}"))
     }
 
     pub fn data_as_checked<T: DeserializeOwned>(&self, action: &str) -> anyhow::Result<T> {
@@ -657,6 +658,7 @@ pub enum OneBotAction {
 }
 
 impl OneBotAction {
+    #[must_use]
     pub fn into_request(self) -> ApiRequest {
         use serde_json::json;
 

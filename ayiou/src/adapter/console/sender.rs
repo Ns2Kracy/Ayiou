@@ -13,7 +13,8 @@ pub struct ConsoleSender {
 }
 
 impl ConsoleSender {
-    pub fn new(outgoing_tx: mpsc::Sender<String>) -> Self {
+    #[must_use]
+    pub const fn new(outgoing_tx: mpsc::Sender<String>) -> Self {
         Self { outgoing_tx }
     }
 }

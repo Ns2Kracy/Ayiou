@@ -28,6 +28,7 @@ impl<C> Clone for PluginHost<C> {
 }
 
 impl<C> PluginHost<C> {
+    #[must_use]
     pub fn new(sender: Option<Arc<dyn OutboundSender>>) -> Self {
         Self {
             sender,
@@ -35,6 +36,7 @@ impl<C> PluginHost<C> {
         }
     }
 
+    #[must_use]
     pub fn sender(&self) -> Option<Arc<dyn OutboundSender>> {
         self.sender.clone()
     }

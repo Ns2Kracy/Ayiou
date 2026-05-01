@@ -25,6 +25,7 @@ pub struct RuntimeController {
 }
 
 impl RuntimeController {
+    #[must_use]
     pub fn new(initial: RuntimeState) -> Self {
         Self {
             status: Arc::new(RwLock::new(RuntimeStatus {
@@ -35,27 +36,35 @@ impl RuntimeController {
     }
 
     pub async fn start(&self) -> Result<()> {
-        let mut status = self.status.write().await;
-        status.state = RuntimeState::Running;
-        status.last_error = None;
+        {
+            let mut status = self.status.write().await;
+            status.state = RuntimeState::Running;
+            status.last_error = None;
+        }
         Ok(())
     }
 
     pub async fn mark_starting(&self) -> Result<()> {
-        let mut status = self.status.write().await;
-        status.state = RuntimeState::Starting;
+        {
+            let mut status = self.status.write().await;
+            status.state = RuntimeState::Starting;
+        }
         Ok(())
     }
 
     pub async fn mark_stopping(&self) -> Result<()> {
-        let mut status = self.status.write().await;
-        status.state = RuntimeState::Stopping;
+        {
+            let mut status = self.status.write().await;
+            status.state = RuntimeState::Stopping;
+        }
         Ok(())
     }
 
     pub async fn stop(&self) -> Result<()> {
-        let mut status = self.status.write().await;
-        status.state = RuntimeState::Stopped;
+        {
+            let mut status = self.status.write().await;
+            status.state = RuntimeState::Stopped;
+        }
         Ok(())
     }
 

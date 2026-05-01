@@ -13,7 +13,8 @@ pub struct MockDriver<I, O> {
 }
 
 impl<I, O> MockDriver<I, O> {
-    pub fn new(inbound_packets: Vec<I>) -> Self {
+    #[must_use]
+    pub const fn new(inbound_packets: Vec<I>) -> Self {
         Self {
             inbound_packets,
             _outbound: PhantomData,

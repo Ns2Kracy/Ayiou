@@ -14,15 +14,18 @@ impl ArgsParseError {
         }
     }
 
+    #[must_use]
     pub fn with_help(mut self, help: impl Into<String>) -> Self {
         self.help = Some(help.into());
         self
     }
 
+    #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 
+    #[must_use]
     pub fn help(&self) -> Option<&str> {
         self.help.as_deref()
     }
@@ -36,6 +39,7 @@ impl std::fmt::Display for ArgsParseError {
 
 impl std::error::Error for ArgsParseError {}
 
+#[must_use]
 pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandInvocation> {
     let trimmed = text.trim_start();
     if trimmed.is_empty() {
@@ -45,8 +49,7 @@ pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandInvoca
     let token_end = trimmed
         .char_indices()
         .find(|(_, ch)| ch.is_whitespace())
-        .map(|(idx, _)| idx)
-        .unwrap_or(trimmed.len());
+        .map_or(trimmed.len(), |(idx, _)| idx);
 
     let token = &trimmed[..token_end];
     let args = trimmed[token_end..].trim_start();
@@ -69,7 +72,7 @@ pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandInvoca
 pub fn tokenize_command_args(args: &str) -> std::result::Result<Vec<String>, ArgsParseError> {
     let mut out = Vec::new();
     let mut buf = String::new();
-    let mut chars = args.chars().peekable();
+    let mut chars = args.chars();
     let mut quote: Option<char> = None;
 
     while let Some(ch) = chars.next() {
@@ -123,12 +126,12 @@ where
 {
     let value = tokens
         .get(*index)
-        .ok_or_else(|| ArgsParseError::new(format!("Missing argument: {}", name)))?;
+        .ok_or_else(|| ArgsParseError::new(format!("Missing argument: {name}")))?;
     *index += 1;
 
     value
         .parse::<T>()
-        .map_err(|err| ArgsParseError::new(format!("Failed to parse argument `{}`: {}", name, err)))
+        .map_err(|err| ArgsParseError::new(format!("Failed to parse argument `{name}`: {err}")))
 }
 
 pub fn ensure_no_extra_args(
@@ -137,8 +140,7 @@ pub fn ensure_no_extra_args(
 ) -> std::result::Result<(), ArgsParseError> {
     if let Some(extra) = tokens.get(index) {
         return Err(ArgsParseError::new(format!(
-            "Unexpected extra argument: {}",
-            extra
+            "Unexpected extra argument: {extra}"
         )));
     }
 

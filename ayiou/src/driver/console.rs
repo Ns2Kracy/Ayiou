@@ -11,7 +11,8 @@ use crate::core::driver::Driver;
 pub struct ConsoleDriver;
 
 impl ConsoleDriver {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 }

@@ -60,7 +60,7 @@ impl MsgContext for Ctx {
 }
 
 impl Ctx {
-    /// Create context from OneBot event
+    /// Create context from `OneBot` event
     pub fn new(
         event: Arc<OneBotEvent>,
         outgoing_tx: mpsc::Sender<String>,
@@ -85,13 +85,15 @@ impl Ctx {
         })
     }
 
-    /// Get raw OneBot event
+    /// Get raw `OneBot` event
     #[inline]
+    #[must_use]
     pub fn event(&self) -> &OneBotEvent {
         &self.event
     }
 
     /// Get plain text from message
+    #[must_use]
     pub fn text(&self) -> String {
         let message = match &self.msg {
             MsgEvent::Private(p) => &p.message,
@@ -122,6 +124,7 @@ impl Ctx {
 
     /// Raw message string
     #[inline]
+    #[must_use]
     pub fn raw_message(&self) -> &str {
         match &self.msg {
             MsgEvent::Private(p) => &p.raw_message,
@@ -131,6 +134,7 @@ impl Ctx {
 
     /// Sender user ID
     #[inline]
+    #[must_use]
     pub fn user_id(&self) -> i64 {
         match &self.msg {
             MsgEvent::Private(p) => p.user_id,
@@ -140,6 +144,7 @@ impl Ctx {
 
     /// Group ID (None for private messages)
     #[inline]
+    #[must_use]
     pub fn group_id(&self) -> Option<i64> {
         match &self.msg {
             MsgEvent::Private(_) => None,
@@ -149,18 +154,21 @@ impl Ctx {
 
     /// Check if private message
     #[inline]
-    pub fn is_private(&self) -> bool {
+    #[must_use]
+    pub const fn is_private(&self) -> bool {
         matches!(self.msg, MsgEvent::Private(_))
     }
 
     /// Check if group message
     #[inline]
-    pub fn is_group(&self) -> bool {
+    #[must_use]
+    pub const fn is_group(&self) -> bool {
         matches!(self.msg, MsgEvent::Group(_))
     }
 
     /// Sender nickname
     #[inline]
+    #[must_use]
     pub fn nickname(&self) -> &str {
         match &self.msg {
             MsgEvent::Private(p) => &p.sender.nickname,
@@ -182,6 +190,7 @@ impl Ctx {
         Ok(())
     }
 
+    #[must_use]
     pub fn self_id(&self) -> i64 {
         match &self.msg {
             MsgEvent::Private(p) => p.self_id,
@@ -189,14 +198,17 @@ impl Ctx {
         }
     }
 
+    #[must_use]
     pub fn outgoing_tx(&self) -> mpsc::Sender<String> {
         self.outgoing_tx.clone()
     }
 
+    #[must_use]
     pub fn platform_id(&self) -> PlatformId {
         PlatformId::new("onebot/v11")
     }
 
+    #[must_use]
     pub fn to_event_envelope(&self) -> EventEnvelope {
         let platform = self.platform_id();
         let sender = UserRef::new(platform.clone(), self.user_id().to_string())
@@ -221,6 +233,7 @@ impl Ctx {
         EventEnvelope::new(BotId::new(self.self_id().to_string()), platform).with_message(message)
     }
 
+    #[must_use]
     pub fn into_context(self, sender: Option<std::sync::Arc<dyn OutboundSender>>) -> Context {
         let envelope = self.to_event_envelope();
         Context::new(envelope, sender, self)
@@ -280,7 +293,7 @@ impl Ctx {
         .await
     }
 
-    /// Call API and wait for OneBot response by `echo`.
+    /// Call API and wait for `OneBot` response by `echo`.
     pub async fn call_with_response(
         &self,
         action: &str,
@@ -303,27 +316,24 @@ impl Ctx {
             Ok(Err(_)) => {
                 self.pending_api.remove(&echo);
                 Err(anyhow!(
-                    "OneBot response channel closed for action `{}`",
-                    action
+                    "OneBot response channel closed for action `{action}`"
                 ))
             }
             Err(_) => {
                 self.pending_api.remove(&echo);
                 Err(anyhow!(
-                    "OneBot response timed out for action `{}` after {:?}",
-                    action,
-                    API_TIMEOUT
+                    "OneBot response timed out for action `{action}` after {API_TIMEOUT:?}"
                 ))
             }
         }
     }
 
-    /// Call typed OneBot action without waiting for response.
+    /// Call typed `OneBot` action without waiting for response.
     pub async fn call_action(&self, action: OneBotAction) -> Result<()> {
         self.send_request(action.into_request()).await
     }
 
-    /// Call typed OneBot action and wait for response.
+    /// Call typed `OneBot` action and wait for response.
     pub async fn call_action_with_response(&self, action: OneBotAction) -> Result<ApiResponse> {
         let mut req = action.into_request();
         let action_name = req.action.clone();
@@ -340,22 +350,19 @@ impl Ctx {
             Ok(Err(_)) => {
                 self.pending_api.remove(&echo);
                 Err(anyhow!(
-                    "OneBot response channel closed for action `{}`",
-                    action_name
+                    "OneBot response channel closed for action `{action_name}`"
                 ))
             }
             Err(_) => {
                 self.pending_api.remove(&echo);
                 Err(anyhow!(
-                    "OneBot response timed out for action `{}` after {:?}",
-                    action_name,
-                    API_TIMEOUT
+                    "OneBot response timed out for action `{action_name}` after {API_TIMEOUT:?}"
                 ))
             }
         }
     }
 
-    /// Call any custom OneBot action without waiting for response.
+    /// Call any custom `OneBot` action without waiting for response.
     pub async fn call_custom_action(
         &self,
         action: impl Into<String>,
@@ -368,7 +375,7 @@ impl Ctx {
         .await
     }
 
-    /// Call any custom OneBot action and wait for response.
+    /// Call any custom `OneBot` action and wait for response.
     pub async fn call_custom_action_with_response(
         &self,
         action: impl Into<String>,
@@ -390,7 +397,7 @@ impl Ctx {
         .await
     }
 
-    /// Send private message and return OneBot message id.
+    /// Send private message and return `OneBot` message id.
     pub async fn send_private_msg_with_response(
         &self,
         user_id: i64,
@@ -414,7 +421,7 @@ impl Ctx {
         .await
     }
 
-    /// Send group message and return OneBot message id.
+    /// Send group message and return `OneBot` message id.
     pub async fn send_group_msg_with_response(
         &self,
         group_id: i64,

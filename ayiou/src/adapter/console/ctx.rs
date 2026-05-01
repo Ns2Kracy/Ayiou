@@ -11,14 +11,17 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    pub fn new(line: String) -> Self {
+    #[must_use]
+    pub const fn new(line: String) -> Self {
         Self { line }
     }
 
+    #[must_use]
     pub fn line(&self) -> &str {
         &self.line
     }
 
+    #[must_use]
     pub fn to_event_envelope(&self) -> EventEnvelope {
         let platform = PlatformId::new("console");
         let user = UserRef::new(platform.clone(), "console-user");
@@ -27,6 +30,7 @@ impl Ctx {
         EventEnvelope::new(BotId::new("console"), platform).with_message(message)
     }
 
+    #[must_use]
     pub fn into_context(self, sender: Option<std::sync::Arc<dyn OutboundSender>>) -> Context {
         let envelope = self.to_event_envelope();
         Context::new(envelope, sender, self)

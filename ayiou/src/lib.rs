@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::multiple_crate_versions)]
+
 use std::sync::Arc;
 
 use log::{error, info};
@@ -62,7 +64,7 @@ impl<C> BotRuntime<C>
 where
     C: crate::core::adapter::MsgContext + Send + 'static,
 {
-    fn new(
+    const fn new(
         engine: Arc<tokio::sync::RwLock<RuntimePluginEngine<C>>>,
         options: BotRuntimeOptions,
     ) -> Self {
@@ -72,7 +74,7 @@ where
     async fn run(self, mut event_rx: mpsc::Receiver<C>) {
         let (work_tx, work_rx) = mpsc::channel::<C>(self.options.queue_capacity);
         let worker_rx = Arc::new(tokio::sync::Mutex::new(work_rx));
-        let mut worker_handles = self.spawn_workers(worker_rx);
+        let worker_handles = self.spawn_workers(&worker_rx);
         let mut drain_workers = true;
 
         info!("Bot is running, press Ctrl+C to exit.");
@@ -92,8 +94,7 @@ where
                         }
                         QueueOverflowPolicy::DropNewest => {
                             match work_tx.try_send(ctx) {
-                                Ok(()) => {}
-                                Err(mpsc::error::TrySendError::Full(_)) => {}
+                                Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
                                 Err(mpsc::error::TrySendError::Closed(_)) => break,
                             }
                         }
@@ -108,7 +109,7 @@ where
         }
 
         drop(work_tx);
-        for handle in worker_handles.drain(..) {
+        for handle in worker_handles {
             if !drain_workers {
                 handle.abort();
             }
@@ -118,7 +119,7 @@ where
 
     fn spawn_workers(
         &self,
-        worker_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<C>>>,
+        worker_rx: &Arc<tokio::sync::Mutex<mpsc::Receiver<C>>>,
     ) -> Vec<JoinHandle<()>> {
         (0..self.options.worker_count)
             .map(|_| {
@@ -140,7 +141,7 @@ where
                             engine.handle_all(&ctx).await
                         };
                         if let Err(err) = dispatch_result {
-                            error!("Plugin dispatch error: {}", err);
+                            error!("Plugin dispatch error: {err}");
                         }
                     }
                 })
@@ -159,26 +160,31 @@ impl<A: Adapter> Bot<A> {
         }
     }
 
+    #[must_use]
     pub fn workers(mut self, worker_count: usize) -> Self {
         self.runtime_options.worker_count = worker_count.max(1);
         self
     }
 
+    #[must_use]
     pub fn queue_capacity(mut self, queue_capacity: usize) -> Self {
         self.runtime_options.queue_capacity = queue_capacity.max(1);
         self
     }
 
-    pub fn queue_overflow_policy(mut self, overflow_policy: QueueOverflowPolicy) -> Self {
+    #[must_use]
+    pub const fn queue_overflow_policy(mut self, overflow_policy: QueueOverflowPolicy) -> Self {
         self.runtime_options.overflow_policy = overflow_policy;
         self
     }
 
+    #[must_use]
     pub fn command_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.dispatch_options = DispatchOptions::new([prefix]);
         self
     }
 
+    #[must_use]
     pub fn command_prefixes(
         mut self,
         prefixes: impl IntoIterator<Item = impl Into<String>>,
@@ -187,12 +193,14 @@ impl<A: Adapter> Bot<A> {
         self
     }
 
+    #[must_use]
     pub fn with_plugin<P: RuntimePlugin<A::Ctx>>(mut self, plugin: P) -> Self {
         self.plugins
             .push(RegisteredPlugin::from_plugin(Box::new(plugin)));
         self
     }
 
+    #[must_use]
     pub fn with_plugin_as<P: RuntimePlugin<A::Ctx>>(
         mut self,
         instance_id: impl Into<String>,
@@ -222,12 +230,12 @@ impl<A: Adapter> Bot<A> {
         }
 
         if let Err(err) = engine.init_all().await {
-            error!("Plugin initialization error: {}", err);
+            error!("Plugin initialization error: {err}");
             return;
         }
 
         if let Err(err) = engine.start_all().await {
-            error!("Plugin startup error: {}", err);
+            error!("Plugin startup error: {err}");
             return;
         }
 
@@ -237,7 +245,7 @@ impl<A: Adapter> Bot<A> {
         runtime.run(adapter_runtime.events).await;
 
         if let Err(err) = engine.write().await.stop_all().await {
-            error!("Plugin shutdown error: {}", err);
+            error!("Plugin shutdown error: {err}");
         }
     }
 }
@@ -270,6 +278,7 @@ pub type OneBotV11Bot = Bot<adapter::onebot::v11::adapter::OneBotV11Adapter>;
 pub type ConsoleBot = Bot<adapter::console::adapter::ConsoleAdapter>;
 
 impl ConsoleBot {
+    #[must_use]
     pub fn console() -> Self {
         Self::new(adapter::console::adapter::ConsoleAdapter::new())
             .command_prefixes(["/", "!", "."])

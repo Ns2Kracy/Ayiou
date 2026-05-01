@@ -27,17 +27,34 @@ struct CommandMethod {
     call_args: Vec<syn::Ident>,
 }
 
+struct PluginIdentity {
+    name: String,
+    description: String,
+    version: String,
+}
+
 pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenStream> {
     let plugin_attrs = parse_plugin_attrs(args)?;
-
     let plugin_ty = item_impl.self_ty.clone();
     let plugin_ident = extract_self_type_ident(&plugin_ty)?;
-
     let ctx_ty = plugin_attrs
         .context
         .clone()
         .unwrap_or_else(|| syn::parse_quote!(ayiou::Context));
+    let methods = collect_command_methods(&mut item_impl, &ctx_ty)?;
+    let identity = plugin_identity(&plugin_attrs, &plugin_ident);
 
+    Ok(render_plugin_impl(
+        &item_impl,
+        &plugin_ty,
+        &ctx_ty,
+        identity,
+        &plugin_attrs.prefixes,
+        &methods,
+    ))
+}
+
+fn collect_command_methods(item_impl: &mut ItemImpl, ctx_ty: &Type) -> Result<Vec<CommandMethod>> {
     let mut methods = Vec::new();
 
     for impl_item in &mut item_impl.items {
@@ -45,15 +62,7 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
             continue;
         };
 
-        let mut command_attr_index = None;
-        for (idx, attr) in method.attrs.iter().enumerate() {
-            if attr.path().is_ident("command") {
-                command_attr_index = Some(idx);
-                break;
-            }
-        }
-
-        let Some(attr_index) = command_attr_index else {
+        let Some(attr_index) = command_attr_index(method) else {
             continue;
         };
 
@@ -66,8 +75,11 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
 
         let command_attr = method.attrs.remove(attr_index);
         let cmd_attrs = parse_command_attr(&command_attr)?;
+        method
+            .attrs
+            .push(syn::parse_quote!(#[allow(clippy::unused_async)]));
 
-        methods.push(parse_command_method(method, cmd_attrs, &ctx_ty)?);
+        methods.push(parse_command_method(method, cmd_attrs, ctx_ty)?);
     }
 
     if methods.is_empty() {
@@ -77,12 +89,35 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
         ));
     }
 
-    let plugin_name = plugin_attrs
-        .name
-        .unwrap_or_else(|| plugin_ident.to_string().to_lowercase());
-    let plugin_description = plugin_attrs.description.unwrap_or_default();
-    let plugin_version = plugin_attrs.version.unwrap_or_else(|| "0.1.0".to_string());
+    Ok(methods)
+}
 
+fn command_attr_index(method: &syn::ImplItemFn) -> Option<usize> {
+    method
+        .attrs
+        .iter()
+        .position(|attr| attr.path().is_ident("command"))
+}
+
+fn plugin_identity(attrs: &PluginAttrs, plugin_ident: &syn::Ident) -> PluginIdentity {
+    PluginIdentity {
+        name: attrs
+            .name
+            .clone()
+            .unwrap_or_else(|| plugin_ident.to_string().to_lowercase()),
+        description: attrs.description.clone().unwrap_or_default(),
+        version: attrs.version.clone().unwrap_or_else(|| "0.1.0".to_string()),
+    }
+}
+
+fn render_plugin_impl(
+    item_impl: &ItemImpl,
+    plugin_ty: &Type,
+    ctx_ty: &Type,
+    identity: PluginIdentity,
+    prefixes: &[String],
+    methods: &[CommandMethod],
+) -> TokenStream {
     let all_commands: Vec<String> = methods
         .iter()
         .flat_map(|method| method.labels.iter().cloned())
@@ -91,10 +126,10 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
     let command_values = all_commands
         .iter()
         .map(|value| quote! { #value.to_string() });
-    let prefix_values = plugin_attrs
-        .prefixes
-        .iter()
-        .map(|value| quote! { #value.to_string() });
+    let prefix_values = prefixes.iter().map(|value| quote! { #value.to_string() });
+    let plugin_name = identity.name;
+    let plugin_description = identity.description;
+    let plugin_version = identity.version;
 
     let dispatch_arms = methods.iter().map(|method| {
         let fn_name = &method.fn_name;
@@ -111,7 +146,7 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
         }
     });
 
-    let plugin_impl = quote! {
+    quote! {
         #item_impl
 
         #[async_trait::async_trait]
@@ -164,9 +199,7 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
                 }
             }
         }
-    };
-
-    Ok(plugin_impl)
+    }
 }
 
 fn parse_plugin_attrs(args: Vec<Meta>) -> Result<PluginAttrs> {
@@ -177,7 +210,7 @@ fn parse_plugin_attrs(args: Vec<Meta>) -> Result<PluginAttrs> {
             Meta::NameValue(MetaNameValue { path, value, .. }) => {
                 let key = path
                     .get_ident()
-                    .map(|ident| ident.to_string())
+                    .map(std::string::ToString::to_string)
                     .ok_or_else(|| syn::Error::new_spanned(path, "Unsupported plugin key"))?;
 
                 match key.as_str() {
@@ -192,7 +225,7 @@ fn parse_plugin_attrs(args: Vec<Meta>) -> Result<PluginAttrs> {
                     _ => {
                         return Err(syn::Error::new(
                             Span::call_site(),
-                            format!("Unsupported plugin key `{}`", key),
+                            format!("Unsupported plugin key `{key}`"),
                         ));
                     }
                 }
@@ -220,7 +253,7 @@ fn parse_command_attr(attr: &syn::Attribute) -> Result<CommandAttrs> {
         let key = meta
             .path
             .get_ident()
-            .map(|ident| ident.to_string())
+            .map(std::string::ToString::to_string)
             .ok_or_else(|| syn::Error::new_spanned(&meta.path, "Unsupported command key"))?;
 
         match key.as_str() {
@@ -239,7 +272,7 @@ fn parse_command_attr(attr: &syn::Attribute) -> Result<CommandAttrs> {
             _ => {
                 return Err(syn::Error::new(
                     Span::call_site(),
-                    format!("Unsupported command key `{}`", key),
+                    format!("Unsupported command key `{key}`"),
                 ));
             }
         }

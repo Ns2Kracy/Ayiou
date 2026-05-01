@@ -105,7 +105,7 @@ where
     tokio::spawn(async move {
         let driver_handle = tokio::spawn(async move {
             if let Err(err) = driver.run(raw_tx, outgoing_rx).await {
-                error!("Driver error: {}", err);
+                error!("Driver error: {err}");
             }
         });
 
@@ -139,7 +139,7 @@ where
     tokio::spawn(async move {
         let driver_handle = tokio::spawn(async move {
             if let Err(err) = driver.run(raw_tx, outgoing_rx).await {
-                error!("Driver error: {}", err);
+                error!("Driver error: {err}");
             }
         });
 
@@ -175,7 +175,7 @@ mod tests {
             raw: Self::Inbound,
             _outgoing_tx: mpsc::Sender<Self::Outbound>,
         ) -> Option<Self::Ctx> {
-            Some(format!("ctx:{}", raw))
+            Some(format!("ctx:{raw}"))
         }
     }
 

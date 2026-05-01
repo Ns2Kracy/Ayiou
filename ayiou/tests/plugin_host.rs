@@ -63,7 +63,7 @@ struct StartPlugin {
 
 #[async_trait]
 impl RuntimePlugin<TestCtx> for StartPlugin {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "start-plugin"
     }
 
@@ -91,7 +91,7 @@ struct HandlePlugin {
 
 #[async_trait]
 impl RuntimePlugin<TestCtx> for HandlePlugin {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "handle-plugin"
     }
 

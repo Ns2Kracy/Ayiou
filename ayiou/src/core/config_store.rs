@@ -43,9 +43,7 @@ impl TomlConfigStore {
     fn record_path(&self, bot_id: &str, plugin: &str) -> PathBuf {
         let safe_bot = sanitize_segment(bot_id);
         let safe_plugin = sanitize_segment(plugin);
-        self.root
-            .join(safe_bot)
-            .join(format!("{}.toml", safe_plugin))
+        self.root.join(safe_bot).join(format!("{safe_plugin}.toml"))
     }
 }
 
@@ -62,11 +60,13 @@ impl ConfigStore for TomlConfigStore {
         let raw = match tokio::fs::read_to_string(&path).await {
             Ok(value) => value,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err).with_context(|| format!("read config file {:?}", path)),
+            Err(err) => {
+                return Err(err).with_context(|| format!("read config file {}", path.display()));
+            }
         };
 
-        let parsed: StoredRecord =
-            toml::from_str(&raw).with_context(|| format!("parse config file {:?}", path))?;
+        let parsed: StoredRecord = toml::from_str(&raw)
+            .with_context(|| format!("parse config file {}", path.display()))?;
 
         Ok(Some(ConfigRecord {
             version: parsed.version,
@@ -89,11 +89,7 @@ impl ConfigStore for TomlConfigStore {
         if let Some(expected) = expected_version
             && expected != actual_version
         {
-            bail!(
-                "version conflict: expected {}, actual {}",
-                expected,
-                actual_version
-            );
+            bail!("version conflict: expected {expected}, actual {actual_version}");
         }
 
         let next_version = actual_version
@@ -103,7 +99,7 @@ impl ConfigStore for TomlConfigStore {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
-                .with_context(|| format!("create config directory {:?}", parent))?;
+                .with_context(|| format!("create config directory {}", parent.display()))?;
         }
 
         let payload = toml::to_string(&StoredRecord {
@@ -114,7 +110,7 @@ impl ConfigStore for TomlConfigStore {
 
         tokio::fs::write(&path, payload)
             .await
-            .with_context(|| format!("write config file {:?}", path))?;
+            .with_context(|| format!("write config file {}", path.display()))?;
 
         Ok(next_version)
     }

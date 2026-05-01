@@ -1,3 +1,5 @@
+#![allow(clippy::multiple_crate_versions)]
+
 use proc_macro::TokenStream;
 use syn::{Meta, parse_macro_input, punctuated::Punctuated};
 

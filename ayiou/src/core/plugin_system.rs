@@ -26,11 +26,13 @@ impl PluginMetadata {
         }
     }
 
+    #[must_use]
     pub fn description(mut self, desc: impl Into<String>) -> Self {
         self.description = desc.into();
         self
     }
 
+    #[must_use]
     pub fn version(mut self, version: impl Into<String>) -> Self {
         self.version = version.into();
         self
@@ -67,6 +69,7 @@ impl DispatchOptions {
         }
     }
 
+    #[must_use]
     pub fn command_prefixes(&self) -> &[String] {
         self.command_prefixes.as_ref()
     }
@@ -100,21 +103,25 @@ impl RuntimePluginManifest {
         }
     }
 
+    #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
         self
     }
 
+    #[must_use]
     pub fn version(mut self, version: impl Into<String>) -> Self {
         self.version = version.into();
         self
     }
 
+    #[must_use]
     pub fn require_capability(mut self, capability: Capability) -> Self {
         self.required_capabilities.push(capability);
         self
     }
 
+    #[must_use]
     pub fn optional_capability(mut self, capability: Capability) -> Self {
         self.optional_capabilities.push(capability);
         self
@@ -165,7 +172,8 @@ pub struct HandlerDecl {
 }
 
 impl HandlerDecl {
-    pub fn wildcard_message() -> Self {
+    #[must_use]
+    pub const fn wildcard_message() -> Self {
         Self {
             event_kind: HandlerEventKind::Message,
             commands: Vec::new(),
@@ -210,17 +218,20 @@ impl HandlerDecl {
         }
     }
 
+    #[must_use]
     pub fn require_permission(mut self, permission: Permission) -> Self {
         self.permissions.push(permission);
         self
     }
 
-    pub fn priority(mut self, priority: i32) -> Self {
+    #[must_use]
+    pub const fn priority(mut self, priority: i32) -> Self {
         self.priority = priority;
         self
     }
 
-    pub fn block(mut self, block: bool) -> Self {
+    #[must_use]
+    pub const fn block(mut self, block: bool) -> Self {
         self.block = block;
         self
     }
@@ -284,13 +295,15 @@ pub struct ApplyConfigOutcome {
 }
 
 impl ApplyConfigOutcome {
-    pub fn applied(version: u64) -> Self {
+    #[must_use]
+    pub const fn applied(version: u64) -> Self {
         Self {
             applied_version: Some(version),
         }
     }
 
-    pub fn skipped() -> Self {
+    #[must_use]
+    pub const fn skipped() -> Self {
         Self {
             applied_version: None,
         }
@@ -303,15 +316,18 @@ pub struct HandleOutcome {
 }
 
 impl HandleOutcome {
-    pub fn pass() -> Self {
+    #[must_use]
+    pub const fn pass() -> Self {
         Self { block: false }
     }
 
-    pub fn block() -> Self {
+    #[must_use]
+    pub const fn block() -> Self {
         Self { block: true }
     }
 
-    pub fn from_block(block: bool) -> Self {
+    #[must_use]
+    pub const fn from_block(block: bool) -> Self {
         Self { block }
     }
 }
@@ -337,7 +353,8 @@ impl<C> Clone for RuntimePluginServices<C> {
 }
 
 impl<C> RuntimePluginServices<C> {
-    pub fn new(host: PluginHost<C>) -> Self {
+    #[must_use]
+    pub const fn new(host: PluginHost<C>) -> Self {
         Self {
             host,
             instance_id: None,
@@ -347,11 +364,13 @@ impl<C> RuntimePluginServices<C> {
         }
     }
 
+    #[must_use]
     pub fn with_instance_id(mut self, instance_id: impl Into<String>) -> Self {
         self.instance_id = Some(instance_id.into());
         self
     }
 
+    #[must_use]
     pub fn with_identity(
         mut self,
         bot_id: impl Into<BotId>,
@@ -362,11 +381,13 @@ impl<C> RuntimePluginServices<C> {
         self
     }
 
+    #[must_use]
     pub fn with_capabilities(mut self, capabilities: impl IntoIterator<Item = Capability>) -> Self {
         self.capabilities = capabilities.into_iter().collect();
         self
     }
 
+    #[must_use]
     pub fn provided_capabilities(&self) -> Vec<Capability> {
         let mut capabilities = self.capabilities.clone();
         if self.host.sender().is_some() && !capabilities.contains(&Capability::ProactiveSend) {
@@ -383,7 +404,8 @@ pub struct PluginHealth {
 }
 
 impl PluginHealth {
-    pub fn healthy() -> Self {
+    #[must_use]
+    pub const fn healthy() -> Self {
         Self {
             healthy: true,
             detail: None,
@@ -456,15 +478,18 @@ where
         }
     }
 
+    #[must_use]
     pub fn from_plugin(plugin: Box<dyn RuntimePlugin<C>>) -> Self {
         let instance_id = default_instance_id(plugin.as_ref());
         Self::new(instance_id, plugin)
     }
 
+    #[must_use]
     pub fn instance_id(&self) -> &str {
         &self.instance_id
     }
 
+    #[must_use]
     pub fn plugin(&self) -> &dyn RuntimePlugin<C> {
         self.plugin.as_ref()
     }
@@ -473,6 +498,7 @@ where
         self.plugin.as_mut()
     }
 
+    #[must_use]
     pub fn into_parts(self) -> (String, Box<dyn RuntimePlugin<C>>) {
         (self.instance_id, self.plugin)
     }
@@ -490,6 +516,7 @@ where
     }
 }
 
+#[must_use]
 pub fn negotiate_capabilities(
     manifest: &RuntimePluginManifest,
     provided: &[Capability],
@@ -528,11 +555,13 @@ impl<C> RuntimePluginEngine<C>
 where
     C: Send + Sync + 'static,
 {
+    #[must_use]
     pub fn new(services: RuntimePluginServices<C>, runtime_state: PluginRuntimeState) -> Self {
         Self::with_options(services, runtime_state, DispatchOptions::default())
     }
 
-    pub fn with_options(
+    #[must_use]
+    pub const fn with_options(
         services: RuntimePluginServices<C>,
         runtime_state: PluginRuntimeState,
         dispatch_options: DispatchOptions,
@@ -559,6 +588,7 @@ where
         self.plugins.push(plugin);
     }
 
+    #[must_use]
     pub fn plugins(&self) -> &[RegisteredPlugin<C>] {
         &self.plugins
     }
@@ -574,9 +604,7 @@ where
                 negotiate_capabilities(&registered.plugin().manifest(), &provided_capabilities)
             {
                 let err = anyhow!(
-                    "plugin `{}` missing required capabilities: {:?}",
-                    instance_id,
-                    missing_required
+                    "plugin `{instance_id}` missing required capabilities: {missing_required:?}"
                 );
                 self.runtime_state
                     .record_error(&instance_id, err.to_string());
@@ -660,7 +688,7 @@ where
             .plugins
             .iter_mut()
             .find(|registered| registered.instance_id() == instance_id)
-            .ok_or_else(|| anyhow!("plugin instance `{}` is not registered", instance_id))?;
+            .ok_or_else(|| anyhow!("plugin instance `{instance_id}` is not registered"))?;
 
         self.runtime_state
             .set_desired_config_version(instance_id, update.version);
@@ -734,7 +762,7 @@ where
                 .declared_handlers()
                 .into_iter()
                 .filter_map(|handler| {
-                    self.match_handler(ctx, &text, plugin_index, handler, global_prefixes)
+                    self.match_handler(ctx, &text, plugin_index, &handler, global_prefixes)
                 })
                 .min_by(|left, right| {
                     left.priority
@@ -755,7 +783,7 @@ where
         ctx: &C,
         text: &str,
         plugin_index: usize,
-        handler: HandlerDecl,
+        handler: &HandlerDecl,
         global_prefixes: &[String],
     ) -> Option<MatchedHandler>
     where
@@ -1183,7 +1211,7 @@ mod tests {
 
     #[async_trait]
     impl RuntimePlugin<TestCtx> for ServiceProbePlugin {
-        fn kind(&self) -> &str {
+        fn kind(&self) -> &'static str {
             "service-probe"
         }
 

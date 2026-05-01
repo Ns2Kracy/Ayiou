@@ -16,6 +16,7 @@ pub struct ConsoleAdapter {
 }
 
 impl ConsoleAdapter {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             driver: Box::new(ConsoleDriver::new()),
@@ -56,7 +57,7 @@ impl ProtocolAdapter for ConsoleProtocol {
             return None;
         }
 
-        let sender = std::sync::Arc::new(ConsoleSender::new(outbound_tx.clone()));
+        let sender = std::sync::Arc::new(ConsoleSender::new(outbound_tx));
         Some(Ctx::new(raw).into_context(Some(sender)))
     }
 }
@@ -88,7 +89,7 @@ impl Adapter for ConsoleAdapter {
         tokio::spawn(async move {
             let driver_handle = tokio::spawn(async move {
                 if let Err(err) = driver.run(raw_tx, outgoing_rx).await {
-                    log::error!("Driver error: {}", err);
+                    log::error!("Driver error: {err}");
                 }
             });
 

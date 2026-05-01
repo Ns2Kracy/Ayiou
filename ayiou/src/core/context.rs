@@ -31,14 +31,17 @@ impl Context {
         }
     }
 
-    pub fn event(&self) -> &EventEnvelope {
+    #[must_use]
+    pub const fn event(&self) -> &EventEnvelope {
         &self.envelope
     }
 
-    pub fn message(&self) -> Option<&MessageEvent> {
+    #[must_use]
+    pub const fn message(&self) -> Option<&MessageEvent> {
         self.envelope.message()
     }
 
+    #[must_use]
     pub fn extension<T>(&self) -> Option<&T>
     where
         T: Any + Send + Sync + 'static,

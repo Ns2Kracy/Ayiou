@@ -57,6 +57,7 @@ impl PluginRuntimeState {
         f(entry.value_mut());
     }
 
+    #[must_use]
     pub fn snapshot(&self, plugin: &str) -> PluginInstanceState {
         self.instances
             .get(plugin)
@@ -64,6 +65,7 @@ impl PluginRuntimeState {
             .unwrap_or_default()
     }
 
+    #[must_use]
     pub fn snapshots(&self) -> Vec<(String, PluginInstanceState)> {
         let mut snapshots: Vec<_> = self
             .instances
@@ -78,6 +80,7 @@ impl PluginRuntimeState {
         self.update(plugin, |state| state.enabled = on);
     }
 
+    #[must_use]
     pub fn is_enabled(&self, plugin: &str) -> bool {
         self.snapshot(plugin).enabled
     }

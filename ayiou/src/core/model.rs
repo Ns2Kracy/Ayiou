@@ -10,6 +10,7 @@ impl BotId {
         Self(value.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -41,6 +42,7 @@ impl PlatformId {
         Self(value.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -103,15 +105,18 @@ impl ChannelRef {
         Self::new(platform, channel_id, ChannelKind::Channel)
     }
 
-    pub fn platform(&self) -> &PlatformId {
+    #[must_use]
+    pub const fn platform(&self) -> &PlatformId {
         &self.platform
     }
 
+    #[must_use]
     pub fn channel_id(&self) -> &str {
         &self.channel_id
     }
 
-    pub fn kind(&self) -> ChannelKind {
+    #[must_use]
+    pub const fn kind(&self) -> ChannelKind {
         self.kind
     }
 }
@@ -132,19 +137,23 @@ impl UserRef {
         }
     }
 
+    #[must_use]
     pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
         self.display_name = Some(display_name.into());
         self
     }
 
-    pub fn platform(&self) -> &PlatformId {
+    #[must_use]
+    pub const fn platform(&self) -> &PlatformId {
         &self.platform
     }
 
+    #[must_use]
     pub fn user_id(&self) -> &str {
         &self.user_id
     }
 
+    #[must_use]
     pub fn display_name(&self) -> Option<&str> {
         self.display_name.as_deref()
     }
@@ -170,14 +179,17 @@ impl CommandInvocation {
         }
     }
 
+    #[must_use]
     pub fn command(&self) -> &str {
         &self.command
     }
 
+    #[must_use]
     pub fn args(&self) -> &str {
         &self.args
     }
 
+    #[must_use]
     pub fn prefix(&self) -> Option<&str> {
         self.prefix.as_deref()
     }
@@ -232,11 +244,13 @@ impl MessageEvent {
         }
     }
 
+    #[must_use]
     pub fn with_message_id(mut self, message_id: impl Into<String>) -> Self {
         self.message_id = Some(message_id.into());
         self
     }
 
+    #[must_use]
     pub fn with_segments(mut self, segments: Vec<MessageSegment>) -> Self {
         self.text = plain_text_from_segments(&segments);
         self.segments = segments;
@@ -262,12 +276,14 @@ impl EventEnvelope {
         }
     }
 
+    #[must_use]
     pub fn with_message(mut self, message: MessageEvent) -> Self {
         self.message = Some(message);
         self
     }
 
-    pub fn message(&self) -> Option<&MessageEvent> {
+    #[must_use]
+    pub const fn message(&self) -> Option<&MessageEvent> {
         self.message.as_ref()
     }
 }
@@ -279,7 +295,8 @@ pub struct OutboundMessage {
 }
 
 impl OutboundMessage {
-    pub fn new(target: ChannelRef, segments: Vec<MessageSegment>) -> Self {
+    #[must_use]
+    pub const fn new(target: ChannelRef, segments: Vec<MessageSegment>) -> Self {
         Self { target, segments }
     }
 
@@ -287,6 +304,7 @@ impl OutboundMessage {
         Self::new(target, vec![MessageSegment::text(text)])
     }
 
+    #[must_use]
     pub fn plain_text(&self) -> String {
         plain_text_from_segments(&self.segments)
     }
@@ -297,6 +315,7 @@ pub struct OutboundReceipt {
     pub message_id: Option<String>,
 }
 
+#[must_use]
 pub fn plain_text_from_segments(segments: &[MessageSegment]) -> String {
     let mut text = String::new();
 

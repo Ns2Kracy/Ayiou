@@ -130,7 +130,7 @@ impl KitchenPlugin {
 
 #[async_trait]
 impl RuntimePlugin<DemoCtx> for KitchenPlugin {
-    fn kind(&self) -> &str {
+    fn kind(&self) -> &'static str {
         "kitchen"
     }
 
@@ -268,7 +268,7 @@ impl Adapter for DemoAdapter {
 
     async fn start_with_runtime(self) -> AdapterRuntime<Self::Ctx> {
         let (tx, rx) = mpsc::channel(8);
-        let sender: Arc<dyn ayiou::core::plugin_host::OutboundSender> = self.sender.clone();
+        let sender: Arc<dyn ayiou::core::plugin_host::OutboundSender> = self.sender;
 
         let events = [
             DemoCtx::message("bot-a", "/secure admin open sesame", "admin", "group-a"),

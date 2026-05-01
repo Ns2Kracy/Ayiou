@@ -19,11 +19,11 @@ use crate::{
     driver::wsclient::WsDriver,
 };
 
-/// OneBot v11 protocol adapter.
+/// `OneBot` v11 protocol adapter.
 ///
 /// Adapter responsibilities:
-/// - convert raw packets to OneBot events
-/// - map OneBot responses by echo
+/// - convert raw packets to `OneBot` events
+/// - map `OneBot` responses by echo
 /// - build plugin context from message events
 pub struct OneBotV11Adapter {
     driver: Box<dyn Driver<Inbound = String, Outbound = String>>,
@@ -56,7 +56,7 @@ impl OneBotV11Adapter {
                     p.sender.nickname,
                     p.user_id,
                     Self::format_message(&p.message)
-                )
+                );
             }
             MessageEvent::Group(g) => {
                 info!(
@@ -66,25 +66,25 @@ impl OneBotV11Adapter {
                     g.sender.card.as_deref().unwrap_or(&g.sender.nickname),
                     g.user_id,
                     Self::format_message(&g.message)
-                )
+                );
             }
-        };
+        }
     }
 
     fn format_message(message: &Message) -> String {
         match message {
-            Message::String(s) => format!("{:?}", s),
+            Message::String(s) => format!("{s:?}"),
             Message::Segment(segment) => {
                 let mut preview = String::new();
                 segment.write_preview(&mut preview);
-                format!("{:?}", preview)
+                format!("{preview:?}")
             }
             Message::Array(segments) => {
                 let mut preview = String::with_capacity(segments.len() * 8);
                 for seg in segments {
                     seg.write_preview(&mut preview);
                 }
-                format!("{:?}", preview)
+                format!("{preview:?}")
             }
         }
     }
@@ -122,7 +122,7 @@ impl ProtocolAdapter for OneBotV11Protocol {
                 if let Some((_, tx)) = self.pending_api.remove(&echo) {
                     let _ = tx.send(resp);
                 } else {
-                    warn!("Received OneBot response with unknown echo: {}", echo);
+                    warn!("Received OneBot response with unknown echo: {echo}");
                 }
             }
             return None;
@@ -150,7 +150,7 @@ impl ProtocolAdapter for OneBotV11Protocol {
                 Some(raw_ctx.into_context(Some(sender)))
             }
             Err(err) => {
-                warn!("Failed to parse: {}, raw: {}", err, raw);
+                warn!("Failed to parse: {err}, raw: {raw}");
                 None
             }
         }
@@ -180,7 +180,7 @@ impl Adapter for OneBotV11Adapter {
         let (ctx_tx, ctx_rx) = mpsc::channel::<Context>(100);
         let protocol_outgoing_tx = outgoing_tx.clone();
         let sender = Arc::new(OneBotSender::with_runtime(
-            outgoing_tx.clone(),
+            outgoing_tx,
             protocol.pending_api.clone(),
             protocol.echo_seq.clone(),
             protocol.profile.clone(),
@@ -190,7 +190,7 @@ impl Adapter for OneBotV11Adapter {
         tokio::spawn(async move {
             let driver_handle = tokio::spawn(async move {
                 if let Err(err) = driver.run(raw_tx, outgoing_rx).await {
-                    warn!("Driver error: {}", err);
+                    warn!("Driver error: {err}");
                 }
             });
 

@@ -20,12 +20,24 @@ pub struct WsDriver {
 }
 
 impl WsDriver {
+    /// Create a WebSocket driver.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `url` is not a valid WebSocket URL.
+    #[must_use]
     pub fn new(url: &str) -> Self {
         Self {
             url: url::Url::parse(url).expect("Invalid WebSocket URL"),
         }
     }
 
+    /// Create a WebSocket driver and append an `access_token` query parameter when absent.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `url` is not a valid WebSocket URL.
+    #[must_use]
     pub fn with_access_token(url: &str, token: impl AsRef<str>) -> Self {
         let mut parsed = url::Url::parse(url).expect("Invalid WebSocket URL");
         let has_access_token = parsed.query_pairs().any(|(key, _)| key == "access_token");
@@ -39,10 +51,12 @@ impl WsDriver {
         Self { url: parsed }
     }
 
-    pub fn url(&self) -> &Url {
+    #[must_use]
+    pub const fn url(&self) -> &Url {
         &self.url
     }
 
+    #[must_use]
     pub fn redacted_url(&self) -> String {
         let mut redacted = self.url.clone();
         let query_pairs: Vec<(String, String)> = redacted
@@ -93,14 +107,12 @@ impl WsDriver {
                                             return Ok(());
                                         }
                                     }
-                                    Some(Ok(Message::Binary(_))) => continue,
-                                    Some(Ok(Message::Close(_))) => break,
-                                    Some(Ok(_)) => continue,
+                                    Some(Ok(Message::Close(_))) | None => break,
+                                    Some(Ok(_)) => {}
                                     Some(Err(e)) => {
-                                        warn!("WebSocket error: {}", e);
+                                        warn!("WebSocket error: {e}");
                                         break;
                                     }
-                                    None => break,
                                 }
                             }
                             msg = outbound_rx.recv() => {

@@ -46,6 +46,7 @@ pub struct OneBotSender {
 }
 
 impl OneBotSender {
+    #[must_use]
     pub fn new(outgoing_tx: mpsc::Sender<String>) -> Self {
         Self {
             outgoing_tx,
@@ -55,7 +56,7 @@ impl OneBotSender {
         }
     }
 
-    pub fn with_runtime(
+    pub const fn with_runtime(
         outgoing_tx: mpsc::Sender<String>,
         pending_api: Arc<DashMap<String, oneshot::Sender<ApiResponse>>>,
         echo_seq: Arc<AtomicU64>,
@@ -69,6 +70,7 @@ impl OneBotSender {
         }
     }
 
+    #[must_use]
     pub fn test_pair() -> (Self, mpsc::Receiver<String>) {
         let (tx, rx) = mpsc::channel(8);
         (Self::new(tx), rx)
@@ -83,15 +85,19 @@ impl OneBotSender {
 
     fn next_echo(&self, action: &str) -> Result<String> {
         let Some(echo_seq) = self.echo_seq.as_ref() else {
-            return Err(anyhow!("OneBotSender does not support response-mapped actions"));
+            return Err(anyhow!(
+                "OneBotSender does not support response-mapped actions"
+            ));
         };
         let seq = echo_seq.fetch_add(1, Ordering::Relaxed);
-        Ok(format!("ayiou-sender:{}:{}", action, seq))
+        Ok(format!("ayiou-sender:{action}:{seq}"))
     }
 
     async fn call_action_with_response(&self, action: OneBotAction) -> Result<ApiResponse> {
         let Some(pending_api) = self.pending_api.as_ref() else {
-            return Err(anyhow!("OneBotSender does not support response-mapped actions"));
+            return Err(anyhow!(
+                "OneBotSender does not support response-mapped actions"
+            ));
         };
 
         let mut req = action.into_request();
@@ -110,23 +116,21 @@ impl OneBotSender {
             Ok(Err(_)) => {
                 pending_api.remove(&echo);
                 Err(anyhow!(
-                    "OneBot response channel closed for action `{}`",
-                    action_name
+                    "OneBot response channel closed for action `{action_name}`"
                 ))
             }
             Err(_) => {
                 pending_api.remove(&echo);
                 Err(anyhow!(
-                    "OneBot response timed out for action `{}` after {:?}",
-                    action_name,
-                    API_TIMEOUT
+                    "OneBot response timed out for action `{action_name}` after {API_TIMEOUT:?}"
                 ))
             }
         }
     }
 
     async fn resolve_profile(&self) -> Option<LoginInfoData> {
-        if let Some(profile) = self.profile.read().expect("profile lock").clone() {
+        let cached_profile = self.profile.read().expect("profile lock").clone();
+        if let Some(profile) = cached_profile {
             return Some(profile);
         }
 
@@ -134,7 +138,9 @@ impl OneBotSender {
             .call_action_with_response(OneBotAction::GetLoginInfo)
             .await
             .ok()?;
-        let profile = response.data_as_checked::<LoginInfoData>("get_login_info").ok()?;
+        let profile = response
+            .data_as_checked::<LoginInfoData>("get_login_info")
+            .ok()?;
         *self.profile.write().expect("profile lock") = Some(profile.clone());
         Some(profile)
     }
@@ -152,7 +158,7 @@ impl OutboundSender for OneBotSender {
                         action: "send_private_forward_msg".to_string(),
                         params: serde_json::json!({
                             "user_id": user_id,
-                            "messages": to_onebot_forward_nodes(bundle.nodes, profile.clone()),
+                            "messages": to_onebot_forward_nodes(bundle.nodes, profile.as_ref()),
                         }),
                     })
                     .await?;
@@ -163,7 +169,7 @@ impl OutboundSender for OneBotSender {
                         action: "send_group_forward_msg".to_string(),
                         params: serde_json::json!({
                             "group_id": group_id,
-                            "messages": to_onebot_forward_nodes(bundle.nodes, profile.clone()),
+                            "messages": to_onebot_forward_nodes(bundle.nodes, profile.as_ref()),
                         }),
                     })
                     .await?;
@@ -209,20 +215,21 @@ fn extract_forward_bundle(segments: &[KernelMessageSegment]) -> Option<ForwardBu
 
 fn to_onebot_forward_nodes(
     nodes: Vec<ForwardNode>,
-    profile: Option<LoginInfoData>,
+    profile: Option<&LoginInfoData>,
 ) -> Vec<crate::adapter::onebot::v11::model::MessageSegment> {
     nodes
         .into_iter()
-        .map(|node| crate::adapter::onebot::v11::model::MessageSegment::Node {
-            data: crate::adapter::onebot::v11::model::NodeData::Custom {
-                user_id: profile.as_ref().map(|item| item.user_id).unwrap_or(node.user_id),
-                nickname: profile
-                    .as_ref()
-                    .map(|item| item.nickname.clone())
-                    .unwrap_or(node.nickname),
-                content: Box::new(to_onebot_message(node.content)),
+        .map(
+            |node| crate::adapter::onebot::v11::model::MessageSegment::Node {
+                data: crate::adapter::onebot::v11::model::NodeData::Custom {
+                    user_id: profile.map_or(node.user_id, |item| item.user_id),
+                    nickname: profile
+                        .map(|item| item.nickname.clone())
+                        .unwrap_or(node.nickname),
+                    content: Box::new(to_onebot_message(node.content)),
+                },
             },
-        })
+        )
         .collect()
 }
 
@@ -232,24 +239,24 @@ fn to_onebot_message(segments: Vec<KernelMessageSegment>) -> Message {
     for segment in segments {
         match segment {
             KernelMessageSegment::Text { text } => {
-                out.push(crate::adapter::onebot::v11::model::MessageSegment::Text { text })
+                out.push(crate::adapter::onebot::v11::model::MessageSegment::Text { text });
             }
             KernelMessageSegment::Mention { user_id } => {
-                out.push(crate::adapter::onebot::v11::model::MessageSegment::At { qq: user_id })
+                out.push(crate::adapter::onebot::v11::model::MessageSegment::At { qq: user_id });
             }
             KernelMessageSegment::Image { url } => {
                 out.push(crate::adapter::onebot::v11::model::MessageSegment::Image {
                     file: url,
                     image_type: None,
                     url: None,
-                })
+                });
             }
             KernelMessageSegment::Attachment { url, .. } => {
                 out.push(crate::adapter::onebot::v11::model::MessageSegment::Record {
                     file: url.unwrap_or_default(),
                     magic: None,
                     url: None,
-                })
+                });
             }
             KernelMessageSegment::Unknown { .. } => {}
         }
@@ -300,8 +307,11 @@ mod tests {
         let raw = rx.recv().await.expect("request should be sent");
         let request: Value = serde_json::from_str(&raw).expect("request json should decode");
         assert_eq!(request["action"], Value::from("send_group_forward_msg"));
-        assert_eq!(request["params"]["group_id"], Value::from(123456));
-        assert_eq!(request["params"]["messages"][0]["type"], Value::from("node"));
+        assert_eq!(request["params"]["group_id"], Value::from(123_456));
+        assert_eq!(
+            request["params"]["messages"][0]["type"],
+            Value::from("node")
+        );
         assert_eq!(
             request["params"]["messages"][0]["data"]["nickname"],
             Value::from("B站直播订阅")
@@ -376,7 +386,7 @@ mod tests {
                 status: "ok".to_string(),
                 retcode: 0,
                 data: serde_json::json!({
-                    "user_id": 31415926,
+                    "user_id": 31_415_926,
                     "nickname": "AyiouBot"
                 }),
                 echo: Some(echo),
@@ -386,10 +396,13 @@ mod tests {
         let raw_forward = rx.recv().await.expect("forward request should be sent");
         let forward_request: Value =
             serde_json::from_str(&raw_forward).expect("forward request json should decode");
-        assert_eq!(forward_request["action"], Value::from("send_group_forward_msg"));
+        assert_eq!(
+            forward_request["action"],
+            Value::from("send_group_forward_msg")
+        );
         assert_eq!(
             forward_request["params"]["messages"][0]["data"]["user_id"],
-            Value::from(31415926)
+            Value::from(31_415_926)
         );
         assert_eq!(
             forward_request["params"]["messages"][0]["data"]["nickname"],
