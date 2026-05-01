@@ -14,16 +14,14 @@ Ayiou 是一个面向 Rust Bot 场景的插件化框架。
 - `Driver`：连接 WebSocket / HTTP / Console 等底层输入输出
 - `ProtocolAdapter`：适配 OneBot、Console 等协议
 - `RuntimePlugin`：统一插件行为、生命周期、配置和事件处理
-- `Bot` Runtime：负责插件注册、调度、存储和事件分发；多渠道通过 adapter 接入同一个 Bot
+- `Bot` Runtime：负责插件注册、队列和事件分发；多渠道通过 adapter 接入同一个 Bot
 
 ## 插件开发
 
 - `#[plugin] + #[command]`：默认插件编写入口，支持多命令插件与自动参数解析
-- `HandlerDecl`：声明命令、正则、权限、优先级、block、session 等执行约束
+- `HandlerDecl`：声明命令、正则、权限、优先级和 block 等执行约束
 - OneBot v11 主动消息与上下文 API
 - Console 适配器与本地调试体验
-- 存储、定时任务、状态型插件支持
-- 可观测性与 `MetricsSink`
 
 ## 阅读入口
 
@@ -32,6 +30,4 @@ Ayiou 是一个面向 Rust Bot 场景的插件化框架。
   <Card title="Kitchen Sink 示例" href="/docs/kitchen-sink-example" />
   <Card title="Plugin 宏" href="/docs/plugin-macro" />
   <Card title="命令系统与 DX" href="/docs/command-system-dx" />
-  <Card title="存储与会话" href="/docs/storage-session" />
-  <Card title="可观测性" href="/docs/observability" />
 </Cards>

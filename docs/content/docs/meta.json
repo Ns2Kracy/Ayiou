@@ -8,10 +8,6 @@
     "kitchen-sink-example",
     "---插件系统---",
     "plugin-macro",
-    "command-system-dx",
-    "---运行时能力---",
-    "storage-session",
-    "observability",
-    "cron-scheduling"
+    "command-system-dx"
   ]
 }

@@ -1,11 +1,11 @@
 ---
 title: Kitchen Sink 示例
-description: 一个覆盖 RuntimePlugin、宏、Handler 管线、配置、能力协商、会话和单 Bot runtime 的完整示例
+description: 一个覆盖 RuntimePlugin、宏、Handler 管线、配置、能力协商和单 Bot runtime 的完整示例
 ---
 
 `ayiou/examples/kitchen_sink.rs` 是一个可编译、可运行的全特性示例。
 
-它不连接真实 OneBot，也不阻塞 Console 输入，而是用内存里的 adapter、store、session store 和 outbound sender 跑一遍 smoke flow。这样你可以安全地用它检查内核 API 是否能组合起来工作。
+它不连接真实 OneBot，也不阻塞 Console 输入，而是用内存里的 adapter 和 outbound sender 跑一遍 smoke flow。这样你可以安全地用它检查内核 API 是否能组合起来工作。
 
 ## 运行方式
 
@@ -26,7 +26,6 @@ cargo test -p ayiou --example kitchen_sink
 ```text
 capability negotiation: Degraded { missing_optional: [Reaction] }
 bonjour secure command args=admin open sesame
-conversation waiting at revision 1
 echo: hello from macro
 plugin macro handled: /hello from macro
 kitchen sink example completed
@@ -111,7 +110,7 @@ fn declared_handlers(&self) -> Vec<HandlerDecl> {
 - `/say hello from macro`：`#[plugin] + #[command]` 生成的命令 handler
 - `/hello from macro`：同一套宏生成的另一个命令 handler
 
-这对应 v0.2 的统一 handler 管线：adapter 产出事件，runtime 做粗筛、rule、permission、session 和 handler 执行。
+这对应 v0.2 的统一 handler 管线：adapter 产出事件，runtime 做粗筛、rule、permission 和 handler 执行。
 
 ### 配置生命周期
 
@@ -131,43 +130,17 @@ engine
 - dry-run：进入 `validated`，不更新 applied version
 - apply：进入 `applied`，更新 applied version
 
-### 会话恢复模型
-
-`KitchenPlugin::demo_conversation()` 使用 `Conversation` 包装底层 `SessionStore`：
-
-```rust
-let mut conversation = Conversation::resume(store.as_ref(), key.clone()).await?;
-let cursor = conversation
-    .wait_next(store.as_ref(), serde_json::json!({ "question": "favorite feature?" }), None)
-    .await?;
-
-conversation.pause(store.as_ref(), "operator review", None).await?;
-conversation.reject(store.as_ref(), "please answer with text", None).await?;
-conversation.finish(store.as_ref()).await?;
-```
-
-它展示了可恢复执行所需的几个动作：
-
-- `resume()`：从 store 恢复已有状态
-- `wait_next()`：保存等待下一次输入的 cursor
-- `pause()`：暂停长流程
-- `reject()`：拒绝当前输入并保留提示
-- `finish()`：完成并清理会话
-
 ### Bot builder 与手动 RuntimePluginEngine
 
 示例还覆盖两个单 Bot 运行入口：
 
 - 默认入口：`Bot::new(adapter).with_plugin(...).run().await`
-- 高级入口：手动构造 `RuntimePluginEngine` 并注入 store、session、metrics、outbound sender
+- 手动入口：构造 `RuntimePluginEngine` 并注入身份、能力和 outbound sender
 
 ```rust
 use ayiou::core::plugin_system::*;
 
-let services = RuntimePluginServices::new(host)
-    .with_identity("bot-a", "console")
-    .with_sessions(sessions)
-    .with_metrics(Arc::new(NoopMetrics));
+let services = RuntimePluginServices::new(host).with_identity("bot-a", "console");
 
 let mut engine = RuntimePluginEngine::with_options(
     services,
@@ -185,7 +158,7 @@ engine.push_as("kitchen-main", Box::new(KitchenPlugin::new()));
 - 你想确认某个 API 应该怎么组合使用
 - 你要写一个手动 `RuntimePlugin`
 - 你要理解 `Bot` builder 和 `RuntimePluginEngine` 的关系
-- 你想看配置、能力协商、会话和 handler 管线如何一起工作
+- 你想看配置、能力协商和 handler 管线如何一起工作
 
 如果只想写普通命令插件，优先看：
 

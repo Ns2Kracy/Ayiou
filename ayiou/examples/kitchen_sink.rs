@@ -145,7 +145,7 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
     fn meta(&self) -> PluginMetadata {
         PluginMetadata::new("kitchen")
             .description(
-                "manual RuntimePlugin covering manifest, handlers, config, session, health",
+                "manual RuntimePlugin covering manifest, handlers, config, capabilities, health",
             )
             .version("0.2.0")
     }

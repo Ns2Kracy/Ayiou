@@ -162,7 +162,6 @@ pub struct HandlerDecl {
     pub block: bool,
     pub wildcard: bool,
     pub concurrency: ConcurrencyPolicy,
-    pub session: SessionPolicy,
 }
 
 impl HandlerDecl {
@@ -177,7 +176,6 @@ impl HandlerDecl {
             block: false,
             wildcard: true,
             concurrency: ConcurrencyPolicy::Parallel,
-            session: SessionPolicy::None,
         }
     }
 
@@ -195,7 +193,6 @@ impl HandlerDecl {
             block: false,
             wildcard: false,
             concurrency: ConcurrencyPolicy::Parallel,
-            session: SessionPolicy::None,
         }
     }
 
@@ -210,7 +207,6 @@ impl HandlerDecl {
             block: false,
             wildcard: false,
             concurrency: ConcurrencyPolicy::Parallel,
-            session: SessionPolicy::None,
         }
     }
 
@@ -255,17 +251,6 @@ pub enum ConcurrencyPolicy {
     Parallel,
     Serialize,
     Drop,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub enum SessionPolicy {
-    #[default]
-    None,
-    User,
-    Channel,
-    Group,
-    PluginInstance,
-    Custom(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
