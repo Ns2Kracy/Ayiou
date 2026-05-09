@@ -8,6 +8,7 @@ use crate::core::{
     model::{BotId, CommandInvocation, PlatformId},
     plugin_host::PluginHost,
     plugin_runtime::{PluginLifecycleState, PluginRuntimeState},
+    service::{RuntimeService, ServiceRegistry},
 };
 
 #[derive(Clone, Debug)]
@@ -338,6 +339,7 @@ pub struct RuntimePluginServices<C> {
     pub bot_id: Option<BotId>,
     pub platform: Option<PlatformId>,
     pub capabilities: Vec<Capability>,
+    pub service_registry: ServiceRegistry,
 }
 
 impl<C> Clone for RuntimePluginServices<C> {
@@ -348,19 +350,21 @@ impl<C> Clone for RuntimePluginServices<C> {
             bot_id: self.bot_id.clone(),
             platform: self.platform.clone(),
             capabilities: self.capabilities.clone(),
+            service_registry: self.service_registry.clone(),
         }
     }
 }
 
 impl<C> RuntimePluginServices<C> {
     #[must_use]
-    pub const fn new(host: PluginHost<C>) -> Self {
+    pub fn new(host: PluginHost<C>) -> Self {
         Self {
             host,
             instance_id: None,
             bot_id: None,
             platform: None,
             capabilities: Vec::new(),
+            service_registry: ServiceRegistry::default(),
         }
     }
 
@@ -385,6 +389,27 @@ impl<C> RuntimePluginServices<C> {
     pub fn with_capabilities(mut self, capabilities: impl IntoIterator<Item = Capability>) -> Self {
         self.capabilities = capabilities.into_iter().collect();
         self
+    }
+
+    #[must_use]
+    pub fn with_service_registry(mut self, service_registry: ServiceRegistry) -> Self {
+        self.service_registry = service_registry;
+        self
+    }
+
+    #[must_use]
+    pub fn service<S>(&self) -> Option<Arc<S>>
+    where
+        S: RuntimeService,
+    {
+        self.service_registry.get::<S>()
+    }
+
+    pub fn require_service<S>(&self) -> Result<Arc<S>>
+    where
+        S: RuntimeService,
+    {
+        self.service_registry.require::<S>()
     }
 
     #[must_use]
@@ -913,7 +938,11 @@ mod tests {
 
     use anyhow::Result;
 
-    use crate::core::{adapter::MsgContext, plugin_host::PluginHost};
+    use crate::core::{
+        adapter::MsgContext,
+        plugin_host::PluginHost,
+        service::{RuntimeService, ServiceRegistry},
+    };
 
     use super::*;
 
@@ -940,6 +969,31 @@ mod tests {
         fn group_id(&self) -> Option<String> {
             self.group_id.clone()
         }
+    }
+
+    #[derive(Debug)]
+    struct TestCounterService {
+        value: usize,
+    }
+
+    impl RuntimeService for TestCounterService {
+        fn name(&self) -> &'static str {
+            "test-counter"
+        }
+    }
+
+    #[test]
+    fn runtime_plugin_services_provide_registered_services() {
+        let host = PluginHost::<TestCtx>::new(None);
+        let mut registry = ServiceRegistry::default();
+        registry.insert(TestCounterService { value: 7 });
+        let services = RuntimePluginServices::new(host).with_service_registry(registry);
+
+        let service = services
+            .require_service::<TestCounterService>()
+            .expect("service should be available");
+
+        assert_eq!(service.value, 7);
     }
 
     struct PriorityPlugin {
