@@ -9,21 +9,42 @@ readme = "../README.md"
 keywords = ["bot", "plugin", "onebot", "chatbot", "framework"]
 categories = ["asynchronous", "network-programming"]
 
+[features]
+default = []
+driver-console = []
+driver-wsclient = ["dep:futures-util", "dep:tokio-tungstenite", "dep:url"]
+driver-mock = []
+adapter-console = ["driver-console"]
+adapter-onebot-v11 = ["driver-wsclient"]
+
 [dependencies]
 anyhow = "1.0.100"
 async-trait = "0.1.89"
 ayiou-macros = { path = "../ayiou-macros" }
 dashmap = "6.1.0"
-futures-util = "0.3.31"
+futures-util = { version = "0.3.31", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.48", features = ["full"] }
-tokio-tungstenite = "0.28.0"
+tokio-tungstenite = { version = "0.28.0", optional = true }
 log = "0.4"
 pretty_env_logger = "0.5"
-url = "2.5.7"
+url = { version = "2.5.7", optional = true }
 regex = "1"
 toml = "0.8"
 
 [dev-dependencies]
 tempfile = "3.25.0"
+trybuild = "1.0"
+
+[[test]]
+name = "onebot_adapter_token"
+required-features = ["adapter-onebot-v11"]
+
+[[test]]
+name = "onebot_sender"
+required-features = ["adapter-onebot-v11"]
+
+[[test]]
+name = "wsdriver_token"
+required-features = ["driver-wsclient"]

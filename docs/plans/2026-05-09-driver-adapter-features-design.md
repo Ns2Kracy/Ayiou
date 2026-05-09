@@ -49,7 +49,6 @@ Convenience bot aliases and constructors follow adapter features:
 Dependencies needed only by optional implementations should become optional:
 
 - `futures-util`, `tokio-tungstenite`, and `url` for `driver-wsclient`
-- `dashmap` and OneBot JSON dependencies for `adapter-onebot-v11`
 
 Shared runtime dependencies remain normal dependencies.
 

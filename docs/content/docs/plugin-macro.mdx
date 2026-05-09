@@ -58,6 +58,8 @@ async fn ban(&self, ctx: &Context, user_id: i64, minutes: Option<u32>) -> anyhow
 
 默认上下文是 `Context`。通用插件优先通过 `Context` 的通用 API 写；确实需要平台专属 API 时，再通过 `ctx.extension::<...>()` 获取。
 
+下面的 OneBot 类型需要依赖启用 `adapter-onebot-v11` feature。
+
 ```rust
 use ayiou::adapter::onebot::v11::{ctx::Ctx, model::Message};
 use ayiou::{command, plugin, Context};

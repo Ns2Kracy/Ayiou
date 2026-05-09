@@ -157,7 +157,7 @@ where
     ctx_rx
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "driver-mock"))]
 mod tests {
     use super::*;
     use crate::driver::mock::MockDriver;

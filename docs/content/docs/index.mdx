@@ -16,6 +16,8 @@ Ayiou 是一个面向 Rust Bot 场景的插件化框架。
 - `RuntimePlugin`：统一插件行为、生命周期、配置和事件处理
 - `Bot` Runtime：负责插件注册、队列和事件分发；多渠道通过 adapter 接入同一个 Bot
 
+默认 `ayiou` 只启用 core runtime、插件 API、宏和共享 trait。内置 driver / adapter 需要显式启用 Cargo feature，例如 `adapter-onebot-v11` 或 `adapter-console`。
+
 ## 插件开发
 
 - `#[plugin] + #[command]`：默认插件编写入口，支持多命令插件与自动参数解析

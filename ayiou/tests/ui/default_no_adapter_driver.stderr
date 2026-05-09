@@ -1,0 +1,32 @@
+error[E0433]: cannot find `adapter` in `ayiou`
+ --> tests/ui/default_no_adapter_driver.rs:2:42
+  |
+2 |     let _ = std::any::type_name::<ayiou::adapter::console::adapter::ConsoleAdapter>();
+  |                                          ^^^^^^^ could not find `adapter` in `ayiou`
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  | #[cfg(any(feature = "adapter-console", feature = "adapter-onebot-v11"))]
+  |          ------------------------------------------------------------- the item is gated here
+  | pub mod adapter;
+  |         ^^^^^^^
+
+error[E0433]: cannot find `driver` in `ayiou`
+ --> tests/ui/default_no_adapter_driver.rs:3:42
+  |
+3 |     let _ = std::any::type_name::<ayiou::driver::wsclient::WsDriver>();
+  |                                          ^^^^^^ could not find `driver` in `ayiou`
+  |
+note: found an item that was configured out
+ --> src/lib.rs
+  |
+  |   #[cfg(any(
+  |  __________-
+  | |     feature = "driver-console",
+  | |     feature = "driver-wsclient",
+  | |     feature = "driver-mock"
+  | | ))]
+  | |_- the item is gated here
+  |   pub mod driver;
+  |           ^^^^^^

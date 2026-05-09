@@ -15,8 +15,14 @@ use crate::core::{
     },
 };
 
+#[cfg(any(feature = "adapter-console", feature = "adapter-onebot-v11"))]
 pub mod adapter;
 pub mod core;
+#[cfg(any(
+    feature = "driver-console",
+    feature = "driver-wsclient",
+    feature = "driver-mock"
+))]
 pub mod driver;
 
 pub use ayiou_macros::{command, plugin};
@@ -274,9 +280,13 @@ fn adapter_capabilities_to_runtime(
     out
 }
 
+#[cfg(feature = "adapter-onebot-v11")]
 pub type OneBotV11Bot = Bot<adapter::onebot::v11::adapter::OneBotV11Adapter>;
+
+#[cfg(feature = "adapter-console")]
 pub type ConsoleBot = Bot<adapter::console::adapter::ConsoleAdapter>;
 
+#[cfg(feature = "adapter-console")]
 impl ConsoleBot {
     #[must_use]
     pub fn console() -> Self {
@@ -285,6 +295,7 @@ impl ConsoleBot {
     }
 }
 
+#[cfg(feature = "adapter-onebot-v11")]
 impl OneBotV11Bot {
     pub fn ws(url: impl Into<String> + Send) -> Self {
         Self::new(adapter::onebot::v11::adapter::OneBotV11Adapter::new(url))
