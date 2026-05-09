@@ -11,6 +11,7 @@ use ayiou::core::adapter::{Adapter, MsgContext};
 use ayiou::core::plugin_system::{
     HandleOutcome, HandlerDecl, PluginMetadata, RuntimePlugin, RuntimePluginServices,
 };
+use ayiou::core::service::RuntimeService;
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -109,6 +110,41 @@ impl RuntimePlugin<TestCtx> for HandlePlugin {
     }
 }
 
+struct TestAclService {
+    allowed_user: String,
+}
+
+impl RuntimeService for TestAclService {
+    fn name(&self) -> &'static str {
+        "test-acl"
+    }
+}
+
+struct ServicePlugin {
+    observed: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl RuntimePlugin<TestCtx> for ServicePlugin {
+    fn kind(&self) -> &'static str {
+        "service-plugin"
+    }
+
+    fn meta(&self) -> PluginMetadata {
+        PluginMetadata::new("service-plugin")
+    }
+
+    async fn init(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
+        let acl = services.require_service::<TestAclService>()?;
+        self.observed.lock().unwrap().push(acl.allowed_user.clone());
+        Ok(())
+    }
+
+    async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        Ok(HandleOutcome::pass())
+    }
+}
+
 #[tokio::test]
 async fn bot_invokes_plugin_start_once_before_exit() {
     let starts = Arc::new(AtomicUsize::new(0));
@@ -135,4 +171,22 @@ async fn bot_drains_queued_events_when_adapter_closes() {
         .expect("bot should exit when adapter channel closes");
 
     assert_eq!(handles.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn bot_registered_services_are_available_during_plugin_init() {
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bot = Bot::new(ClosedAdapter)
+        .with_service(TestAclService {
+            allowed_user: "admin".to_string(),
+        })
+        .with_plugin(ServicePlugin {
+            observed: observed.clone(),
+        });
+
+    tokio::time::timeout(Duration::from_millis(200), bot.run())
+        .await
+        .expect("bot should exit when adapter channel closes");
+
+    assert_eq!(*observed.lock().unwrap(), vec!["admin".to_string()]);
 }

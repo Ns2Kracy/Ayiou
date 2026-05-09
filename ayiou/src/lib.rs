@@ -13,6 +13,7 @@ use crate::core::{
         DispatchOptions, RegisteredPlugin, RuntimePlugin, RuntimePluginEngine,
         RuntimePluginServices,
     },
+    service::{RuntimeService, ServiceRegistry},
 };
 
 #[cfg(any(feature = "adapter-console", feature = "adapter-onebot-v11"))]
@@ -57,6 +58,7 @@ impl Default for BotRuntimeOptions {
 pub struct Bot<A: Adapter> {
     adapter: A,
     plugins: Vec<RegisteredPlugin<A::Ctx>>,
+    service_registry: ServiceRegistry,
     dispatch_options: DispatchOptions,
     runtime_options: BotRuntimeOptions,
 }
@@ -161,6 +163,7 @@ impl<A: Adapter> Bot<A> {
         Self {
             adapter,
             plugins: Vec::new(),
+            service_registry: ServiceRegistry::default(),
             dispatch_options: DispatchOptions::default(),
             runtime_options: BotRuntimeOptions::default(),
         }
@@ -200,6 +203,15 @@ impl<A: Adapter> Bot<A> {
     }
 
     #[must_use]
+    pub fn with_service<S>(mut self, service: S) -> Self
+    where
+        S: RuntimeService,
+    {
+        self.service_registry.insert(service);
+        self
+    }
+
+    #[must_use]
     pub fn with_plugin<P: RuntimePlugin<A::Ctx>>(mut self, plugin: P) -> Self {
         self.plugins
             .push(RegisteredPlugin::from_plugin(Box::new(plugin)));
@@ -226,7 +238,8 @@ impl<A: Adapter> Bot<A> {
         let plugin_host = PluginHost::new(adapter_runtime.sender.clone());
         let mut engine = RuntimePluginEngine::with_options(
             RuntimePluginServices::new(plugin_host)
-                .with_capabilities(adapter_capabilities_to_runtime(&adapter_capabilities)),
+                .with_capabilities(adapter_capabilities_to_runtime(&adapter_capabilities))
+                .with_service_registry(self.service_registry.clone()),
             runtime_state.clone(),
             self.dispatch_options.clone(),
         );
