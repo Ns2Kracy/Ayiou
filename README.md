@@ -27,6 +27,13 @@ let bot = Bot::new(adapter)
 ```
 
 ```rust
+fn manifest(&self) -> RuntimePluginManifest {
+    RuntimePluginManifest::new("admin")
+        .require_service::<AclService>()
+}
+```
+
+```rust
 async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Result<()> {
     self.acl = Some(services.require_service::<AclService>()?);
     Ok(())

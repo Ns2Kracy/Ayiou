@@ -160,6 +160,7 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
             .version("0.2.0")
             .require_capability(Capability::ProactiveSend)
             .optional_capability(Capability::Reaction)
+            .require_service::<GreetingService>()
     }
 
     fn declared_handlers(&self) -> Vec<HandlerDecl> {

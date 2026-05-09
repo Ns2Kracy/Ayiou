@@ -33,7 +33,7 @@ kitchen sink example completed
 
 ## Runtime Services
 
-This example registers a host-provided `GreetingService` on `Bot`, then requests it from `RuntimePluginServices` during `KitchenPlugin::init()`.
+This example registers a host-provided `GreetingService` on `Bot`, declares it in `KitchenPlugin::manifest()`, then requests it from `RuntimePluginServices` during `KitchenPlugin::init()`.
 
 Plugins should not call other plugin instances directly. Register host-provided services on `Bot`, then request them from `RuntimePluginServices` during plugin initialization:
 
@@ -41,6 +41,13 @@ Plugins should not call other plugin instances directly. Register host-provided 
 let bot = Bot::new(adapter)
     .with_service(AclService::new())
     .with_plugin(AdminPlugin);
+```
+
+```rust
+fn manifest(&self) -> RuntimePluginManifest {
+    RuntimePluginManifest::new("admin")
+        .require_service::<AclService>()
+}
 ```
 
 ```rust
@@ -105,6 +112,7 @@ fn manifest(&self) -> RuntimePluginManifest {
     RuntimePluginManifest::new(self.kind())
         .require_capability(Capability::ProactiveSend)
         .optional_capability(Capability::Reaction)
+        .require_service::<GreetingService>()
 }
 
 fn declared_handlers(&self) -> Vec<HandlerDecl> {

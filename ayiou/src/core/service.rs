@@ -14,6 +14,35 @@ pub trait RuntimeService: Send + Sync + 'static {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ServiceKey {
+    type_id: TypeId,
+    type_name: &'static str,
+}
+
+impl ServiceKey {
+    #[must_use]
+    pub fn of<S>() -> Self
+    where
+        S: RuntimeService,
+    {
+        Self {
+            type_id: TypeId::of::<S>(),
+            type_name: type_name::<S>(),
+        }
+    }
+
+    #[must_use]
+    pub fn type_id(&self) -> TypeId {
+        self.type_id
+    }
+
+    #[must_use]
+    pub fn type_name(&self) -> &'static str {
+        self.type_name
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ServiceRegistry {
     services: Arc<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
@@ -25,6 +54,11 @@ impl ServiceRegistry {
         S: RuntimeService,
     {
         Arc::make_mut(&mut self.services).insert(TypeId::of::<S>(), Arc::new(service));
+    }
+
+    #[must_use]
+    pub fn contains_key(&self, key: &ServiceKey) -> bool {
+        self.services.contains_key(&key.type_id)
     }
 
     #[must_use]
@@ -99,5 +133,13 @@ mod tests {
             err.to_string()
                 .contains(std::any::type_name::<MissingService>())
         );
+    }
+
+    #[test]
+    fn service_key_captures_type_metadata() {
+        let key = ServiceKey::of::<CounterService>();
+
+        assert_eq!(key.type_id(), TypeId::of::<CounterService>());
+        assert_eq!(key.type_name(), std::any::type_name::<CounterService>());
     }
 }
