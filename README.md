@@ -39,3 +39,5 @@ async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Re
     Ok(())
 }
 ```
+
+Required service declarations are preflighted before any plugin `init()` runs, so a missing dependency fails startup without partially initializing the plugin set.
