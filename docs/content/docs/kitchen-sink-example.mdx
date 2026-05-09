@@ -31,6 +31,25 @@ plugin macro handled: /hello
 kitchen sink example completed
 ```
 
+## Runtime Services
+
+This example registers a host-provided `GreetingService` on `Bot`, then requests it from `RuntimePluginServices` during `KitchenPlugin::init()`.
+
+Plugins should not call other plugin instances directly. Register host-provided services on `Bot`, then request them from `RuntimePluginServices` during plugin initialization:
+
+```rust
+let bot = Bot::new(adapter)
+    .with_service(AclService::new())
+    .with_plugin(AdminPlugin);
+```
+
+```rust
+async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Result<()> {
+    self.acl = Some(services.require_service::<AclService>()?);
+    Ok(())
+}
+```
+
 ## 覆盖了什么
 
 ### 宏生成 RuntimePlugin
@@ -130,6 +149,9 @@ self.apply_config(ConfigUpdate::new(2, "bonjour")).await?;
 
 ```rust
 Bot::new(adapter)
+    .with_service(GreetingService {
+        greeting: "host service".to_string(),
+    })
     .with_plugin(HelloPlugin)
     .with_plugin(ToolsPlugin)
     .with_plugin_as("kitchen-main", KitchenPlugin::new())

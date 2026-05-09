@@ -110,8 +110,19 @@ struct KitchenConfig {
     greeting: String,
 }
 
+struct GreetingService {
+    greeting: String,
+}
+
+impl ayiou::core::service::RuntimeService for GreetingService {
+    fn name(&self) -> &'static str {
+        "greeting"
+    }
+}
+
 struct KitchenPlugin {
     config: KitchenConfig,
+    service_greeting: String,
     seen: Arc<Mutex<Vec<String>>>,
     services: Option<RuntimePluginServices<DemoCtx>>,
 }
@@ -122,6 +133,7 @@ impl KitchenPlugin {
             config: KitchenConfig {
                 greeting: "hello".to_string(),
             },
+            service_greeting: String::new(),
             seen: Arc::new(Mutex::new(Vec::new())),
             services: None,
         }
@@ -166,6 +178,10 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
         let negotiation =
             negotiate_capabilities(&self.manifest(), &services.provided_capabilities());
         println!("capability negotiation: {negotiation:?}");
+        self.service_greeting = services
+            .require_service::<GreetingService>()?
+            .greeting
+            .clone();
         self.services = Some(services);
         Ok(())
     }
@@ -223,7 +239,10 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
                 .host
                 .send_text(
                     message.channel.clone(),
-                    format!("{} from kitchen", self.config.greeting),
+                    format!(
+                        "{} from kitchen via {}",
+                        self.config.greeting, self.service_greeting
+                    ),
                 )
                 .await?;
         }
@@ -307,6 +326,9 @@ async fn run_bot_demo() -> Result<()> {
     });
 
     Bot::new(DemoAdapter { sender })
+        .with_service(GreetingService {
+            greeting: "host service".to_string(),
+        })
         .with_plugin(HelloPlugin)
         .with_plugin(ToolsPlugin)
         .with_plugin_as("kitchen-main", KitchenPlugin::new())
@@ -323,6 +345,13 @@ async fn run_bot_demo() -> Result<()> {
             .iter()
             .any(|message| message.contains("bonjour"))
     );
+    assert!(
+        sent_messages
+            .lock()
+            .expect("messages lock")
+            .iter()
+            .any(|message| message.contains("host service"))
+    );
     Ok(())
 }
 
@@ -331,4 +360,16 @@ async fn main() -> Result<()> {
     run_bot_demo().await?;
     println!("kitchen sink example completed");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bot_demo_uses_runtime_services() {
+        run_bot_demo()
+            .await
+            .expect("kitchen sink demo should complete");
+    }
 }

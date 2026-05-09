@@ -15,3 +15,20 @@ For local console development:
 ```toml
 ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["adapter-console"] }
 ```
+
+## Runtime Services
+
+Plugins should not call other plugin instances directly. Register host-provided services on `Bot`, then request them from `RuntimePluginServices` during plugin initialization:
+
+```rust
+let bot = Bot::new(adapter)
+    .with_service(AclService::new())
+    .with_plugin(AdminPlugin);
+```
+
+```rust
+async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Result<()> {
+    self.acl = Some(services.require_service::<AclService>()?);
+    Ok(())
+}
+```

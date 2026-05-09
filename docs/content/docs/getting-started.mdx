@@ -110,6 +110,23 @@ if let Some(onebot) = ctx.extension::<Ctx>() {
 
 默认入口只推荐 `#[plugin] + #[command]`。如果需要非命令 handler、能力声明、配置生命周期或复杂会话控制，手写 `RuntimePlugin` 并从 `ayiou::core::plugin_system` 引入运行时类型。
 
+## Runtime Services
+
+Plugins should not call other plugin instances directly. Register host-provided services on `Bot`, then request them from `RuntimePluginServices` during plugin initialization:
+
+```rust
+let bot = Bot::new(adapter)
+    .with_service(AclService::new())
+    .with_plugin(AdminPlugin);
+```
+
+```rust
+async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Result<()> {
+    self.acl = Some(services.require_service::<AclService>()?);
+    Ok(())
+}
+```
+
 ## 常用 Context API
 
 - `ctx.text() -> String`
