@@ -8,3 +8,4 @@ pub mod plugin_host;
 pub mod plugin_runtime;
 pub mod plugin_system;
 pub mod runtime;
+pub mod service;
