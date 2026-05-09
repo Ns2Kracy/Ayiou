@@ -41,3 +41,5 @@ async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Re
 ```
 
 Required service declarations are preflighted before any plugin `init()` runs, so a missing dependency fails startup without partially initializing the plugin set.
+
+For diagnostics or adaptive behavior, plugins can inspect registered service metadata through `services.service_descriptors()`. Descriptors include the service type key, `RuntimeService::name()`, and `RuntimeService::version()`.

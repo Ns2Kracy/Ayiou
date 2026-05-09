@@ -8,7 +8,7 @@ use crate::core::{
     model::{BotId, CommandInvocation, PlatformId},
     plugin_host::PluginHost,
     plugin_runtime::{PluginLifecycleState, PluginRuntimeState},
-    service::{RuntimeService, ServiceKey, ServiceRegistry},
+    service::{RuntimeService, ServiceDescriptor, ServiceKey, ServiceRegistry},
 };
 
 #[derive(Clone, Debug)]
@@ -432,6 +432,19 @@ impl<C> RuntimePluginServices<C> {
         S: RuntimeService,
     {
         self.service_registry.require::<S>()
+    }
+
+    #[must_use]
+    pub fn service_descriptor<S>(&self) -> Option<ServiceDescriptor>
+    where
+        S: RuntimeService,
+    {
+        self.service_registry.descriptor::<S>()
+    }
+
+    #[must_use]
+    pub fn service_descriptors(&self) -> Vec<ServiceDescriptor> {
+        self.service_registry.descriptors()
     }
 
     #[must_use]
@@ -1089,6 +1102,23 @@ mod tests {
             .expect("service should be available");
 
         assert_eq!(service.value, 7);
+    }
+
+    #[test]
+    fn runtime_plugin_services_describe_registered_services() {
+        let host = PluginHost::<TestCtx>::new(None);
+        let mut registry = ServiceRegistry::default();
+        registry.insert(TestCounterService { value: 7 });
+        let services = RuntimePluginServices::new(host).with_service_registry(registry);
+
+        let descriptor = services
+            .service_descriptor::<TestCounterService>()
+            .expect("counter service should have a descriptor");
+
+        assert_eq!(descriptor.key, ServiceKey::of::<TestCounterService>());
+        assert_eq!(descriptor.name, "test-counter");
+        assert_eq!(descriptor.version, "0.1.0");
+        assert_eq!(services.service_descriptors(), vec![descriptor]);
     }
 
     #[test]
