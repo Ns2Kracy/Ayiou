@@ -6,11 +6,33 @@ use std::{
 
 use anyhow::{Result, anyhow};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceHealth {
+    pub healthy: bool,
+    pub ready: bool,
+    pub detail: Option<String>,
+}
+
+impl ServiceHealth {
+    #[must_use]
+    pub const fn healthy() -> Self {
+        Self {
+            healthy: true,
+            ready: true,
+            detail: None,
+        }
+    }
+}
+
 pub trait RuntimeService: Send + Sync + 'static {
     fn name(&self) -> &'static str;
 
     fn version(&self) -> &'static str {
         "0.1.0"
+    }
+
+    fn health(&self) -> ServiceHealth {
+        ServiceHealth::healthy()
     }
 }
 
@@ -64,9 +86,16 @@ impl ServiceDescriptor {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceSnapshot {
+    pub descriptor: ServiceDescriptor,
+    pub health: ServiceHealth,
+}
+
 #[derive(Clone)]
 struct RegisteredService {
     descriptor: ServiceDescriptor,
+    health: Arc<dyn Fn() -> ServiceHealth + Send + Sync>,
     service: Arc<dyn Any + Send + Sync>,
 }
 
@@ -80,11 +109,14 @@ impl ServiceRegistry {
     where
         S: RuntimeService,
     {
+        let service = Arc::new(service);
+        let health_service = service.clone();
         Arc::make_mut(&mut self.services).insert(
             TypeId::of::<S>(),
             RegisteredService {
-                descriptor: ServiceDescriptor::of(&service),
-                service: Arc::new(service),
+                descriptor: ServiceDescriptor::of(service.as_ref()),
+                health: Arc::new(move || health_service.health()),
+                service,
             },
         );
     }
@@ -135,6 +167,43 @@ impl ServiceRegistry {
     }
 
     #[must_use]
+    pub fn snapshot<S>(&self) -> Option<ServiceSnapshot>
+    where
+        S: RuntimeService,
+    {
+        self.snapshot_for_key(&ServiceKey::of::<S>())
+    }
+
+    #[must_use]
+    pub fn snapshot_for_key(&self, key: &ServiceKey) -> Option<ServiceSnapshot> {
+        self.services
+            .get(&key.type_id)
+            .map(|registered| ServiceSnapshot {
+                descriptor: registered.descriptor.clone(),
+                health: (registered.health)(),
+            })
+    }
+
+    #[must_use]
+    pub fn snapshots(&self) -> Vec<ServiceSnapshot> {
+        let mut snapshots: Vec<_> = self
+            .services
+            .values()
+            .map(|registered| ServiceSnapshot {
+                descriptor: registered.descriptor.clone(),
+                health: (registered.health)(),
+            })
+            .collect();
+        snapshots.sort_by(|left, right| {
+            left.descriptor
+                .key
+                .type_name
+                .cmp(right.descriptor.key.type_name)
+        });
+        snapshots
+    }
+
+    #[must_use]
     pub fn get<S>(&self) -> Option<Arc<S>>
     where
         S: RuntimeService,
@@ -180,6 +249,22 @@ mod tests {
 
         fn version(&self) -> &'static str {
             self.version
+        }
+    }
+
+    struct UnreadyService;
+
+    impl RuntimeService for UnreadyService {
+        fn name(&self) -> &'static str {
+            "unready"
+        }
+
+        fn health(&self) -> ServiceHealth {
+            ServiceHealth {
+                healthy: true,
+                ready: false,
+                detail: Some("warming up".to_string()),
+            }
         }
     }
 
@@ -269,5 +354,34 @@ mod tests {
         assert_eq!(service.value, 2);
         assert_eq!(descriptor.version, "2.0.0");
         assert_eq!(registry.descriptors(), vec![descriptor]);
+    }
+
+    #[test]
+    fn runtime_service_health_defaults_to_healthy_ready() {
+        let service = CounterService { value: 42 };
+
+        assert_eq!(service.health(), ServiceHealth::healthy());
+    }
+
+    #[test]
+    fn service_registry_reports_service_health() {
+        let mut registry = ServiceRegistry::default();
+
+        registry.insert(UnreadyService);
+
+        let snapshot = registry
+            .snapshot::<UnreadyService>()
+            .expect("unready service should have a snapshot");
+
+        assert_eq!(snapshot.descriptor.name, "unready");
+        assert_eq!(
+            snapshot.health,
+            ServiceHealth {
+                healthy: true,
+                ready: false,
+                detail: Some("warming up".to_string()),
+            }
+        );
+        assert_eq!(registry.snapshots(), vec![snapshot]);
     }
 }

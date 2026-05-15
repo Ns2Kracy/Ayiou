@@ -198,6 +198,10 @@ v0.2 增加能力声明：
 
 启动前要求可以通过 `RuntimePluginEngine::validate_startup_requirements()` 读取结构化报告。报告列出每个失败插件缺少的 capability 和 service；`init_all()` 使用同一条预检路径，所以失败时不会部分初始化插件集合。
 
+服务本身也有独立于插件的可观测状态：`RuntimeService::health()` 默认返回 healthy/ready，运行时可以通过 service snapshot API 读取服务描述、版本和健康信息。插件侧通过 `RuntimePluginServices::service_snapshot::<S>()` 或 `service_snapshots()` 读取这些快照，不需要下转型或拿到 registry 内部结构。
+
+当前 readiness 只作为诊断信号，不会自动阻断启动：缺失的 required service 会让 preflight 失败，但已注册且暂未 ready 的 required service 不会隐式让插件进入 failed。是否把 readiness 变成启动策略，需要单独设计明确的 policy。
+
 ## 6. 单 Bot，多渠道来源回复
 
 Ayiou 的 Bot 是开发者定义的业务实例，不是外部平台账号。一个 Bot 可以接多个 adapter/channel source。

@@ -8,7 +8,7 @@ use crate::core::{
     model::{BotId, CommandInvocation, PlatformId},
     plugin_host::PluginHost,
     plugin_runtime::{PluginInstanceState, PluginLifecycleState, PluginRuntimeState},
-    service::{RuntimeService, ServiceDescriptor, ServiceKey, ServiceRegistry},
+    service::{RuntimeService, ServiceDescriptor, ServiceKey, ServiceRegistry, ServiceSnapshot},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -445,6 +445,19 @@ impl<C> RuntimePluginServices<C> {
     #[must_use]
     pub fn service_descriptors(&self) -> Vec<ServiceDescriptor> {
         self.service_registry.descriptors()
+    }
+
+    #[must_use]
+    pub fn service_snapshot<S>(&self) -> Option<ServiceSnapshot>
+    where
+        S: RuntimeService,
+    {
+        self.service_registry.snapshot::<S>()
+    }
+
+    #[must_use]
+    pub fn service_snapshots(&self) -> Vec<ServiceSnapshot> {
+        self.service_registry.snapshots()
     }
 
     #[must_use]
@@ -1150,6 +1163,22 @@ mod tests {
         }
     }
 
+    struct UnreadyTestService;
+
+    impl RuntimeService for UnreadyTestService {
+        fn name(&self) -> &'static str {
+            "unready-test"
+        }
+
+        fn health(&self) -> crate::core::service::ServiceHealth {
+            crate::core::service::ServiceHealth {
+                healthy: true,
+                ready: false,
+                detail: Some("warming up".to_string()),
+            }
+        }
+    }
+
     #[test]
     fn runtime_plugin_services_provide_registered_services() {
         let host = PluginHost::<TestCtx>::new(None);
@@ -1179,6 +1208,29 @@ mod tests {
         assert_eq!(descriptor.name, "test-counter");
         assert_eq!(descriptor.version, "0.1.0");
         assert_eq!(services.service_descriptors(), vec![descriptor]);
+    }
+
+    #[test]
+    fn runtime_plugin_services_report_service_health_snapshots() {
+        let host = PluginHost::<TestCtx>::new(None);
+        let mut registry = ServiceRegistry::default();
+        registry.insert(UnreadyTestService);
+        let services = RuntimePluginServices::new(host).with_service_registry(registry);
+
+        let snapshot = services
+            .service_snapshot::<UnreadyTestService>()
+            .expect("unready service should have a snapshot");
+
+        assert_eq!(snapshot.descriptor.name, "unready-test");
+        assert_eq!(
+            snapshot.health,
+            crate::core::service::ServiceHealth {
+                healthy: true,
+                ready: false,
+                detail: Some("warming up".to_string()),
+            }
+        );
+        assert_eq!(services.service_snapshots(), vec![snapshot]);
     }
 
     #[test]
@@ -1669,6 +1721,30 @@ mod tests {
         engine.push(Box::new(DependencyPlugin {
             manifest: RuntimePluginManifest::new("dependency")
                 .require_service::<TestCounterService>(),
+            init_calls: init_calls.clone(),
+        }));
+
+        engine.init_all().await.unwrap();
+        let snapshot = state.snapshot("dependency");
+
+        assert_eq!(*init_calls.lock().unwrap(), 1);
+        assert_ne!(snapshot.lifecycle_state, PluginLifecycleState::Failed);
+        assert!(snapshot.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn required_service_readiness_policy_is_explicit() {
+        let host = PluginHost::new(None);
+        let mut registry = ServiceRegistry::default();
+        registry.insert(UnreadyTestService);
+        let services = RuntimePluginServices::new(host).with_service_registry(registry);
+        let state = PluginRuntimeState::default();
+        let init_calls = Arc::new(std::sync::Mutex::new(0));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push(Box::new(DependencyPlugin {
+            manifest: RuntimePluginManifest::new("dependency")
+                .require_service::<UnreadyTestService>(),
             init_calls: init_calls.clone(),
         }));
 
