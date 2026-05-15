@@ -8,6 +8,7 @@ use ayiou::{
     Bot,
     core::{
         adapter::{Adapter, AdapterCapabilities, AdapterRuntime, MsgContext},
+        event_bus::{RuntimeEvent, RuntimeEventBus},
         model::{
             ChannelKind, ChannelRef, CommandInvocation, EventEnvelope, MessageEvent,
             OutboundMessage, OutboundReceipt, PlatformId, UserRef,
@@ -120,9 +121,21 @@ impl ayiou::core::service::RuntimeService for GreetingService {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KitchenNotice {
+    text: String,
+}
+
+impl RuntimeEvent for KitchenNotice {
+    fn topic() -> &'static str {
+        "kitchen-notice"
+    }
+}
+
 struct KitchenPlugin {
     config: KitchenConfig,
     service_greeting: String,
+    event_bus: Option<Arc<RuntimeEventBus>>,
     seen: Arc<Mutex<Vec<String>>>,
     services: Option<RuntimePluginServices<DemoCtx>>,
 }
@@ -134,6 +147,7 @@ impl KitchenPlugin {
                 greeting: "hello".to_string(),
             },
             service_greeting: String::new(),
+            event_bus: None,
             seen: Arc::new(Mutex::new(Vec::new())),
             services: None,
         }
@@ -161,6 +175,7 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
             .require_capability(Capability::ProactiveSend)
             .optional_capability(Capability::Reaction)
             .require_service::<GreetingService>()
+            .require_service::<RuntimeEventBus>()
     }
 
     fn declared_handlers(&self) -> Vec<HandlerDecl> {
@@ -183,6 +198,7 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
             .require_service::<GreetingService>()?
             .greeting
             .clone();
+        self.event_bus = Some(services.require_service::<RuntimeEventBus>()?);
         self.services = Some(services);
         Ok(())
     }
@@ -230,6 +246,9 @@ impl RuntimePlugin<DemoCtx> for KitchenPlugin {
             .lock()
             .expect("seen lock")
             .push(format!("regex:{}", ctx.text()));
+        if let Some(event_bus) = &self.event_bus {
+            let _ = event_bus.publish(KitchenNotice { text: ctx.text() })?;
+        }
 
         if let Some(message) = ctx.envelope.message() {
             let services = self
@@ -325,8 +344,11 @@ async fn run_bot_demo() -> Result<()> {
     let sender = Arc::new(RecordingSender {
         messages: sent_messages.clone(),
     });
+    let event_bus = RuntimeEventBus::new(8);
+    let mut kitchen_events = event_bus.subscribe::<KitchenNotice>();
 
     Bot::new(DemoAdapter { sender })
+        .with_service(event_bus)
         .with_service(GreetingService {
             greeting: "host service".to_string(),
         })
@@ -353,6 +375,10 @@ async fn run_bot_demo() -> Result<()> {
             .iter()
             .any(|message| message.contains("host service"))
     );
+    let kitchen_notice = kitchen_events
+        .try_recv()
+        .expect("kitchen plugin should publish a typed runtime event");
+    assert!(kitchen_notice.text.contains("kitchen sink"));
     Ok(())
 }
 

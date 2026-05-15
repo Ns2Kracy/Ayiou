@@ -93,6 +93,8 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
 
 这里最关键的不是 trait 名字，而是“命令插件、正则插件、状态插件，最后都进入同一个实例运行时”。
 
+运行时对外暴露只读 `RuntimePluginSnapshot` 清单，用于控制面、CLI 诊断和健康检查。snapshot 包含 instance id、metadata、manifest、当前 lifecycle/config state 和 `health()`，但不会触发 `init()` / `start()` / `stop()` 等生命周期 hook。
+
 ## 2. 用 Handler 管线替代 commands/wildcard 二分法
 
 旧分发模型是：
@@ -193,6 +195,12 @@ v0.2 增加能力声明：
 - 启动失败
 
 这样插件作者可以先在 manifest 层声明约束，再在 handler 中按能力接口使用。
+
+启动前要求可以通过 `RuntimePluginEngine::validate_startup_requirements()` 读取结构化报告。报告列出每个失败插件缺少的 capability 和 service；`init_all()` 使用同一条预检路径，所以失败时不会部分初始化插件集合。
+
+服务本身也有独立于插件的可观测状态：`RuntimeService::health()` 默认返回 healthy/ready，运行时可以通过 service snapshot API 读取服务描述、版本和健康信息。插件侧通过 `RuntimePluginServices::service_snapshot::<S>()` 或 `service_snapshots()` 读取这些快照，不需要下转型或拿到 registry 内部结构。
+
+当前 readiness 只作为诊断信号，不会自动阻断启动：缺失的 required service 会让 preflight 失败，但已注册且暂未 ready 的 required service 不会隐式让插件进入 failed。是否把 readiness 变成启动策略，需要单独设计明确的 policy。
 
 ## 6. 单 Bot，多渠道来源回复
 

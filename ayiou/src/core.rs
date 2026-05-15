@@ -3,6 +3,7 @@ pub mod command;
 pub mod config_store;
 pub mod context;
 pub mod driver;
+pub mod event_bus;
 pub mod model;
 pub mod plugin_host;
 pub mod plugin_runtime;

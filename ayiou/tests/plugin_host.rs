@@ -9,9 +9,10 @@ use async_trait::async_trait;
 use ayiou::Bot;
 use ayiou::core::adapter::{Adapter, MsgContext};
 use ayiou::core::plugin_system::{
-    HandleOutcome, HandlerDecl, PluginMetadata, RuntimePlugin, RuntimePluginServices,
+    HandleOutcome, HandlerDecl, PluginMetadata, RuntimePlugin, RuntimePluginManifest,
+    RuntimePluginServices,
 };
-use ayiou::core::service::RuntimeService;
+use ayiou::core::service::{RuntimeService, ServiceRegistry};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -134,10 +135,39 @@ impl RuntimePlugin<TestCtx> for ServicePlugin {
         PluginMetadata::new("service-plugin")
     }
 
+    fn manifest(&self) -> RuntimePluginManifest {
+        RuntimePluginManifest::new("service-plugin").require_service::<TestAclService>()
+    }
+
     async fn init(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
         let acl = services.require_service::<TestAclService>()?;
         self.observed.lock().unwrap().push(acl.allowed_user.clone());
         Ok(())
+    }
+
+    async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        Ok(HandleOutcome::pass())
+    }
+}
+
+struct ServiceProviderPlugin {
+    allowed_user: String,
+}
+
+#[async_trait]
+impl RuntimePlugin<TestCtx> for ServiceProviderPlugin {
+    fn kind(&self) -> &'static str {
+        "service-provider-plugin"
+    }
+
+    fn meta(&self) -> PluginMetadata {
+        PluginMetadata::new("service-provider-plugin")
+    }
+
+    fn register_services(&mut self, registry: &mut ServiceRegistry) -> Result<()> {
+        registry.try_insert(TestAclService {
+            allowed_user: self.allowed_user.clone(),
+        })
     }
 
     async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
@@ -189,4 +219,22 @@ async fn bot_registered_services_are_available_during_plugin_init() {
         .expect("bot should exit when adapter channel closes");
 
     assert_eq!(*observed.lock().unwrap(), vec!["admin".to_string()]);
+}
+
+#[tokio::test]
+async fn bot_plugin_provided_services_are_available_during_plugin_init() {
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let bot = Bot::new(ClosedAdapter)
+        .with_plugin(ServiceProviderPlugin {
+            allowed_user: "plugin-admin".to_string(),
+        })
+        .with_plugin(ServicePlugin {
+            observed: observed.clone(),
+        });
+
+    tokio::time::timeout(Duration::from_millis(200), bot.run())
+        .await
+        .expect("bot should exit when adapter channel closes");
+
+    assert_eq!(*observed.lock().unwrap(), vec!["plugin-admin".to_string()]);
 }
