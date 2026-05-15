@@ -63,6 +63,8 @@ For diagnostics or adaptive behavior, plugins can inspect registered service met
 
 Plugins can also provide services by implementing `register_services()` and inserting lightweight service facades into the runtime registry. Consumer plugins still depend on the service type, not on the provider plugin instance.
 
+The example also registers `RuntimeEventBus` as a service. `KitchenPlugin` declares the bus in its manifest and publishes a typed `KitchenNotice` event from its regex handler; the demo subscribes to the same bus to verify local runtime-scoped event delivery.
+
 ## 覆盖了什么
 
 ### 宏生成 RuntimePlugin
