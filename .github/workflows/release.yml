@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish crates
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+
+      - name: Use Rust stable
+        run: rustup default stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check tag matches workspace package versions
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          ayiou_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ayiou") | .version')"
+          macros_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ayiou-macros") | .version')"
+          test "$version" = "$ayiou_version"
+          test "$version" = "$macros_version"
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test without default features
+        run: cargo test -p ayiou --no-default-features
+
+      - name: Test all features
+        run: cargo test -p ayiou --all-features
+
+      - name: Test workspace defaults
+        run: cargo test --workspace
+
+      - name: Build examples
+        run: cargo build -p ayiou --all-features --examples
+
+      - name: Package macro crate
+        run: cargo package -p ayiou-macros --locked
+
+      - name: Authenticate to crates.io with Trusted Publishing
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1.0.4
+        continue-on-error: true
+
+      - name: Publish macro crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if cargo search ayiou-macros --limit 1 | grep -q "^ayiou-macros = \"$version\""; then
+            echo "ayiou-macros $version is already published."
+          else
+            cargo publish -p ayiou-macros --locked
+          fi
+
+      - name: Wait for macro crate index
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in {1..30}; do
+            if cargo search ayiou-macros --limit 1 | grep -q "^ayiou-macros = \"$version\""; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "ayiou-macros was not visible in the crates.io index in time" >&2
+          exit 1
+
+      - name: Package runtime crate
+        run: cargo package -p ayiou --locked
+
+      - name: Publish runtime crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if cargo search ayiou --limit 1 | grep -q "^ayiou = \"$version\""; then
+            echo "ayiou $version is already published."
+          else
+            cargo publish -p ayiou --locked
+          fi

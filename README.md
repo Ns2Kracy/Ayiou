@@ -43,3 +43,20 @@ async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Re
 Required service declarations are preflighted before any plugin `init()` runs, so a missing dependency fails startup without partially initializing the plugin set.
 
 For diagnostics or adaptive behavior, plugins can inspect registered service metadata through `services.service_descriptors()`. Descriptors include the service type key, `RuntimeService::name()`, and `RuntimeService::version()`.
+
+## Release
+
+Releases are published by `.github/workflows/release.yml` when a version tag is pushed:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The tag version must match both workspace package versions. The workflow publishes `ayiou-macros` first, waits until it is visible in the crates.io index, then publishes `ayiou`.
+
+For the first crates.io release, add a repository secret named `CARGO_REGISTRY_TOKEN` with a crates.io API token. After the first release, configure crates.io Trusted Publishing for both `ayiou-macros` and `ayiou` and remove the long-lived token if desired:
+
+- Repository: `Ns2Kracy/Ayiou`
+- Workflow: `.github/workflows/release.yml`
+- Environment: `crates-io`
