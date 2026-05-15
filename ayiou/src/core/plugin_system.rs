@@ -627,13 +627,13 @@ fn missing_required_services(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct InitRequirementFailure {
-    instance_id: String,
-    missing_capabilities: Vec<Capability>,
-    missing_services: Vec<ServiceKey>,
+pub struct PluginRequirementFailure {
+    pub instance_id: String,
+    pub missing_capabilities: Vec<Capability>,
+    pub missing_services: Vec<ServiceKey>,
 }
 
-impl InitRequirementFailure {
+impl PluginRequirementFailure {
     fn message(&self) -> String {
         let mut parts = Vec::new();
         if !self.missing_capabilities.is_empty() {
@@ -727,12 +727,11 @@ where
     }
 
     pub async fn init_all(&mut self) -> Result<()> {
-        let provided_capabilities = self.services.provided_capabilities();
-        let failures = self.init_requirement_failures(&provided_capabilities);
+        let failures = self.validate_startup_requirements();
         if !failures.is_empty() {
             let messages: Vec<_> = failures
                 .iter()
-                .map(InitRequirementFailure::message)
+                .map(PluginRequirementFailure::message)
                 .collect();
             for (failure, message) in failures.iter().zip(&messages) {
                 self.runtime_state
@@ -762,17 +761,16 @@ where
         Ok(())
     }
 
-    fn init_requirement_failures(
-        &self,
-        provided_capabilities: &[Capability],
-    ) -> Vec<InitRequirementFailure> {
+    #[must_use]
+    pub fn validate_startup_requirements(&self) -> Vec<PluginRequirementFailure> {
+        let provided_capabilities = self.services.provided_capabilities();
         self.plugins
             .iter()
             .filter_map(|registered| {
                 let manifest = registered.plugin().manifest();
                 let missing_capabilities =
                     if let CapabilityNegotiation::Failed { missing_required } =
-                        negotiate_capabilities(&manifest, provided_capabilities)
+                        negotiate_capabilities(&manifest, &provided_capabilities)
                     {
                         missing_required
                     } else {
@@ -782,7 +780,7 @@ where
                     missing_required_services(&manifest, &self.services.service_registry);
 
                 (!missing_capabilities.is_empty() || !missing_services.is_empty()).then(|| {
-                    InitRequirementFailure {
+                    PluginRequirementFailure {
                         instance_id: registered.instance_id().to_string(),
                         missing_capabilities,
                         missing_services,
@@ -1529,6 +1527,109 @@ mod tests {
             state.snapshot("missing-capability").lifecycle_state,
             PluginLifecycleState::Failed
         );
+    }
+
+    #[test]
+    fn runtime_plugin_engine_reports_all_startup_requirement_failures() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        engine.push_as(
+            "missing-service",
+            Box::new(DependencyPlugin {
+                manifest: RuntimePluginManifest::new("missing-service")
+                    .require_service::<TestCounterService>(),
+                init_calls: Arc::new(std::sync::Mutex::new(0)),
+            }),
+        );
+        engine.push_as(
+            "missing-capability",
+            Box::new(DependencyPlugin {
+                manifest: RuntimePluginManifest::new("missing-capability")
+                    .require_capability(Capability::Reaction),
+                init_calls: Arc::new(std::sync::Mutex::new(0)),
+            }),
+        );
+
+        let failures = engine.validate_startup_requirements();
+
+        assert_eq!(
+            failures,
+            vec![
+                PluginRequirementFailure {
+                    instance_id: "missing-service".to_string(),
+                    missing_capabilities: Vec::new(),
+                    missing_services: vec![ServiceKey::of::<TestCounterService>()],
+                },
+                PluginRequirementFailure {
+                    instance_id: "missing-capability".to_string(),
+                    missing_capabilities: vec![Capability::Reaction],
+                    missing_services: Vec::new(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_plugin_engine_does_not_init_any_plugin_when_preflight_fails() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let ready_init_calls = Arc::new(std::sync::Mutex::new(0));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "ready",
+            Box::new(DependencyPlugin {
+                manifest: RuntimePluginManifest::new("ready"),
+                init_calls: ready_init_calls.clone(),
+            }),
+        );
+        engine.push_as(
+            "missing-service",
+            Box::new(DependencyPlugin {
+                manifest: RuntimePluginManifest::new("missing-service")
+                    .require_service::<TestCounterService>(),
+                init_calls: Arc::new(std::sync::Mutex::new(0)),
+            }),
+        );
+
+        let err = engine.init_all().await.unwrap_err();
+
+        assert!(err.to_string().contains("missing-service"));
+        assert_eq!(*ready_init_calls.lock().unwrap(), 0);
+        assert_eq!(
+            state.snapshot("ready").lifecycle_state,
+            PluginLifecycleState::Registered
+        );
+    }
+
+    #[test]
+    fn startup_requirement_validation_is_read_only() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let init_calls = Arc::new(std::sync::Mutex::new(0));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "missing-service",
+            Box::new(DependencyPlugin {
+                manifest: RuntimePluginManifest::new("missing-service")
+                    .require_service::<TestCounterService>(),
+                init_calls: init_calls.clone(),
+            }),
+        );
+
+        let before = state.snapshot("missing-service");
+        let failures = engine.validate_startup_requirements();
+        let after = state.snapshot("missing-service");
+
+        assert_eq!(failures.len(), 1);
+        assert_eq!(before, after);
+        assert_eq!(*init_calls.lock().unwrap(), 0);
     }
 
     #[tokio::test]

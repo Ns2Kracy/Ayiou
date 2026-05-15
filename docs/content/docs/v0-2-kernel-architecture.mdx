@@ -196,6 +196,8 @@ v0.2 增加能力声明：
 
 这样插件作者可以先在 manifest 层声明约束，再在 handler 中按能力接口使用。
 
+启动前要求可以通过 `RuntimePluginEngine::validate_startup_requirements()` 读取结构化报告。报告列出每个失败插件缺少的 capability 和 service；`init_all()` 使用同一条预检路径，所以失败时不会部分初始化插件集合。
+
 ## 6. 单 Bot，多渠道来源回复
 
 Ayiou 的 Bot 是开发者定义的业务实例，不是外部平台账号。一个 Bot 可以接多个 adapter/channel source。
