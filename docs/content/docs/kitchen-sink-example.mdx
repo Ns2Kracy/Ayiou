@@ -61,6 +61,8 @@ Required service declarations are preflighted before any plugin `init()` runs, s
 
 For diagnostics or adaptive behavior, plugins can inspect registered service metadata through `services.service_descriptors()`. Descriptors include the service type key, `RuntimeService::name()`, and `RuntimeService::version()`.
 
+Plugins can also provide services by implementing `register_services()` and inserting lightweight service facades into the runtime registry. Consumer plugins still depend on the service type, not on the provider plugin instance.
+
 ## 覆盖了什么
 
 ### 宏生成 RuntimePlugin

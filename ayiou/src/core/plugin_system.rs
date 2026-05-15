@@ -500,6 +500,10 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
         Vec::new()
     }
 
+    fn register_services(&mut self, _registry: &mut ServiceRegistry) -> Result<()> {
+        Ok(())
+    }
+
     async fn init(&mut self, _services: RuntimePluginServices<C>) -> Result<()> {
         Ok(())
     }
@@ -660,6 +664,7 @@ pub struct RuntimePluginEngine<C> {
     runtime_state: PluginRuntimeState,
     dispatch_options: DispatchOptions,
     plugins: Vec<RegisteredPlugin<C>>,
+    plugin_services_registered: bool,
 }
 
 impl<C> RuntimePluginEngine<C>
@@ -682,6 +687,7 @@ where
             runtime_state,
             dispatch_options,
             plugins: Vec::new(),
+            plugin_services_registered: false,
         }
     }
 
@@ -727,6 +733,8 @@ where
     }
 
     pub async fn init_all(&mut self) -> Result<()> {
+        self.register_plugin_services()?;
+
         let failures = self.validate_startup_requirements();
         if !failures.is_empty() {
             let messages: Vec<_> = failures
@@ -758,6 +766,28 @@ where
             self.runtime_state.clear_error(&instance_id);
         }
 
+        Ok(())
+    }
+
+    fn register_plugin_services(&mut self) -> Result<()> {
+        if self.plugin_services_registered {
+            return Ok(());
+        }
+
+        for registered in &mut self.plugins {
+            let instance_id = registered.instance_id().to_string();
+            if let Err(err) = registered
+                .plugin_mut()
+                .register_services(&mut self.services.service_registry)
+            {
+                let err = anyhow!("plugin `{instance_id}` service registration failed: {err}");
+                self.runtime_state
+                    .record_error(&instance_id, err.to_string());
+                return Err(err);
+            }
+        }
+
+        self.plugin_services_registered = true;
         Ok(())
     }
 
@@ -1239,6 +1269,207 @@ mod tests {
         async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
+    }
+
+    struct ServiceProviderPlugin {
+        service_value: usize,
+        fail_registration: bool,
+        init_calls: Arc<std::sync::Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl RuntimePlugin<TestCtx> for ServiceProviderPlugin {
+        fn kind(&self) -> &'static str {
+            "service-provider"
+        }
+
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new("service-provider")
+        }
+
+        fn register_services(&mut self, registry: &mut ServiceRegistry) -> Result<()> {
+            if self.fail_registration {
+                return Err(anyhow!("provider registration failed"));
+            }
+            registry.try_insert(TestCounterService {
+                value: self.service_value,
+            })
+        }
+
+        async fn init(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
+            *self.init_calls.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+            Ok(HandleOutcome::pass())
+        }
+    }
+
+    struct ServiceConsumerPlugin {
+        observed: Arc<std::sync::Mutex<Vec<usize>>>,
+    }
+
+    #[async_trait]
+    impl RuntimePlugin<TestCtx> for ServiceConsumerPlugin {
+        fn kind(&self) -> &'static str {
+            "service-consumer"
+        }
+
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new("service-consumer")
+        }
+
+        fn manifest(&self) -> RuntimePluginManifest {
+            RuntimePluginManifest::new("service-consumer").require_service::<TestCounterService>()
+        }
+
+        async fn init(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
+            let service = services.require_service::<TestCounterService>()?;
+            self.observed.lock().unwrap().push(service.value);
+            Ok(())
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+            Ok(HandleOutcome::pass())
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_provided_service_satisfies_consumer_manifest() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let provider_init_calls = Arc::new(std::sync::Mutex::new(0));
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        engine.push_as(
+            "provider",
+            Box::new(ServiceProviderPlugin {
+                service_value: 99,
+                fail_registration: false,
+                init_calls: provider_init_calls.clone(),
+            }),
+        );
+        engine.push_as(
+            "consumer",
+            Box::new(ServiceConsumerPlugin {
+                observed: observed.clone(),
+            }),
+        );
+
+        engine.init_all().await.unwrap();
+
+        assert_eq!(*provider_init_calls.lock().unwrap(), 1);
+        assert_eq!(*observed.lock().unwrap(), vec![99]);
+    }
+
+    #[tokio::test]
+    async fn plugin_service_registration_runs_before_dependency_preflight() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        engine.push_as(
+            "consumer",
+            Box::new(ServiceConsumerPlugin {
+                observed: observed.clone(),
+            }),
+        );
+        engine.push_as(
+            "provider",
+            Box::new(ServiceProviderPlugin {
+                service_value: 7,
+                fail_registration: false,
+                init_calls: Arc::new(std::sync::Mutex::new(0)),
+            }),
+        );
+
+        engine.init_all().await.unwrap();
+
+        assert_eq!(*observed.lock().unwrap(), vec![7]);
+    }
+
+    #[tokio::test]
+    async fn duplicate_plugin_provided_service_fails_startup() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let first_init_calls = Arc::new(std::sync::Mutex::new(0));
+        let second_init_calls = Arc::new(std::sync::Mutex::new(0));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "provider-a",
+            Box::new(ServiceProviderPlugin {
+                service_value: 1,
+                fail_registration: false,
+                init_calls: first_init_calls.clone(),
+            }),
+        );
+        engine.push_as(
+            "provider-b",
+            Box::new(ServiceProviderPlugin {
+                service_value: 2,
+                fail_registration: false,
+                init_calls: second_init_calls.clone(),
+            }),
+        );
+
+        let err = engine.init_all().await.unwrap_err();
+
+        assert!(err.to_string().contains("runtime service"));
+        assert!(
+            err.to_string()
+                .contains(std::any::type_name::<TestCounterService>())
+        );
+        assert_eq!(*first_init_calls.lock().unwrap(), 0);
+        assert_eq!(*second_init_calls.lock().unwrap(), 0);
+        assert_eq!(
+            state.snapshot("provider-b").lifecycle_state,
+            PluginLifecycleState::Failed
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_service_registration_failure_prevents_partial_init() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let ready_init_calls = Arc::new(std::sync::Mutex::new(0));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "ready",
+            Box::new(DependencyPlugin {
+                manifest: RuntimePluginManifest::new("ready"),
+                init_calls: ready_init_calls.clone(),
+            }),
+        );
+        engine.push_as(
+            "provider",
+            Box::new(ServiceProviderPlugin {
+                service_value: 1,
+                fail_registration: true,
+                init_calls: Arc::new(std::sync::Mutex::new(0)),
+            }),
+        );
+
+        let err = engine.init_all().await.unwrap_err();
+
+        assert!(err.to_string().contains("provider registration failed"));
+        assert_eq!(*ready_init_calls.lock().unwrap(), 0);
+        assert_eq!(
+            state.snapshot("provider").lifecycle_state,
+            PluginLifecycleState::Failed
+        );
+        assert_eq!(
+            state.snapshot("ready").lifecycle_state,
+            PluginLifecycleState::Registered
+        );
     }
 
     struct SnapshotPlugin {

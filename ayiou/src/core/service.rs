@@ -89,6 +89,20 @@ impl ServiceRegistry {
         );
     }
 
+    pub fn try_insert<S>(&mut self, service: S) -> Result<()>
+    where
+        S: RuntimeService,
+    {
+        if self.services.contains_key(&TypeId::of::<S>()) {
+            return Err(anyhow!(
+                "runtime service `{}` is already registered",
+                type_name::<S>()
+            ));
+        }
+        self.insert(service);
+        Ok(())
+    }
+
     #[must_use]
     pub fn contains_key(&self, key: &ServiceKey) -> bool {
         self.services.contains_key(&key.type_id)
