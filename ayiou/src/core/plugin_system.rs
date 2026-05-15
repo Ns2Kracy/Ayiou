@@ -7,11 +7,11 @@ use crate::core::{
     command::parse_command_line,
     model::{BotId, CommandInvocation, PlatformId},
     plugin_host::PluginHost,
-    plugin_runtime::{PluginLifecycleState, PluginRuntimeState},
+    plugin_runtime::{PluginInstanceState, PluginLifecycleState, PluginRuntimeState},
     service::{RuntimeService, ServiceDescriptor, ServiceKey, ServiceRegistry},
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginMetadata {
     pub name: String,
     pub description: String,
@@ -473,6 +473,16 @@ impl PluginHealth {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimePluginSnapshot {
+    pub instance_id: String,
+    pub kind: String,
+    pub meta: PluginMetadata,
+    pub manifest: RuntimePluginManifest,
+    pub lifecycle: PluginInstanceState,
+    pub health: PluginHealth,
+}
+
 #[async_trait]
 pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
     fn kind(&self) -> &str;
@@ -692,6 +702,28 @@ where
     #[must_use]
     pub fn plugins(&self) -> &[RegisteredPlugin<C>] {
         &self.plugins
+    }
+
+    #[must_use]
+    pub fn plugin_snapshots(&self) -> Vec<RuntimePluginSnapshot> {
+        let mut snapshots: Vec<_> = self
+            .plugins
+            .iter()
+            .map(|registered| {
+                let plugin = registered.plugin();
+                let instance_id = registered.instance_id().to_string();
+                RuntimePluginSnapshot {
+                    lifecycle: self.runtime_state.snapshot(&instance_id),
+                    instance_id,
+                    kind: plugin.kind().to_string(),
+                    meta: plugin.meta(),
+                    manifest: plugin.manifest(),
+                    health: plugin.health(),
+                }
+            })
+            .collect();
+        snapshots.sort_by(|left, right| left.instance_id.cmp(&right.instance_id));
+        snapshots
     }
 
     pub async fn init_all(&mut self) -> Result<()> {
@@ -1209,6 +1241,158 @@ mod tests {
         async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
+    }
+
+    struct SnapshotPlugin {
+        kind: &'static str,
+        meta_name: &'static str,
+        manifest: RuntimePluginManifest,
+        health: PluginHealth,
+        init_calls: Arc<std::sync::Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl RuntimePlugin<TestCtx> for SnapshotPlugin {
+        fn kind(&self) -> &'static str {
+            self.kind
+        }
+
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new(self.meta_name)
+                .description("snapshot plugin")
+                .version("9.9.9")
+        }
+
+        fn manifest(&self) -> RuntimePluginManifest {
+            self.manifest.clone()
+        }
+
+        async fn init(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
+            *self.init_calls.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+            Ok(HandleOutcome::pass())
+        }
+
+        fn health(&self) -> PluginHealth {
+            self.health.clone()
+        }
+    }
+
+    #[test]
+    fn runtime_plugin_engine_reports_plugin_snapshots() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        state.set_enabled("snapshot.instance", false);
+        state.set_desired_config_version("snapshot.instance", 12);
+        let init_calls = Arc::new(std::sync::Mutex::new(0));
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        engine.push_as(
+            "snapshot.instance",
+            Box::new(SnapshotPlugin {
+                kind: "snapshot-kind",
+                meta_name: "snapshot-meta",
+                manifest: RuntimePluginManifest::new("snapshot-kind")
+                    .require_capability(Capability::Reaction)
+                    .require_service::<TestCounterService>(),
+                health: PluginHealth {
+                    healthy: false,
+                    detail: Some("degraded".to_string()),
+                },
+                init_calls,
+            }),
+        );
+
+        let snapshots = engine.plugin_snapshots();
+
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.instance_id, "snapshot.instance");
+        assert_eq!(snapshot.kind, "snapshot-kind");
+        assert_eq!(snapshot.meta.name, "snapshot-meta");
+        assert_eq!(snapshot.meta.description, "snapshot plugin");
+        assert_eq!(snapshot.meta.version, "9.9.9");
+        assert_eq!(snapshot.manifest.kind, "snapshot-kind");
+        assert_eq!(
+            snapshot.manifest.required_capabilities,
+            vec![Capability::Reaction]
+        );
+        assert_eq!(
+            snapshot.manifest.required_services,
+            vec![ServiceKey::of::<TestCounterService>()]
+        );
+        assert!(!snapshot.lifecycle.enabled);
+        assert_eq!(snapshot.lifecycle.desired_config_version, 12);
+        assert_eq!(
+            snapshot.lifecycle.config_lifecycle_state,
+            crate::core::plugin_runtime::ConfigLifecycleState::Draft
+        );
+        assert_eq!(
+            snapshot.health,
+            PluginHealth {
+                healthy: false,
+                detail: Some("degraded".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn plugin_snapshots_are_sorted_by_instance_id() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        for instance_id in ["zeta", "alpha", "middle"] {
+            engine.push_as(
+                instance_id,
+                Box::new(DependencyPlugin {
+                    manifest: RuntimePluginManifest::new(instance_id),
+                    init_calls: Arc::new(std::sync::Mutex::new(0)),
+                }),
+            );
+        }
+
+        let instance_ids: Vec<_> = engine
+            .plugin_snapshots()
+            .into_iter()
+            .map(|snapshot| snapshot.instance_id)
+            .collect();
+
+        assert_eq!(instance_ids, vec!["alpha", "middle", "zeta"]);
+    }
+
+    #[test]
+    fn plugin_snapshots_do_not_trigger_lifecycle_hooks() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let init_calls = Arc::new(std::sync::Mutex::new(0));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "snapshot-only",
+            Box::new(SnapshotPlugin {
+                kind: "snapshot-only",
+                meta_name: "snapshot-only",
+                manifest: RuntimePluginManifest::new("snapshot-only"),
+                health: PluginHealth::healthy(),
+                init_calls: init_calls.clone(),
+            }),
+        );
+
+        let snapshots = engine.plugin_snapshots();
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(*init_calls.lock().unwrap(), 0);
+        assert_eq!(
+            state.snapshot("snapshot-only").lifecycle_state,
+            PluginLifecycleState::Registered
+        );
     }
 
     #[tokio::test]

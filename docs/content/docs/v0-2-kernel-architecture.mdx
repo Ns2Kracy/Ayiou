@@ -93,6 +93,8 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
 
 这里最关键的不是 trait 名字，而是“命令插件、正则插件、状态插件，最后都进入同一个实例运行时”。
 
+运行时对外暴露只读 `RuntimePluginSnapshot` 清单，用于控制面、CLI 诊断和健康检查。snapshot 包含 instance id、metadata、manifest、当前 lifecycle/config state 和 `health()`，但不会触发 `init()` / `start()` / `stop()` 等生命周期 hook。
+
 ## 2. 用 Handler 管线替代 commands/wildcard 二分法
 
 旧分发模型是：
