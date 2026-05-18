@@ -1,6 +1,6 @@
 [package]
 name = "ayiou"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A Rust bot framework with a single Bot runtime and unified plugin model."
 license = "MIT OR Apache-2.0"
@@ -20,7 +20,7 @@ adapter-onebot-v11 = ["driver-wsclient"]
 [dependencies]
 anyhow = "1.0.100"
 async-trait = "0.1.89"
-ayiou-macros = { version = "0.1.0", path = "../ayiou-macros" }
+ayiou-macros = { version = "0.1.1", path = "../ayiou-macros" }
 dashmap = "6.1.0"
 futures-util = { version = "0.3.31", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
