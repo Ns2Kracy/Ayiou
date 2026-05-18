@@ -75,6 +75,17 @@ jobs:
       - name: Package macro crate
         run: cargo package -p ayiou-macros --locked
 
+      - name: Install crates.io lookup helper
+        run: |
+          cat > /tmp/crate-version-exists <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          crate="$1"
+          version="$2"
+          curl -fsS "https://crates.io/api/v1/crates/$crate/$version" >/dev/null
+          SH
+          chmod +x /tmp/crate-version-exists
+
       - name: Authenticate to crates.io with Trusted Publishing
         if: env.HAS_CARGO_REGISTRY_TOKEN != 'true' && vars.CRATES_IO_TRUSTED_PUBLISHING == 'true'
         id: auth
@@ -100,7 +111,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          if cargo search ayiou-macros --limit 1 | grep -q "^ayiou-macros = \"$version\""; then
+          if /tmp/crate-version-exists ayiou-macros "$version"; then
             echo "ayiou-macros $version is already published."
           else
             cargo publish -p ayiou-macros --locked
@@ -110,7 +121,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           for attempt in {1..30}; do
-            if cargo search ayiou-macros --limit 1 | grep -q "^ayiou-macros = \"$version\""; then
+            if /tmp/crate-version-exists ayiou-macros "$version"; then
               exit 0
             fi
             sleep 10
@@ -126,7 +137,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          if cargo search ayiou --limit 1 | grep -q "^ayiou = \"$version\""; then
+          if /tmp/crate-version-exists ayiou "$version"; then
             echo "ayiou $version is already published."
           else
             cargo publish -p ayiou --locked
