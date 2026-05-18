@@ -60,3 +60,7 @@ For the first crates.io release, add a repository secret named `CARGO_REGISTRY_T
 - Repository: `Ns2Kracy/Ayiou`
 - Workflow: `.github/workflows/release.yml`
 - Environment: `crates-io`
+
+When switching to Trusted Publishing, also set the GitHub Actions repository or `crates-io`
+environment variable `CRATES_IO_TRUSTED_PUBLISHING=true`. Without that opt-in, the workflow uses
+`CARGO_REGISTRY_TOKEN` and will not request a trusted-publishing token.
