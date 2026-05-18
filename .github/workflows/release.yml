@@ -82,7 +82,10 @@ jobs:
           set -euo pipefail
           crate="$1"
           version="$2"
-          curl -fsS "https://crates.io/api/v1/crates/$crate/$version" >/dev/null
+          curl -fsS \
+            -H "User-Agent: Ns2Kracy/Ayiou release workflow (https://github.com/Ns2Kracy/Ayiou)" \
+            "https://crates.io/api/v1/crates/$crate/$version" \
+            >/dev/null
           SH
           chmod +x /tmp/crate-version-exists
 
