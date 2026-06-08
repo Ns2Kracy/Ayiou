@@ -2,6 +2,7 @@ pub mod adapter;
 pub mod command;
 pub mod config_store;
 pub mod context;
+pub mod control;
 pub mod driver;
 pub mod event_bus;
 pub mod model;

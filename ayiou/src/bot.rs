@@ -5,6 +5,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::core::{
     adapter::Adapter,
+    control::RuntimeControlHandle,
     plugin_host::PluginHost,
     plugin_runtime::PluginRuntimeState,
     plugin_system::{
@@ -244,6 +245,7 @@ impl<A: Adapter> Bot<A> {
 
         info!("Loaded {} plugins", engine.plugins().len());
         let engine = Arc::new(tokio::sync::RwLock::new(engine));
+        let _control = RuntimeControlHandle::new(engine.clone());
         let runtime = BotRuntime::new(engine.clone(), self.runtime_options.clone());
         runtime.run(adapter_runtime.events).await;
 
