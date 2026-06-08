@@ -3,6 +3,8 @@ use std::{collections::HashSet, sync::Arc};
 use log::{error, info};
 use tokio::{sync::mpsc, task::JoinHandle};
 
+#[cfg(feature = "control-plane")]
+use crate::control_plane::{self, ControlPlaneOptions};
 use crate::core::{
     adapter::Adapter,
     control::RuntimeControlHandle,
@@ -45,6 +47,8 @@ pub struct Bot<A: Adapter> {
     service_registry: ServiceRegistry,
     dispatch_options: DispatchOptions,
     runtime_options: BotRuntimeOptions,
+    #[cfg(feature = "control-plane")]
+    control_plane_options: Option<ControlPlaneOptions>,
 }
 
 struct BotRuntime<C> {
@@ -150,6 +154,8 @@ impl<A: Adapter> Bot<A> {
             service_registry: ServiceRegistry::default(),
             dispatch_options: DispatchOptions::default(),
             runtime_options: BotRuntimeOptions::default(),
+            #[cfg(feature = "control-plane")]
+            control_plane_options: None,
         }
     }
 
@@ -213,8 +219,18 @@ impl<A: Adapter> Bot<A> {
         self
     }
 
+    #[cfg(feature = "control-plane")]
+    #[must_use]
+    pub fn control_plane(mut self, options: ControlPlaneOptions) -> Self {
+        self.control_plane_options = Some(options);
+        self
+    }
+
     pub async fn run(mut self) {
         info!("Starting Bot...");
+        #[cfg(feature = "control-plane")]
+        let control_plane_options = self.control_plane_options.clone();
+
         self.load_discovered_plugins();
 
         let adapter_capabilities = self.adapter.capabilities();
@@ -245,7 +261,14 @@ impl<A: Adapter> Bot<A> {
 
         info!("Loaded {} plugins", engine.plugins().len());
         let engine = Arc::new(tokio::sync::RwLock::new(engine));
-        let _control = RuntimeControlHandle::new(engine.clone());
+        let control = RuntimeControlHandle::new(engine.clone());
+        #[cfg(feature = "control-plane")]
+        if let Some(options) = control_plane_options {
+            if let Err(err) = control_plane::spawn(options, control.clone()) {
+                error!("Control plane configuration error: {err}");
+                return;
+            }
+        }
         let runtime = BotRuntime::new(engine.clone(), self.runtime_options.clone());
         runtime.run(adapter_runtime.events).await;
 

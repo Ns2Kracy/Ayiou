@@ -5,9 +5,16 @@ use tokio::sync::RwLock;
 
 use crate::core::plugin_system::{RuntimePluginEngine, RuntimePluginSnapshot};
 
-#[derive(Clone)]
 pub struct RuntimeControlHandle<C> {
     engine: Arc<RwLock<RuntimePluginEngine<C>>>,
+}
+
+impl<C> Clone for RuntimeControlHandle<C> {
+    fn clone(&self) -> Self {
+        Self {
+            engine: self.engine.clone(),
+        }
+    }
 }
 
 impl<C> RuntimeControlHandle<C>
