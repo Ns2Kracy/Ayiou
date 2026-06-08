@@ -5,12 +5,19 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
+#[cfg(feature = "embedded-webui")]
+use axum::{body::Body, http::Uri};
+#[cfg(feature = "embedded-webui")]
+use include_dir::{Dir, include_dir};
 use serde::Serialize;
 use serde_json::json;
 use tokio::task::JoinHandle;
+
+#[cfg(feature = "embedded-webui")]
+static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../webui/dist");
 
 use crate::core::{
     control::RuntimeControlHandle,
@@ -87,7 +94,7 @@ where
         token: Arc::from(token.into()),
     };
 
-    Router::new()
+    let router = Router::new()
         .route("/api/runtime", get(runtime))
         .route("/api/plugins", get(list_plugins))
         .route("/api/plugins/{id}", get(get_plugin))
@@ -96,7 +103,12 @@ where
         .route("/api/plugins/{id}/start", post(start_plugin))
         .route("/api/plugins/{id}/stop", post(stop_plugin))
         .route("/api/plugins/{id}/reload", post(reload_plugin))
-        .with_state(state)
+        .with_state(state);
+
+    #[cfg(feature = "embedded-webui")]
+    let router = router.route("/", get(index_asset)).fallback(static_asset);
+
+    router
 }
 
 pub fn spawn<C>(
@@ -467,4 +479,38 @@ fn capability_name(capability: Capability) -> String {
 
 fn service_key_name(key: &ServiceKey) -> String {
     key.type_name().to_string()
+}
+
+#[cfg(feature = "embedded-webui")]
+async fn index_asset() -> Response {
+    match WEBUI_DIST.get_file("index.html") {
+        Some(file) => Html(String::from_utf8_lossy(file.contents()).into_owned()).into_response(),
+        None => api_error(
+            StatusCode::NOT_FOUND,
+            "asset_not_found",
+            "embedded web UI index was not found",
+        ),
+    }
+}
+
+#[cfg(feature = "embedded-webui")]
+async fn static_asset(uri: Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    if path.is_empty() {
+        return index_asset().await;
+    }
+
+    match WEBUI_DIST.get_file(path) {
+        Some(file) => {
+            let content_type = mime_guess::from_path(path)
+                .first_or_octet_stream()
+                .to_string();
+            (
+                [(header::CONTENT_TYPE, content_type)],
+                Body::from(file.contents().to_vec()),
+            )
+                .into_response()
+        }
+        None => index_asset().await,
+    }
 }

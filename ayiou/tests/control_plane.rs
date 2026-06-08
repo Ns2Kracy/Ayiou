@@ -78,6 +78,14 @@ async fn json_response(request: Request<Body>) -> (StatusCode, Value) {
     (status, value)
 }
 
+async fn raw_response(request: Request<Body>) -> (StatusCode, String) {
+    let response = app().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value = String::from_utf8(body.to_vec()).unwrap();
+    (status, value)
+}
+
 #[tokio::test]
 async fn control_plane_rejects_missing_bearer_token() {
     let (status, body) = json_response(
@@ -140,4 +148,20 @@ async fn control_plane_reports_non_reloadable_plugin() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["ok"], false);
     assert_eq!(body["error"]["code"], "not_reloadable");
+}
+
+#[cfg(feature = "embedded-webui")]
+#[tokio::test]
+async fn embedded_control_plane_serves_webui_index() {
+    let (status, body) = raw_response(
+        Request::builder()
+            .uri("/")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("<html"));
+    assert!(body.contains("/assets/"));
 }
