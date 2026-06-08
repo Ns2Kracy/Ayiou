@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 #[cfg(feature = "embedded-webui")]
@@ -484,7 +484,11 @@ fn service_key_name(key: &ServiceKey) -> String {
 #[cfg(feature = "embedded-webui")]
 async fn index_asset() -> Response {
     match WEBUI_DIST.get_file("index.html") {
-        Some(file) => Html(String::from_utf8_lossy(file.contents()).into_owned()).into_response(),
+        Some(file) => (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            String::from_utf8_lossy(file.contents()).into_owned(),
+        )
+            .into_response(),
         None => api_error(
             StatusCode::NOT_FOUND,
             "asset_not_found",

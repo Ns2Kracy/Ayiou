@@ -25,6 +25,12 @@ Console 本地调试则启用：
 ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["adapter-console"] }
 ```
 
+需要内嵌控制面管理 UI 时启用：
+
+```toml
+ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["adapter-console", "embedded-webui"] }
+```
+
 ## 核心概念
 
 - `Bot<A>`：单 Bot 运行时 builder
@@ -105,6 +111,24 @@ if let Some(onebot) = ctx.extension::<Ctx>() {
 ## 高级插件
 
 默认入口只推荐 `#[plugin]`。如果需要非命令 handler、能力声明、配置生命周期或复杂会话控制，手写 `RuntimePlugin` 并从 `ayiou::core::plugin_system` 引入运行时类型。
+
+## 控制面
+
+控制面是可选能力。`bind` 可选，默认 `127.0.0.1:32187`；`token` 必填。
+
+```rust
+use ayiou::{ConsoleBot, ControlPlaneOptions};
+
+#[tokio::main]
+async fn main() {
+    ConsoleBot::console()
+        .control_plane(ControlPlaneOptions::new().token("change-me"))
+        .run()
+        .await;
+}
+```
+
+启用 `embedded-webui` 后打开 `http://127.0.0.1:32187/`。当前 Rust 插件支持 enable/disable/start/stop；代码热加载会由后续 Rhai/WASM backend 接入同一套 reload 入口。
 
 ## Runtime Services
 

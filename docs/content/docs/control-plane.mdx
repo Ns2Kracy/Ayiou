@@ -1,0 +1,122 @@
+---
+title: 控制面与热加载
+description: 使用内嵌管理 UI 查看插件状态、控制生命周期，并为 Rhai/WASM 热加载预留统一入口
+---
+
+控制面是可选 feature。它提供 token 保护的 HTTP API 和内嵌管理 UI，用来查看插件 snapshot、开关插件、执行 start/stop/reload 操作。
+
+当前 Rust/inventory 插件支持生命周期控制，但不支持代码热替换，因为它们已经编译进进程。后续 Rhai/WASM 插件会接入同一套 `reload` 入口。
+
+## 启用 feature
+
+```toml
+ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["adapter-console", "embedded-webui"] }
+```
+
+只需要 HTTP API 时启用：
+
+```toml
+ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["control-plane"] }
+```
+
+## 启动控制面
+
+`token` 必填。`bind` 可选，默认是 `127.0.0.1:32187`。
+
+```rust
+use ayiou::{ConsoleBot, ControlPlaneOptions};
+
+#[tokio::main]
+async fn main() {
+    ConsoleBot::console()
+        .control_plane(ControlPlaneOptions::new().token("change-me"))
+        .run()
+        .await;
+}
+```
+
+自定义监听地址：
+
+```rust
+ControlPlaneOptions::new()
+    .bind("127.0.0.1:39000")
+    .token("change-me")
+```
+
+如果没有设置 token，控制面不会启动，Bot 会记录明确的配置错误并停止启动。
+
+## 访问 UI
+
+启用 `embedded-webui` 后打开：
+
+```text
+http://127.0.0.1:32187/
+```
+
+页面会要求输入 token。token 存在浏览器 local storage 中，方便本地开发调试。
+
+UI 支持：
+
+- 查看插件 instance id、kind、version、enabled、lifecycle、health
+- 查看 manifest 的 required/optional capabilities 和 services
+- enable / disable
+- start / stop
+- reload
+- 查看 last error
+
+## HTTP API
+
+所有 API 都要求：
+
+```http
+Authorization: Bearer <token>
+```
+
+接口：
+
+```text
+GET  /api/runtime
+GET  /api/plugins
+GET  /api/plugins/:id
+POST /api/plugins/:id/enable
+POST /api/plugins/:id/disable
+POST /api/plugins/:id/start
+POST /api/plugins/:id/stop
+POST /api/plugins/:id/reload
+```
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "data": {}
+}
+```
+
+错误响应：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "not_reloadable",
+    "message": "plugin `echo` is not reloadable"
+  }
+}
+```
+
+## 生命周期语义
+
+- `disable`：设置 `enabled = false`，如果插件正在运行则调用 `stop()`，之后不参与调度。
+- `enable`：设置 `enabled = true`，必要时调用 `init()` 和 `start()`。
+- `stop`：调用 `stop()`，但不改变 `enabled`。
+- `start`：插件 enabled 时调用 `start()`。
+- `reload`：当前 Rust 插件返回 `not_reloadable`；未来 Rhai/WASM 插件会在同一入口做原子替换。
+
+## 安全默认
+
+- 默认只监听 loopback。
+- token 必需。
+- 状态修改只走 POST。
+- 控制面只通过 runtime control handle 操作插件，不直接暴露插件实例或 service registry。

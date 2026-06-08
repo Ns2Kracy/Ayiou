@@ -78,6 +78,7 @@ async fn json_response(request: Request<Body>) -> (StatusCode, Value) {
     (status, value)
 }
 
+#[cfg(feature = "embedded-webui")]
 async fn raw_response(request: Request<Body>) -> (StatusCode, String) {
     let response = app().oneshot(request).await.unwrap();
     let status = response.status();
@@ -153,13 +154,8 @@ async fn control_plane_reports_non_reloadable_plugin() {
 #[cfg(feature = "embedded-webui")]
 #[tokio::test]
 async fn embedded_control_plane_serves_webui_index() {
-    let (status, body) = raw_response(
-        Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await;
+    let (status, body) =
+        raw_response(Request::builder().uri("/").body(Body::empty()).unwrap()).await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("<html"));

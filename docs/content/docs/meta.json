@@ -8,6 +8,7 @@
     "kitchen-sink-example",
     "---插件系统---",
     "plugin-macro",
-    "command-system-dx"
+    "command-system-dx",
+    "control-plane"
   ]
 }

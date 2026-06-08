@@ -16,6 +16,23 @@ For local console development:
 ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["adapter-console"] }
 ```
 
+For the embedded control plane and management UI:
+
+```toml
+ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["adapter-console", "embedded-webui"] }
+```
+
+```rust
+use ayiou::{ConsoleBot, ControlPlaneOptions};
+
+ConsoleBot::console()
+    .control_plane(ControlPlaneOptions::new().token("change-me"))
+    .run()
+    .await;
+```
+
+The control plane bind address is optional and defaults to `127.0.0.1:32187`; the token is required. Compiled Rust plugins support lifecycle control through the UI, while code hot reload is reserved for future Rhai/WASM plugin backends.
+
 ## Runtime Services
 
 Plugins should not call other plugin instances directly. Register host-provided services on `Bot`, then request them from `RuntimePluginServices` during plugin initialization:

@@ -5,9 +5,10 @@ use tokio::{sync::mpsc, task::JoinHandle};
 
 #[cfg(feature = "control-plane")]
 use crate::control_plane::{self, ControlPlaneOptions};
+#[cfg(feature = "control-plane")]
+use crate::core::control::RuntimeControlHandle;
 use crate::core::{
     adapter::Adapter,
-    control::RuntimeControlHandle,
     plugin_host::PluginHost,
     plugin_runtime::PluginRuntimeState,
     plugin_system::{
@@ -261,6 +262,7 @@ impl<A: Adapter> Bot<A> {
 
         info!("Loaded {} plugins", engine.plugins().len());
         let engine = Arc::new(tokio::sync::RwLock::new(engine));
+        #[cfg(feature = "control-plane")]
         let control = RuntimeControlHandle::new(engine.clone());
         #[cfg(feature = "control-plane")]
         if let Some(options) = control_plane_options {
