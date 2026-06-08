@@ -906,6 +906,150 @@ where
         Ok(())
     }
 
+    pub async fn enable_plugin(&mut self, instance_id: &str) -> Result<()> {
+        self.ensure_plugin_registered(instance_id)?;
+        self.runtime_state.set_enabled(instance_id, true);
+
+        match self.runtime_state.snapshot(instance_id).lifecycle_state {
+            PluginLifecycleState::Initializing
+            | PluginLifecycleState::Starting
+            | PluginLifecycleState::Running => Ok(()),
+            PluginLifecycleState::Registered
+            | PluginLifecycleState::Stopping
+            | PluginLifecycleState::Stopped
+            | PluginLifecycleState::Failed => self.start_plugin(instance_id).await,
+        }
+    }
+
+    pub async fn disable_plugin(&mut self, instance_id: &str) -> Result<()> {
+        self.ensure_plugin_registered(instance_id)?;
+        self.runtime_state.set_enabled(instance_id, false);
+
+        match self.runtime_state.snapshot(instance_id).lifecycle_state {
+            PluginLifecycleState::Starting | PluginLifecycleState::Running => {
+                self.stop_plugin(instance_id).await
+            }
+            PluginLifecycleState::Registered
+            | PluginLifecycleState::Initializing
+            | PluginLifecycleState::Stopping
+            | PluginLifecycleState::Stopped
+            | PluginLifecycleState::Failed => Ok(()),
+        }
+    }
+
+    pub async fn start_plugin(&mut self, instance_id: &str) -> Result<()> {
+        if !self.runtime_state.is_enabled(instance_id) {
+            return Ok(());
+        }
+
+        if self.runtime_state.snapshot(instance_id).lifecycle_state
+            == PluginLifecycleState::Registered
+        {
+            self.init_plugin(instance_id).await?;
+        }
+
+        let plugin_index = self.plugin_index(instance_id)?;
+        let services = self
+            .services
+            .clone()
+            .with_instance_id(instance_id.to_string());
+        self.runtime_state
+            .set_lifecycle(instance_id, PluginLifecycleState::Starting);
+
+        let start_result = self.plugins[plugin_index]
+            .plugin_mut()
+            .start(services)
+            .await;
+        if let Err(err) = start_result {
+            self.runtime_state
+                .record_error(instance_id, err.to_string());
+            return Err(err);
+        }
+
+        self.runtime_state
+            .set_lifecycle(instance_id, PluginLifecycleState::Running);
+        self.runtime_state.clear_error(instance_id);
+        Ok(())
+    }
+
+    pub async fn init_plugin(&mut self, instance_id: &str) -> Result<()> {
+        self.ensure_plugin_registered(instance_id)?;
+        self.register_plugin_services()?;
+
+        let failures = self.validate_startup_requirements();
+        if !failures.is_empty() {
+            let messages: Vec<_> = failures
+                .iter()
+                .map(PluginRequirementFailure::message)
+                .collect();
+            for (failure, message) in failures.iter().zip(&messages) {
+                self.runtime_state
+                    .record_error(&failure.instance_id, message.clone());
+            }
+            return Err(anyhow!("{}", messages.join("; ")));
+        }
+
+        let plugin_index = self.plugin_index(instance_id)?;
+        let services = self
+            .services
+            .clone()
+            .with_instance_id(instance_id.to_string());
+        self.runtime_state
+            .set_lifecycle(instance_id, PluginLifecycleState::Initializing);
+
+        let init_result = self.plugins[plugin_index].plugin_mut().init(services).await;
+        if let Err(err) = init_result {
+            self.runtime_state
+                .record_error(instance_id, err.to_string());
+            return Err(err);
+        }
+
+        self.runtime_state.clear_error(instance_id);
+        Ok(())
+    }
+
+    pub async fn stop_plugin(&mut self, instance_id: &str) -> Result<()> {
+        let plugin_index = self.plugin_index(instance_id)?;
+        self.runtime_state
+            .set_lifecycle(instance_id, PluginLifecycleState::Stopping);
+
+        let stop_result = self.plugins[plugin_index].plugin_mut().stop().await;
+        if let Err(err) = stop_result {
+            self.runtime_state
+                .record_error(instance_id, err.to_string());
+            return Err(err);
+        }
+
+        self.runtime_state
+            .set_lifecycle(instance_id, PluginLifecycleState::Stopped);
+        self.runtime_state.clear_error(instance_id);
+        Ok(())
+    }
+
+    pub async fn reload_plugin(&mut self, instance_id: &str) -> Result<()> {
+        self.ensure_plugin_registered(instance_id)?;
+        self.runtime_state.record_error(
+            instance_id,
+            format!("plugin `{instance_id}` is not reloadable"),
+        );
+        Err(anyhow!("plugin `{instance_id}` is not reloadable"))
+    }
+
+    fn ensure_plugin_registered(&self, instance_id: &str) -> Result<()> {
+        self.plugins
+            .iter()
+            .any(|registered| registered.instance_id() == instance_id)
+            .then_some(())
+            .ok_or_else(|| anyhow!("plugin instance `{instance_id}` is not registered"))
+    }
+
+    fn plugin_index(&self, instance_id: &str) -> Result<usize> {
+        self.plugins
+            .iter()
+            .position(|registered| registered.instance_id() == instance_id)
+            .ok_or_else(|| anyhow!("plugin instance `{instance_id}` is not registered"))
+    }
+
     pub async fn stop_all(&mut self) -> Result<()> {
         let mut first_error = None;
 
@@ -1434,6 +1578,142 @@ mod tests {
         async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
+    }
+
+    struct CountingLifecyclePlugin {
+        instance_id: &'static str,
+        handled: Arc<std::sync::Mutex<usize>>,
+        stopped: Arc<std::sync::Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl RuntimePlugin<TestCtx> for CountingLifecyclePlugin {
+        fn kind(&self) -> &'static str {
+            self.instance_id
+        }
+
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new(self.instance_id)
+        }
+
+        fn declared_handlers(&self) -> Vec<HandlerDecl> {
+            vec![HandlerDecl::wildcard_message()]
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+            *self.handled.lock().unwrap() += 1;
+            Ok(HandleOutcome::pass())
+        }
+
+        async fn stop(&mut self) -> Result<()> {
+            *self.stopped.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+
+    struct StartCountingPlugin {
+        started: Arc<std::sync::Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl RuntimePlugin<TestCtx> for StartCountingPlugin {
+        fn kind(&self) -> &'static str {
+            "switchable"
+        }
+
+        fn meta(&self) -> PluginMetadata {
+            PluginMetadata::new("switchable")
+        }
+
+        async fn start(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
+            *self.started.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+            Ok(HandleOutcome::pass())
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_plugin_is_stopped_and_skipped_by_dispatch() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let stopped = Arc::new(std::sync::Mutex::new(0));
+        let handled = Arc::new(std::sync::Mutex::new(0));
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "switchable",
+            Box::new(CountingLifecyclePlugin {
+                instance_id: "switchable",
+                handled: handled.clone(),
+                stopped: stopped.clone(),
+            }),
+        );
+
+        engine.init_all().await.unwrap();
+        engine.start_all().await.unwrap();
+        engine.disable_plugin("switchable").await.unwrap();
+
+        assert!(!state.is_enabled("switchable"));
+        assert_eq!(*stopped.lock().unwrap(), 1);
+        let blocked = engine.handle_all(&TestCtx::default()).await.unwrap();
+        assert!(!blocked);
+        assert_eq!(*handled.lock().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn enable_plugin_restarts_initialized_plugin() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let started = Arc::new(std::sync::Mutex::new(0));
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "switchable",
+            Box::new(StartCountingPlugin {
+                started: started.clone(),
+            }),
+        );
+
+        engine.init_all().await.unwrap();
+        engine.start_all().await.unwrap();
+        engine.disable_plugin("switchable").await.unwrap();
+        engine.enable_plugin("switchable").await.unwrap();
+
+        assert!(state.is_enabled("switchable"));
+        assert_eq!(*started.lock().unwrap(), 2);
+        assert_eq!(
+            state.snapshot("switchable").lifecycle_state,
+            PluginLifecycleState::Running
+        );
+    }
+
+    #[tokio::test]
+    async fn reload_non_reloadable_plugin_reports_structured_error() {
+        let host = PluginHost::new(None);
+        let services = RuntimePluginServices::new(host);
+        let state = PluginRuntimeState::default();
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "plain",
+            Box::new(DependencyPlugin {
+                manifest: RuntimePluginManifest::new("plain"),
+                init_calls: Arc::new(std::sync::Mutex::new(0)),
+            }),
+        );
+
+        let err = engine.reload_plugin("plain").await.unwrap_err();
+
+        assert!(err.to_string().contains("not reloadable"));
+        assert!(
+            state
+                .snapshot("plain")
+                .last_error
+                .as_deref()
+                .is_some_and(|err| err.contains("not reloadable"))
+        );
     }
 
     #[tokio::test]
