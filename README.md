@@ -2,7 +2,7 @@
 
 Ayiou is a Rust bot framework focused on a single Bot runtime, adapter-based message sources, and a unified plugin model.
 
-The public authoring path is `#[plugin]` plus `#[command]` for command plugins, with `RuntimePlugin` available for plugins that need lifecycle, capability negotiation, or custom handler declarations.
+The public authoring path is `#[plugin]`: async methods in the impl become commands and are auto-discovered by the bot at startup. `#[command]` remains available for compatibility when a method needs a custom command name or aliases, and `RuntimePlugin` remains available for advanced lifecycle, capability negotiation, or custom handler declarations.
 
 Built-in drivers and adapters are opt-in Cargo features. The default dependency exposes the core runtime, plugin APIs, macros, and shared traits only.
 

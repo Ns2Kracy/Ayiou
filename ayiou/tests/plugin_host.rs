@@ -13,14 +13,31 @@ use ayiou::core::plugin_system::{
     RuntimePluginServices,
 };
 use ayiou::core::service::{RuntimeService, ServiceRegistry};
+use ayiou::plugin;
 use tokio::sync::mpsc;
 
+static AUTO_HANDLES: AtomicUsize = AtomicUsize::new(0);
+
 #[derive(Clone)]
-struct TestCtx;
+struct TestCtx {
+    text: String,
+}
+
+impl TestCtx {
+    fn empty() -> Self {
+        Self {
+            text: String::new(),
+        }
+    }
+
+    fn text(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
+    }
+}
 
 impl MsgContext for TestCtx {
     fn text(&self) -> String {
-        String::new()
+        self.text.clone()
     }
 
     fn user_id(&self) -> String {
@@ -53,9 +70,35 @@ impl Adapter for OneEventAdapter {
     async fn start(self) -> mpsc::Receiver<Self::Ctx> {
         let (tx, rx) = mpsc::channel(1);
         tokio::spawn(async move {
-            let _ = tx.send(TestCtx).await;
+            let _ = tx.send(TestCtx::empty()).await;
         });
         rx
+    }
+}
+
+struct AutoEventAdapter;
+
+#[async_trait]
+impl Adapter for AutoEventAdapter {
+    type Ctx = TestCtx;
+
+    async fn start(self) -> mpsc::Receiver<Self::Ctx> {
+        let (tx, rx) = mpsc::channel(1);
+        tokio::spawn(async move {
+            let _ = tx.send(TestCtx::text("/auto")).await;
+        });
+        rx
+    }
+}
+
+#[derive(Default)]
+struct AutoDiscoveredPlugin;
+
+#[plugin(name = "auto-discovered", prefix = "/", context = "TestCtx")]
+impl AutoDiscoveredPlugin {
+    async fn auto(&self, _ctx: &TestCtx) -> Result<()> {
+        AUTO_HANDLES.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -201,6 +244,18 @@ async fn bot_drains_queued_events_when_adapter_closes() {
         .expect("bot should exit when adapter channel closes");
 
     assert_eq!(handles.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn bot_automatically_loads_discovered_macro_plugins() {
+    AUTO_HANDLES.store(0, Ordering::SeqCst);
+    let bot = Bot::new(AutoEventAdapter);
+
+    tokio::time::timeout(Duration::from_millis(200), bot.run())
+        .await
+        .expect("bot should exit when adapter channel closes");
+
+    assert_eq!(AUTO_HANDLES.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

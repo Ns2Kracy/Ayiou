@@ -1,25 +1,41 @@
 ---
 title: Plugin 宏
-description: 使用 #[plugin] + #[command] 构建默认插件入口
+description: 使用 #[plugin] 构建默认插件入口
 ---
 
-`#[plugin]` 是默认插件编写方式。它放在 `impl` 块上，`#[command]` 标记具体命令方法，宏会生成 `RuntimePlugin` 实现。
+`#[plugin]` 是默认插件编写方式。它放在 `impl` 块上，impl 里的 async 方法会按方法名注册成命令，宏会生成 `RuntimePlugin` 实现，并默认提交到自动发现注册表。`Bot::run()` 会加载当前上下文类型匹配的自动发现插件。
 
 高级场景仍然可以手写 `RuntimePlugin`，但默认文档只推荐这一套宏入口。
 
 ## 基本用法
 
 ```rust
-use ayiou::{command, plugin, Context};
+use ayiou::{plugin, Context};
 
 #[derive(Default)]
 struct MyPlugin;
 
 #[plugin(name = "my_plugin", prefix = "/")]
 impl MyPlugin {
-    #[command(name = "hello")]
     async fn hello(&self, ctx: &Context) -> anyhow::Result<()> {
         ctx.reply_text("hello").await
+    }
+}
+```
+
+主入口不需要逐个注册宏插件：
+
+```rust
+ConsoleBot::console().run().await;
+```
+
+如果插件需要自定义构造参数，或只是测试/辅助插件，可以关闭自动注册：
+
+```rust
+#[plugin(name = "helper", prefix = "/", register = false)]
+impl HelperPlugin {
+    async fn help(&self, ctx: &Context) -> anyhow::Result<()> {
+        ctx.reply_text("help").await
     }
 }
 ```
@@ -33,19 +49,15 @@ impl MyPlugin {
 | `version` | 插件版本，默认 `0.1.0` |
 | `prefix` | 插件级命令前缀，可重复声明 |
 | `context` | 显式指定上下文类型，默认 `Context` |
+| `register` | 是否自动注册，默认 `true`；关闭时写 `register = false` |
 
-`#[command]` 支持：
+默认自动注册要求插件类型实现 `Default`，因为运行时会通过无参构造创建插件实例。
 
-| 属性 | 说明 |
-|---|---|
-| `name` | 命令名，默认是方法名 |
-| `alias` | 命令别名，可重复声明 |
-| `aliases` | 命令别名数组 |
+每个 async 方法默认注册为同名命令。例如 `async fn hello(...)` 会匹配 `/hello`。
 
 ## 参数解析
 
 ```rust
-#[command(name = "ban", alias = "block")]
 async fn ban(&self, ctx: &Context, user_id: i64, minutes: Option<u32>) -> anyhow::Result<()> {
     let minutes = minutes.unwrap_or(10);
     ctx.reply_text(format!("ban {user_id} for {minutes} minutes")).await
@@ -62,14 +74,13 @@ async fn ban(&self, ctx: &Context, user_id: i64, minutes: Option<u32>) -> anyhow
 
 ```rust
 use ayiou::adapter::onebot::v11::{ctx::Ctx, model::Message};
-use ayiou::{command, plugin, Context};
+use ayiou::{plugin, Context};
 
 #[derive(Default)]
 struct WhoAmI;
 
 #[plugin(name = "whoami", prefix = "/")]
 impl WhoAmI {
-    #[command(name = "whoami")]
     async fn whoami(&self, ctx: &Context) -> anyhow::Result<()> {
         if let Some(onebot) = ctx.extension::<Ctx>() {
             let login = onebot.get_login_info_data().await?;
@@ -95,7 +106,6 @@ struct OneBotOnlyPlugin;
 
 #[plugin(name = "onebot-only", context = "ayiou::adapter::onebot::v11::ctx::Ctx")]
 impl OneBotOnlyPlugin {
-    #[command(name = "ping")]
     async fn ping(&self, ctx: &Ctx) -> anyhow::Result<()> {
         ctx.reply_text("pong").await
     }

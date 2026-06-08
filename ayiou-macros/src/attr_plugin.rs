@@ -5,13 +5,26 @@ use syn::{
     Pat, PatIdent, PathArguments, Result, Type,
 };
 
-#[derive(Default)]
 struct PluginAttrs {
     name: Option<String>,
     description: Option<String>,
     version: Option<String>,
     prefixes: Vec<String>,
     context: Option<Type>,
+    register: bool,
+}
+
+impl Default for PluginAttrs {
+    fn default() -> Self {
+        Self {
+            name: None,
+            description: None,
+            version: None,
+            prefixes: Vec::new(),
+            context: None,
+            register: true,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -31,6 +44,7 @@ struct PluginIdentity {
     name: String,
     description: String,
     version: String,
+    register: bool,
 }
 
 pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenStream> {
@@ -62,19 +76,17 @@ fn collect_command_methods(item_impl: &mut ItemImpl, ctx_ty: &Type) -> Result<Ve
             continue;
         };
 
-        let Some(attr_index) = command_attr_index(method) else {
-            continue;
-        };
-
         if method.sig.asyncness.is_none() {
-            return Err(syn::Error::new_spanned(
-                &method.sig,
-                "#[command] method must be async",
-            ));
+            continue;
         }
 
-        let command_attr = method.attrs.remove(attr_index);
-        let cmd_attrs = parse_command_attr(&command_attr)?;
+        let cmd_attrs = if let Some(attr_index) = command_attr_index(method) {
+            let command_attr = method.attrs.remove(attr_index);
+            parse_command_attr(&command_attr)?
+        } else {
+            CommandAttrs::default()
+        };
+
         method
             .attrs
             .push(syn::parse_quote!(#[allow(clippy::unused_async)]));
@@ -85,7 +97,7 @@ fn collect_command_methods(item_impl: &mut ItemImpl, ctx_ty: &Type) -> Result<Ve
     if methods.is_empty() {
         return Err(syn::Error::new_spanned(
             &item_impl,
-            "#[plugin] requires at least one #[command] method",
+            "#[plugin] requires at least one async command method",
         ));
     }
 
@@ -107,6 +119,7 @@ fn plugin_identity(attrs: &PluginAttrs, plugin_ident: &syn::Ident) -> PluginIden
             .unwrap_or_else(|| plugin_ident.to_string().to_lowercase()),
         description: attrs.description.clone().unwrap_or_default(),
         version: attrs.version.clone().unwrap_or_else(|| "0.1.0".to_string()),
+        register: attrs.register,
     }
 }
 
@@ -130,6 +143,22 @@ fn render_plugin_impl(
     let plugin_name = identity.name;
     let plugin_description = identity.description;
     let plugin_version = identity.version;
+    let registration = if identity.register {
+        quote! {
+            ayiou::inventory::submit! {
+                ayiou::core::plugin_system::PluginRegistration {
+                    instance_id: #plugin_name,
+                    context_type_id: ::std::any::TypeId::of::<#ctx_ty>,
+                    context_type_name: ::std::any::type_name::<#ctx_ty>,
+                    factory: || -> Box<dyn ::std::any::Any + Send + Sync> {
+                        Box::new(Box::new(<#plugin_ty as ::std::default::Default>::default()) as Box<dyn ayiou::core::plugin_system::RuntimePlugin<#ctx_ty>>)
+                    },
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     let dispatch_arms = methods.iter().map(|method| {
         let fn_name = &method.fn_name;
@@ -199,6 +228,8 @@ fn render_plugin_impl(
                 }
             }
         }
+
+        #registration
     }
 }
 
@@ -222,6 +253,7 @@ fn parse_plugin_attrs(args: Vec<Meta>) -> Result<PluginAttrs> {
                         let ty_str = expect_string_expr(value)?;
                         out.context = Some(syn::parse_str(&ty_str)?);
                     }
+                    "register" => out.register = expect_bool_expr(value)?,
                     _ => {
                         return Err(syn::Error::new(
                             Span::call_site(),
@@ -299,7 +331,7 @@ fn parse_command_method(
         _ => {
             return Err(syn::Error::new_spanned(
                 &method.sig.inputs,
-                "#[command] method must start with `&self`",
+                "command method must start with `&self`",
             ));
         }
     }
@@ -307,7 +339,7 @@ fn parse_command_method(
     let Some(FnArg::Typed(ctx_arg)) = inputs.next() else {
         return Err(syn::Error::new_spanned(
             &method.sig.inputs,
-            "#[command] method must include context as the second argument",
+            "command method must include context as the second argument",
         ));
     };
 
@@ -403,6 +435,18 @@ fn expect_string_expr(value: Expr) -> Result<String> {
         Ok(value.value())
     } else {
         Err(syn::Error::new_spanned(value, "Expected string literal"))
+    }
+}
+
+fn expect_bool_expr(value: Expr) -> Result<bool> {
+    if let Expr::Lit(ExprLit {
+        lit: Lit::Bool(value),
+        ..
+    }) = value
+    {
+        Ok(value.value)
+    } else {
+        Err(syn::Error::new_spanned(value, "Expected bool literal"))
     }
 }
 

@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    any::{Any, TypeId},
+    sync::Arc,
+};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -601,6 +604,52 @@ where
     } else {
         meta.name
     }
+}
+
+pub type ErasedPluginFactory = fn() -> Box<dyn Any + Send + Sync>;
+
+pub struct PluginRegistration {
+    pub instance_id: &'static str,
+    pub context_type_id: fn() -> TypeId,
+    pub context_type_name: fn() -> &'static str,
+    pub factory: ErasedPluginFactory,
+}
+
+impl PluginRegistration {
+    #[must_use]
+    pub fn is_for_context<C: 'static>(&self) -> bool {
+        (self.context_type_id)() == TypeId::of::<C>()
+    }
+
+    pub fn instantiate<C>(&self) -> Option<RegisteredPlugin<C>>
+    where
+        C: Send + Sync + 'static,
+    {
+        if !self.is_for_context::<C>() {
+            return None;
+        }
+
+        let plugin = (self.factory)()
+            .downcast::<Box<dyn RuntimePlugin<C>>>()
+            .ok()?;
+
+        Some(RegisteredPlugin::new(self.instance_id, *plugin))
+    }
+}
+
+inventory::collect!(PluginRegistration);
+
+#[must_use]
+pub fn discovered_plugins<C>() -> Vec<RegisteredPlugin<C>>
+where
+    C: Send + Sync + 'static,
+{
+    let mut plugins: Vec<_> = inventory::iter::<PluginRegistration>
+        .into_iter()
+        .filter_map(PluginRegistration::instantiate::<C>)
+        .collect();
+    plugins.sort_by(|left, right| left.instance_id().cmp(right.instance_id()));
+    plugins
 }
 
 #[must_use]

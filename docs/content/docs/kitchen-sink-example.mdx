@@ -1,11 +1,11 @@
 ---
 title: Kitchen Sink 示例
-description: 一个覆盖 RuntimePlugin、宏、Handler 管线、配置、能力协商和单 Bot runtime 的完整示例
+description: 一个覆盖 #[plugin]、命令参数解析、自动发现和单 Bot runtime 的完整示例
 ---
 
-`ayiou/examples/kitchen_sink.rs` 是一个可编译、可运行的全特性示例。
+`ayiou/examples/kitchen_sink.rs` 是一个可编译、可运行的宏插件 smoke flow。
 
-它不连接真实 OneBot，也不阻塞 Console 输入，而是用内存里的 adapter 和 outbound sender 跑一遍 smoke flow。这样你可以安全地用它检查内核 API 是否能组合起来工作。
+它不连接真实 OneBot，也不阻塞 Console 输入，而是用内存里的 adapter 投递几条消息事件，验证 `#[plugin]` 插件会被 `Bot::run()` 自动发现并执行。
 
 ## 运行方式
 
@@ -24,55 +24,22 @@ cargo test -p ayiou --example kitchen_sink
 成功运行时会看到类似输出：
 
 ```text
-capability negotiation: Degraded { missing_optional: [Reaction] }
-bonjour secure command args=admin open sesame
 echo: hello from macro
+add: 42
 plugin macro handled: /hello
 kitchen sink example completed
 ```
-
-## Runtime Services
-
-This example registers a host-provided `GreetingService` on `Bot`, declares it in `KitchenPlugin::manifest()`, then requests it from `RuntimePluginServices` during `KitchenPlugin::init()`.
-
-Plugins should not call other plugin instances directly. Register host-provided services on `Bot`, then request them from `RuntimePluginServices` during plugin initialization:
-
-```rust
-let bot = Bot::new(adapter)
-    .with_service(AclService::new())
-    .with_plugin(AdminPlugin);
-```
-
-```rust
-fn manifest(&self) -> RuntimePluginManifest {
-    RuntimePluginManifest::new("admin")
-        .require_service::<AclService>()
-}
-```
-
-```rust
-async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Result<()> {
-    self.acl = Some(services.require_service::<AclService>()?);
-    Ok(())
-}
-```
-
-Required service declarations are preflighted before any plugin `init()` runs, so a missing dependency fails startup without partially initializing the plugin set.
-
-For diagnostics or adaptive behavior, plugins can inspect registered service metadata through `services.service_descriptors()`. Descriptors include the service type key, `RuntimeService::name()`, and `RuntimeService::version()`.
-
-Plugins can also provide services by implementing `register_services()` and inserting lightweight service facades into the runtime registry. Consumer plugins still depend on the service type, not on the provider plugin instance.
-
-The example also registers `RuntimeEventBus` as a service. `KitchenPlugin` declares the bus in its manifest and publishes a typed `KitchenNotice` event from its regex handler; the demo subscribes to the same bus to verify local runtime-scoped event delivery.
 
 ## 覆盖了什么
 
 ### 宏生成 RuntimePlugin
 
-示例里使用同一套默认宏入口：
+示例只使用一个默认宏入口：
 
-- `#[plugin]`：声明插件元信息和默认上下文
-- `#[command]`：声明命令、别名和参数解析入口
+- `#[plugin]`：声明插件元信息、默认上下文和自动发现入口
+- async 方法：按方法名注册成命令，并按签名自动解析参数
+
+宏插件默认会自动注册。示例的 Bot 入口没有逐个 `.with_plugin(HelloPlugin)` / `.with_plugin(ToolsPlugin)`，`Bot::run()` 会按 `DemoCtx` 自动加载它们。
 
 ```rust
 #[derive(Default)]
@@ -80,97 +47,39 @@ struct HelloPlugin;
 
 #[plugin(name = "hello", prefix = "/", context = "DemoCtx")]
 impl HelloPlugin {
-    #[command(name = "hello")]
-    async fn execute(&self, ctx: &DemoCtx) -> anyhow::Result<()> {
+    async fn hello(&self, ctx: &DemoCtx) -> anyhow::Result<()> {
         println!("plugin macro handled: {}", ctx.text());
         Ok(())
     }
 }
+```
 
+### 命令参数解析
+
+`ToolsPlugin` 展示了尾部 `String` 和 typed 参数解析：
+
+```rust
 #[derive(Default)]
 struct ToolsPlugin;
 
 #[plugin(name = "tools", prefix = "/", context = "DemoCtx")]
 impl ToolsPlugin {
-    #[command(name = "echo", alias = "say")]
     async fn echo(&self, _ctx: &DemoCtx, content: String) -> anyhow::Result<()> {
         println!("echo: {content}");
+        Ok(())
+    }
+
+    async fn add(&self, _ctx: &DemoCtx, left: i64, right: i64) -> anyhow::Result<()> {
+        println!("add: {}", left + right);
         Ok(())
     }
 }
 ```
 
-这个宏入口生成的是 `RuntimePlugin` 实现，而不是旧的消息插件接口。
-
-### 手写 RuntimePlugin
-
-`KitchenPlugin` 展示了手写运行时插件的完整形态：
-
-- `meta()`：插件元信息
-- `manifest()`：必需/可选能力声明
-- `declared_handlers()`：命令、正则、权限、优先级和 block
-- `init()` / `start()` / `stop()`：生命周期
-- `apply_config()`：配置 dry-run 与实际应用
-- `handle_with_invocation()`：命令处理入口
-- `handle()`：非命令 handler 入口
-- `health()`：健康状态
-
-```rust
-fn manifest(&self) -> RuntimePluginManifest {
-    RuntimePluginManifest::new(self.kind())
-        .require_capability(Capability::ProactiveSend)
-        .optional_capability(Capability::Reaction)
-        .require_service::<GreetingService>()
-}
-
-fn declared_handlers(&self) -> Vec<HandlerDecl> {
-    vec![
-        HandlerDecl::message_commands(["secure"], ["/"])
-            .require_permission(Permission::user("admin"))
-            .priority(5)
-            .block(true),
-        HandlerDecl::message_regex(["(?i)kitchen\\s+sink"])
-            .require_permission(Permission::PlatformCapability(Capability::ProactiveSend))
-            .priority(20),
-    ]
-}
-```
-
-### Handler 管线
-
-示例会依次触发：
-
-- `/secure admin open sesame`：命令 handler，带权限、优先级和 block
-- `please show the kitchen sink`：正则 handler，要求 `ProactiveSend` 能力
-- `/say hello from macro`：`#[plugin] + #[command]` 生成的命令 handler
-- `/hello`：同一套宏生成的另一个命令 handler
-
-这对应 v0.2 的统一 handler 管线：adapter 产出事件，runtime 做粗筛、rule、permission 和 handler 执行。
-
-### 配置生命周期
-
-示例同时展示 dry-run 与实际 apply：
-
-```rust
-self.apply_config(ConfigUpdate::dry_run(1, "bonjour")).await?;
-self.apply_config(ConfigUpdate::new(2, "bonjour")).await?;
-```
-
-运行时状态会记录：
-
-- dry-run：进入 `validated`，不更新 applied version
-- apply：进入 `applied`，更新 applied version
-
 ### Bot builder
 
 ```rust
-Bot::new(adapter)
-    .with_service(GreetingService {
-        greeting: "host service".to_string(),
-    })
-    .with_plugin(HelloPlugin)
-    .with_plugin(ToolsPlugin)
-    .with_plugin_as("kitchen-main", KitchenPlugin::new())
+Bot::new(DemoAdapter)
     .workers(1)
     .queue_capacity(8)
     .command_prefixes(["/"])
@@ -178,16 +87,15 @@ Bot::new(adapter)
     .await;
 ```
 
-这说明 Ayiou 的公开主路径是一个 Bot runtime。多个消息渠道应该作为 adapter/source 接入同一个 runtime，回复时根据消息来源回到原渠道。
+这说明 Ayiou 的公开主路径是一个 Bot runtime 加宏插件自动发现。手写插件仍然属于高级扩展路径，但默认示例不再展示它。
 
 ## 什么时候参考它
 
-- 你想确认某个 API 应该怎么组合使用
-- 你要写一个手动 `RuntimePlugin`
-- 你要理解 `Bot` builder 如何承载插件注册和运行时启动
-- 你想看配置、能力协商和 handler 管线如何一起工作
+- 你想确认 `#[plugin]` 应该怎么使用
+- 你想确认宏插件自动发现是否生效
+- 你要理解 `Bot` builder 如何承载默认插件运行路径
 
-如果只想写普通命令插件，优先看：
+如果想写普通命令插件，继续看：
 
 - [Plugin 宏](/docs/plugin-macro)
 - [命令系统与 DX](/docs/command-system-dx)

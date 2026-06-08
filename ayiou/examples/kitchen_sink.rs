@@ -1,23 +1,10 @@
-use std::sync::{Arc, Mutex};
-
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use async_trait::async_trait;
-#[allow(unused_imports)]
-use ayiou::command;
 use ayiou::{
     Bot,
     core::{
-        adapter::{Adapter, AdapterCapabilities, AdapterRuntime, MsgContext},
-        event_bus::{RuntimeEvent, RuntimeEventBus},
-        model::{
-            ChannelKind, ChannelRef, CommandInvocation, EventEnvelope, MessageEvent,
-            OutboundMessage, OutboundReceipt, PlatformId, UserRef,
-        },
-        plugin_system::{
-            ApplyConfigOutcome, Capability, ConfigUpdate, HandleOutcome, HandlerDecl, Permission,
-            PluginHealth, PluginMetadata, RuntimePlugin, RuntimePluginManifest,
-            RuntimePluginServices, negotiate_capabilities,
-        },
+        adapter::{Adapter, MsgContext},
+        model::{ChannelKind, ChannelRef, EventEnvelope, MessageEvent, PlatformId, UserRef},
     },
     plugin,
 };
@@ -76,8 +63,7 @@ struct HelloPlugin;
     context = "DemoCtx"
 )]
 impl HelloPlugin {
-    #[command(name = "hello")]
-    async fn execute(&self, ctx: &DemoCtx) -> Result<()> {
+    async fn hello(&self, ctx: &DemoCtx) -> Result<()> {
         println!("plugin macro handled: {}", ctx.text());
         Ok(())
     }
@@ -93,226 +79,29 @@ struct ToolsPlugin;
     context = "DemoCtx"
 )]
 impl ToolsPlugin {
-    #[command(name = "echo", alias = "say")]
     async fn echo(&self, _ctx: &DemoCtx, content: String) -> Result<()> {
         println!("echo: {content}");
         Ok(())
     }
 
-    #[command(name = "add")]
     async fn add(&self, _ctx: &DemoCtx, left: i64, right: i64) -> Result<()> {
         println!("add: {}", left + right);
         Ok(())
     }
 }
 
-#[derive(Clone, Debug, Default)]
-struct KitchenConfig {
-    greeting: String,
-}
-
-struct GreetingService {
-    greeting: String,
-}
-
-impl ayiou::core::service::RuntimeService for GreetingService {
-    fn name(&self) -> &'static str {
-        "greeting"
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct KitchenNotice {
-    text: String,
-}
-
-impl RuntimeEvent for KitchenNotice {
-    fn topic() -> &'static str {
-        "kitchen-notice"
-    }
-}
-
-struct KitchenPlugin {
-    config: KitchenConfig,
-    service_greeting: String,
-    event_bus: Option<Arc<RuntimeEventBus>>,
-    seen: Arc<Mutex<Vec<String>>>,
-    services: Option<RuntimePluginServices<DemoCtx>>,
-}
-
-impl KitchenPlugin {
-    fn new() -> Self {
-        Self {
-            config: KitchenConfig {
-                greeting: "hello".to_string(),
-            },
-            service_greeting: String::new(),
-            event_bus: None,
-            seen: Arc::new(Mutex::new(Vec::new())),
-            services: None,
-        }
-    }
-}
-
-#[async_trait]
-impl RuntimePlugin<DemoCtx> for KitchenPlugin {
-    fn kind(&self) -> &'static str {
-        "kitchen"
-    }
-
-    fn meta(&self) -> PluginMetadata {
-        PluginMetadata::new("kitchen")
-            .description(
-                "manual RuntimePlugin covering manifest, handlers, config, capabilities, health",
-            )
-            .version("0.2.0")
-    }
-
-    fn manifest(&self) -> RuntimePluginManifest {
-        RuntimePluginManifest::new(self.kind())
-            .description("requires proactive send and can degrade without reactions")
-            .version("0.2.0")
-            .require_capability(Capability::ProactiveSend)
-            .optional_capability(Capability::Reaction)
-            .require_service::<GreetingService>()
-            .require_service::<RuntimeEventBus>()
-    }
-
-    fn declared_handlers(&self) -> Vec<HandlerDecl> {
-        vec![
-            HandlerDecl::message_commands(["secure"], ["/"])
-                .require_permission(Permission::user("admin"))
-                .priority(5)
-                .block(true),
-            HandlerDecl::message_regex(["(?i)kitchen\\s+sink"])
-                .require_permission(Permission::PlatformCapability(Capability::ProactiveSend))
-                .priority(20),
-        ]
-    }
-
-    async fn init(&mut self, services: RuntimePluginServices<DemoCtx>) -> Result<()> {
-        let negotiation =
-            negotiate_capabilities(&self.manifest(), &services.provided_capabilities());
-        println!("capability negotiation: {negotiation:?}");
-        self.service_greeting = services
-            .require_service::<GreetingService>()?
-            .greeting
-            .clone();
-        self.event_bus = Some(services.require_service::<RuntimeEventBus>()?);
-        self.services = Some(services);
-        Ok(())
-    }
-
-    async fn start(&mut self, _services: RuntimePluginServices<DemoCtx>) -> Result<()> {
-        self.apply_config(ConfigUpdate::dry_run(1, "bonjour"))
-            .await?;
-        self.apply_config(ConfigUpdate::new(2, "bonjour")).await?;
-        Ok(())
-    }
-
-    async fn apply_config(&mut self, update: ConfigUpdate) -> Result<ApplyConfigOutcome> {
-        if update.dry_run {
-            println!("dry-run config v{}: {}", update.version, update.content);
-            return Ok(ApplyConfigOutcome::skipped());
-        }
-
-        self.config.greeting = update.content;
-        Ok(ApplyConfigOutcome::applied(update.version))
-    }
-
-    async fn handle_with_invocation(
-        &self,
-        ctx: &DemoCtx,
-        invocation: Option<CommandInvocation>,
-    ) -> Result<HandleOutcome> {
-        if let Some(invocation) = invocation {
-            self.seen
-                .lock()
-                .expect("seen lock")
-                .push(format!("command:{}", invocation.command()));
-            println!(
-                "{} secure command args={}",
-                self.config.greeting,
-                invocation.args()
-            );
-            return Ok(HandleOutcome::block());
-        }
-
-        self.handle(ctx).await
-    }
-
-    async fn handle(&self, ctx: &DemoCtx) -> Result<HandleOutcome> {
-        self.seen
-            .lock()
-            .expect("seen lock")
-            .push(format!("regex:{}", ctx.text()));
-        if let Some(event_bus) = &self.event_bus {
-            let _ = event_bus.publish(KitchenNotice { text: ctx.text() })?;
-        }
-
-        if let Some(message) = ctx.envelope.message() {
-            let services = self
-                .services
-                .as_ref()
-                .ok_or_else(|| anyhow!("plugin has not been initialized"))?;
-            services
-                .host
-                .send_text(
-                    message.channel.clone(),
-                    format!(
-                        "{} from kitchen via {}",
-                        self.config.greeting, self.service_greeting
-                    ),
-                )
-                .await?;
-        }
-
-        Ok(HandleOutcome::pass())
-    }
-
-    fn health(&self) -> PluginHealth {
-        PluginHealth::healthy()
-    }
-}
-
-#[derive(Clone)]
-struct RecordingSender {
-    messages: Arc<Mutex<Vec<String>>>,
-}
-
-#[async_trait]
-impl ayiou::core::plugin_host::OutboundSender for RecordingSender {
-    async fn send(&self, message: OutboundMessage) -> Result<OutboundReceipt> {
-        self.messages
-            .lock()
-            .expect("messages lock")
-            .push(message.plain_text());
-        Ok(OutboundReceipt {
-            message_id: Some("example-message".to_string()),
-        })
-    }
-}
-
-struct DemoAdapter {
-    sender: Arc<RecordingSender>,
-}
+struct DemoAdapter;
 
 #[async_trait]
 impl Adapter for DemoAdapter {
     type Ctx = DemoCtx;
 
     async fn start(self) -> mpsc::Receiver<Self::Ctx> {
-        self.start_with_runtime().await.events
-    }
-
-    async fn start_with_runtime(self) -> AdapterRuntime<Self::Ctx> {
         let (tx, rx) = mpsc::channel(8);
-        let sender: Arc<dyn ayiou::core::plugin_host::OutboundSender> = self.sender;
 
         let events = [
-            DemoCtx::message("bot-a", "/secure admin open sesame", "admin", "group-a"),
-            DemoCtx::message("bot-a", "please show the kitchen sink", "guest", "group-a"),
-            DemoCtx::message("bot-a", "/say hello from macro", "guest", "group-a"),
+            DemoCtx::message("bot-a", "/echo hello from macro", "guest", "group-a"),
+            DemoCtx::message("bot-a", "/add 20 22", "guest", "group-a"),
             DemoCtx::message("bot-a", "/hello", "guest", "group-a"),
         ];
 
@@ -324,79 +113,19 @@ impl Adapter for DemoAdapter {
             }
         });
 
-        AdapterRuntime {
-            events: rx,
-            sender: Some(sender),
-        }
-    }
-
-    fn capabilities(&self) -> AdapterCapabilities {
-        AdapterCapabilities {
-            proactive_send: true,
-            attachments: false,
-            platform_extensions: Vec::new(),
-        }
+        rx
     }
 }
 
-async fn run_bot_demo() -> Result<()> {
-    let sent_messages = Arc::new(Mutex::new(Vec::new()));
-    let sender = Arc::new(RecordingSender {
-        messages: sent_messages.clone(),
-    });
-    let event_bus = RuntimeEventBus::new(8);
-    let mut kitchen_events = event_bus.subscribe::<KitchenNotice>();
-
-    Bot::new(DemoAdapter { sender })
-        .with_service(event_bus)
-        .with_service(GreetingService {
-            greeting: "host service".to_string(),
-        })
-        .with_plugin(HelloPlugin)
-        .with_plugin(ToolsPlugin)
-        .with_plugin_as("kitchen-main", KitchenPlugin::new())
+#[tokio::main]
+async fn main() -> Result<()> {
+    Bot::new(DemoAdapter)
         .workers(1)
         .queue_capacity(8)
         .command_prefixes(["/"])
         .run()
         .await;
 
-    assert!(
-        sent_messages
-            .lock()
-            .expect("messages lock")
-            .iter()
-            .any(|message| message.contains("bonjour"))
-    );
-    assert!(
-        sent_messages
-            .lock()
-            .expect("messages lock")
-            .iter()
-            .any(|message| message.contains("host service"))
-    );
-    let kitchen_notice = kitchen_events
-        .try_recv()
-        .expect("kitchen plugin should publish a typed runtime event");
-    assert!(kitchen_notice.text.contains("kitchen sink"));
-    Ok(())
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    run_bot_demo().await?;
     println!("kitchen sink example completed");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn bot_demo_uses_runtime_services() {
-        run_bot_demo()
-            .await
-            .expect("kitchen sink demo should complete");
-    }
 }

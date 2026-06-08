@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc, clippy::multiple_crate_versions)]
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use log::{error, info};
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -11,7 +11,7 @@ use crate::core::{
     plugin_runtime::PluginRuntimeState,
     plugin_system::{
         DispatchOptions, RegisteredPlugin, RuntimePlugin, RuntimePluginEngine,
-        RuntimePluginServices,
+        RuntimePluginServices, discovered_plugins,
     },
     service::{RuntimeService, ServiceRegistry},
 };
@@ -30,6 +30,7 @@ pub use ayiou_macros::{command, plugin};
 pub use core::context::Context;
 pub use core::model::*;
 pub use core::runtime::{RuntimeController, RuntimeState};
+pub use inventory;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum QueueOverflowPolicy {
@@ -231,6 +232,7 @@ impl<A: Adapter> Bot<A> {
 
     pub async fn run(mut self) {
         info!("Starting Bot...");
+        self.load_discovered_plugins();
 
         let adapter_capabilities = self.adapter.capabilities();
         let adapter_runtime = self.adapter.start_with_runtime().await;
@@ -265,6 +267,23 @@ impl<A: Adapter> Bot<A> {
 
         if let Err(err) = engine.write().await.stop_all().await {
             error!("Plugin shutdown error: {err}");
+        }
+    }
+
+    fn load_discovered_plugins(&mut self)
+    where
+        A::Ctx: Send + Sync + 'static,
+    {
+        let mut explicit_ids: HashSet<String> = self
+            .plugins
+            .iter()
+            .map(|plugin| plugin.instance_id().to_string())
+            .collect();
+
+        for plugin in discovered_plugins::<A::Ctx>() {
+            if explicit_ids.insert(plugin.instance_id().to_string()) {
+                self.plugins.push(plugin);
+            }
         }
     }
 }

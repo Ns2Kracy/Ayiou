@@ -89,7 +89,7 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
 }
 ```
 
-`instance_id` 不属于插件 trait。默认实例 ID 来自 `meta().name`，需要同类型多实例时由 `Bot::with_plugin_as(...)` 或 `RuntimePluginEngine::push_as(...)` 指定。
+`instance_id` 不属于插件 trait。默认实例 ID 来自 `meta().name`。`#[plugin]` 宏插件默认会进入自动发现注册表，并由 `Bot::run()` 按上下文类型加载；需要同类型多实例或自定义构造时，再由 `Bot::with_plugin_as(...)` 或 `RuntimePluginEngine::push_as(...)` 显式指定。
 
 这里最关键的不是 trait 名字，而是“命令插件、正则插件、状态插件，最后都进入同一个实例运行时”。
 
