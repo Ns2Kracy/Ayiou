@@ -1,11 +1,11 @@
 ---
 title: Kitchen Sink 示例
-description: 一个覆盖 #[plugin]、命令参数解析、自动发现和单 Bot runtime 的完整示例
+description: 一个覆盖 #[plugin]、命令参数解析、自动发现、控制面和单 Bot runtime 的完整示例
 ---
 
 `ayiou/examples/kitchen_sink.rs` 是一个可编译、可运行的宏插件 smoke flow。
 
-它不连接真实 OneBot，也不阻塞 Console 输入，而是用内存里的 adapter 投递几条消息事件，验证 `#[plugin]` 插件会被 `Bot::run()` 自动发现并执行。
+它不连接真实 OneBot，也不阻塞 Console 输入，而是用内存里的 adapter 投递几条消息事件，验证 `#[plugin]` 插件会被 `Bot::run()` 自动发现并执行。启用 `control-plane` / `embedded-webui` feature 时，它还会演示 Bot builder 如何挂载控制面。
 
 ## 运行方式
 
@@ -13,6 +13,18 @@ description: 一个覆盖 #[plugin]、命令参数解析、自动发现和单 Bo
 
 ```bash
 cargo run -p ayiou --example kitchen_sink
+```
+
+启用控制面 API：
+
+```bash
+cargo run -p ayiou --features control-plane --example kitchen_sink
+```
+
+启用内嵌管理 UI：
+
+```bash
+cargo run -p ayiou --features embedded-webui --example kitchen_sink
 ```
 
 也可以只检查 example 是否能编译：
@@ -24,11 +36,14 @@ cargo test -p ayiou --example kitchen_sink
 成功运行时会看到类似输出：
 
 ```text
+control plane: http://127.0.0.1:32187/ token=kitchen-sink-token
 echo: hello from macro
 add: 42
 plugin macro handled: /hello
 kitchen sink example completed
 ```
+
+默认不启用控制面 feature 时，不会打印第一行。
 
 ## 覆盖了什么
 
@@ -79,21 +94,29 @@ impl ToolsPlugin {
 ### Bot builder
 
 ```rust
-Bot::new(DemoAdapter)
+let bot = Bot::new(DemoAdapter)
     .workers(1)
     .queue_capacity(8)
-    .command_prefixes(["/"])
-    .run()
-    .await;
+    .command_prefixes(["/"]);
+
+#[cfg(feature = "control-plane")]
+let bot = bot.control_plane(
+    ControlPlaneOptions::new()
+        .bind("127.0.0.1:32187")
+        .token("kitchen-sink-token"),
+);
+
+bot.run().await;
 ```
 
-这说明 Ayiou 的公开主路径是一个 Bot runtime 加宏插件自动发现。手写插件仍然属于高级扩展路径，但默认示例不再展示它。
+这说明 Ayiou 的公开主路径是一个 Bot runtime 加宏插件自动发现。控制面也是 Bot builder 的可选能力：host/bind 可配置，token 必填。手写插件仍然属于高级扩展路径，但默认示例不再展示它。
 
 ## 什么时候参考它
 
 - 你想确认 `#[plugin]` 应该怎么使用
 - 你想确认宏插件自动发现是否生效
 - 你要理解 `Bot` builder 如何承载默认插件运行路径
+- 你要确认控制面如何挂到 Bot builder 上
 
 如果想写普通命令插件，继续看：
 

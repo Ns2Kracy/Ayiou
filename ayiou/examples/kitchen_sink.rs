@@ -1,5 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
+#[cfg(feature = "control-plane")]
+use ayiou::ControlPlaneOptions;
 use ayiou::{
     Bot,
     core::{
@@ -119,12 +121,20 @@ impl Adapter for DemoAdapter {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    Bot::new(DemoAdapter)
+    let bot = Bot::new(DemoAdapter)
         .workers(1)
         .queue_capacity(8)
-        .command_prefixes(["/"])
-        .run()
-        .await;
+        .command_prefixes(["/"]);
+
+    #[cfg(feature = "control-plane")]
+    let bot = {
+        let bind = "127.0.0.1:32187";
+        let token = "kitchen-sink-token";
+        println!("control plane: http://{bind}/ token={token}");
+        bot.control_plane(ControlPlaneOptions::new().bind(bind).token(token))
+    };
+
+    bot.run().await;
 
     println!("kitchen sink example completed");
     Ok(())
