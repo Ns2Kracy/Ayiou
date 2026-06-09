@@ -12,9 +12,8 @@ use dashmap::DashMap;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::onebot::v11::model::{
-    ApiRequest, ApiResponse, GroupInfoData, GroupMemberInfoData, GroupMessageEvent, LoginInfoData,
-    Message, MessageEvent, MessageSegment, OneBotAction, OneBotEvent, PrivateMessageEvent,
-    SendMessageData, echo_key,
+    ApiRequest, ApiResponse, GroupInfoData, GroupMemberInfoData, LoginInfoData, Message,
+    MessageEvent, MessageSegment, OneBotAction, OneBotEvent, SendMessageData, echo_key,
 };
 use crate::core::{
     context::Context,
@@ -25,42 +24,16 @@ use crate::core::{
     plugin::OutboundSender,
 };
 
-/// Message event type
-#[derive(Clone)]
-pub enum MsgEvent {
-    Private(Arc<PrivateMessageEvent>),
-    Group(Arc<GroupMessageEvent>),
-}
-
-use crate::core::adapter::MsgContext;
-
 const API_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Message context
 #[derive(Clone)]
 pub struct Ctx {
     event: Arc<OneBotEvent>,
-    msg: MsgEvent,
     array_text: Option<String>,
-    user_id_text: String,
-    group_id_text: Option<String>,
     outgoing_tx: mpsc::Sender<String>,
     pending_api: Arc<DashMap<String, oneshot::Sender<ApiResponse>>>,
     echo_seq: Arc<AtomicU64>,
-}
-
-impl MsgContext for Ctx {
-    fn text(&self) -> Cow<'_, str> {
-        self.text()
-    }
-
-    fn user_id(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.user_id_text)
-    }
-
-    fn group_id(&self) -> Option<Cow<'_, str>> {
-        self.group_id_text.as_deref().map(Cow::Borrowed)
-    }
 }
 
 impl Ctx {
@@ -74,23 +47,7 @@ impl Ctx {
         let OneBotEvent::Message(msg_event) = event.as_ref() else {
             return None;
         };
-
-        let msg = match msg_event.as_ref() {
-            MessageEvent::Private(p) => MsgEvent::Private(Arc::new(*p.clone())),
-            MessageEvent::Group(g) => MsgEvent::Group(Arc::new(*g.clone())),
-        };
-        let user_id_text = match &msg {
-            MsgEvent::Private(p) => p.user_id.to_string(),
-            MsgEvent::Group(g) => g.user_id.to_string(),
-        };
-        let group_id_text = match &msg {
-            MsgEvent::Private(_) => None,
-            MsgEvent::Group(g) => Some(g.group_id.to_string()),
-        };
-        let message = match &msg {
-            MsgEvent::Private(p) => &p.message,
-            MsgEvent::Group(g) => &g.message,
-        };
+        let message = message_payload(msg_event);
         let array_text = if let Message::Array(segments) = message {
             let mut text = String::new();
             for segment in segments {
@@ -110,10 +67,7 @@ impl Ctx {
 
         Some(Self {
             event,
-            msg,
             array_text,
-            user_id_text,
-            group_id_text,
             outgoing_tx,
             pending_api,
             echo_seq,
@@ -127,15 +81,21 @@ impl Ctx {
         &self.event
     }
 
+    fn message_event(&self) -> &MessageEvent {
+        match self.event.as_ref() {
+            OneBotEvent::Message(message) => message,
+            _ => unreachable!("OneBot Ctx only stores message events"),
+        }
+    }
+
+    fn message(&self) -> &Message {
+        message_payload(self.message_event())
+    }
+
     /// Get plain text from message
     #[must_use]
     pub fn text(&self) -> Cow<'_, str> {
-        let message = match &self.msg {
-            MsgEvent::Private(p) => &p.message,
-            MsgEvent::Group(g) => &g.message,
-        };
-
-        match message {
+        match self.message() {
             Message::String(s) => Cow::Borrowed(s.trim()),
             Message::Segment(seg) => match seg {
                 MessageSegment::Text { text } => Cow::Borrowed(text.trim()),
@@ -149,9 +109,9 @@ impl Ctx {
     #[inline]
     #[must_use]
     pub fn raw_message(&self) -> &str {
-        match &self.msg {
-            MsgEvent::Private(p) => &p.raw_message,
-            MsgEvent::Group(g) => &g.raw_message,
+        match self.message_event() {
+            MessageEvent::Private(p) => &p.raw_message,
+            MessageEvent::Group(g) => &g.raw_message,
         }
     }
 
@@ -159,9 +119,9 @@ impl Ctx {
     #[inline]
     #[must_use]
     pub fn user_id(&self) -> i64 {
-        match &self.msg {
-            MsgEvent::Private(p) => p.user_id,
-            MsgEvent::Group(g) => g.user_id,
+        match self.message_event() {
+            MessageEvent::Private(p) => p.user_id,
+            MessageEvent::Group(g) => g.user_id,
         }
     }
 
@@ -169,44 +129,44 @@ impl Ctx {
     #[inline]
     #[must_use]
     pub fn group_id(&self) -> Option<i64> {
-        match &self.msg {
-            MsgEvent::Private(_) => None,
-            MsgEvent::Group(g) => Some(g.group_id),
+        match self.message_event() {
+            MessageEvent::Private(_) => None,
+            MessageEvent::Group(g) => Some(g.group_id),
         }
     }
 
     /// Check if private message
     #[inline]
     #[must_use]
-    pub const fn is_private(&self) -> bool {
-        matches!(self.msg, MsgEvent::Private(_))
+    pub fn is_private(&self) -> bool {
+        matches!(self.message_event(), MessageEvent::Private(_))
     }
 
     /// Check if group message
     #[inline]
     #[must_use]
-    pub const fn is_group(&self) -> bool {
-        matches!(self.msg, MsgEvent::Group(_))
+    pub fn is_group(&self) -> bool {
+        matches!(self.message_event(), MessageEvent::Group(_))
     }
 
     /// Sender nickname
     #[inline]
     #[must_use]
     pub fn nickname(&self) -> &str {
-        match &self.msg {
-            MsgEvent::Private(p) => &p.sender.nickname,
-            MsgEvent::Group(g) => &g.sender.nickname,
+        match self.message_event() {
+            MessageEvent::Private(p) => &p.sender.nickname,
+            MessageEvent::Group(g) => &g.sender.nickname,
         }
     }
 
     /// Reply with message
     pub async fn reply(&self, message: impl Into<Message>) -> Result<()> {
         let msg = message.into();
-        match &self.msg {
-            MsgEvent::Private(p) => {
+        match self.message_event() {
+            MessageEvent::Private(p) => {
                 self.send_private_msg(p.user_id, &msg).await?;
             }
-            MsgEvent::Group(g) => {
+            MessageEvent::Group(g) => {
                 self.send_group_msg(g.group_id, &msg).await?;
             }
         }
@@ -215,9 +175,9 @@ impl Ctx {
 
     #[must_use]
     pub fn self_id(&self) -> i64 {
-        match &self.msg {
-            MsgEvent::Private(p) => p.self_id,
-            MsgEvent::Group(g) => g.self_id,
+        match self.message_event() {
+            MessageEvent::Private(p) => p.self_id,
+            MessageEvent::Group(g) => g.self_id,
         }
     }
 
@@ -236,18 +196,15 @@ impl Ctx {
         let platform = self.platform_id();
         let sender = UserRef::new(platform.clone(), self.user_id().to_string())
             .with_display_name(self.nickname().to_string());
-        let channel = match &self.msg {
-            MsgEvent::Private(p) => ChannelRef::direct(platform.clone(), p.user_id.to_string()),
-            MsgEvent::Group(g) => ChannelRef::group(platform.clone(), g.group_id.to_string()),
+        let channel = match self.message_event() {
+            MessageEvent::Private(p) => ChannelRef::direct(platform.clone(), p.user_id.to_string()),
+            MessageEvent::Group(g) => ChannelRef::group(platform.clone(), g.group_id.to_string()),
         };
-        let message_id = match &self.msg {
-            MsgEvent::Private(p) => p.message_id.to_string(),
-            MsgEvent::Group(g) => g.message_id.to_string(),
+        let message_id = match self.message_event() {
+            MessageEvent::Private(p) => p.message_id.to_string(),
+            MessageEvent::Group(g) => g.message_id.to_string(),
         };
-        let segments = to_kernel_segments(match &self.msg {
-            MsgEvent::Private(p) => &p.message,
-            MsgEvent::Group(g) => &g.message,
-        });
+        let segments = to_kernel_segments(self.message());
 
         let message = KernelMessageEvent::new(sender, channel, self.text())
             .with_message_id(message_id)
@@ -260,6 +217,13 @@ impl Ctx {
     pub fn into_context(self, sender: Option<std::sync::Arc<dyn OutboundSender>>) -> Context {
         let envelope = self.to_event_envelope();
         Context::new(envelope, sender, self)
+    }
+}
+
+fn message_payload(event: &MessageEvent) -> &Message {
+    match event {
+        MessageEvent::Private(private) => &private.message,
+        MessageEvent::Group(group) => &group.message,
     }
 }
 

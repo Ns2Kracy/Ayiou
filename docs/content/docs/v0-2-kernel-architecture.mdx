@@ -69,21 +69,21 @@ v0.2 追求的结果是：
 
 ```rust
 #[async_trait::async_trait]
-pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
+pub trait RuntimePlugin: Send + Sync + 'static {
     fn kind(&self) -> &str;
     fn manifest(&self) -> RuntimePluginManifest { RuntimePluginManifest::new(self.kind()) }
     fn declared_handlers(&self) -> Vec<HandlerDecl>;
 
-    async fn init(&mut self, services: RuntimePluginServices<C>) -> anyhow::Result<()> { Ok(()) }
-    async fn start(&mut self, services: RuntimePluginServices<C>) -> anyhow::Result<()> { Ok(()) }
+    async fn init(&mut self, services: RuntimePluginServices) -> anyhow::Result<()> { Ok(()) }
+    async fn start(&mut self, services: RuntimePluginServices) -> anyhow::Result<()> { Ok(()) }
     async fn stop(&mut self) -> anyhow::Result<()> { Ok(()) }
     async fn apply_config(&mut self, update: ConfigUpdate) -> anyhow::Result<ApplyConfigOutcome>;
-    async fn handle(&self, ctx: &C) -> anyhow::Result<HandleOutcome>;
+    async fn handle(&self, ctx: &Context) -> anyhow::Result<HandleOutcome>;
     fn health(&self) -> PluginHealth { PluginHealth::healthy() }
 }
 ```
 
-`instance_id` 不属于插件 trait。默认实例 ID 来自 `kind()`。`#[plugin]` 宏插件默认会进入自动发现注册表，并由 `Bot::run()` 按上下文类型加载；需要同类型多实例或自定义构造时，再由 `Bot::with_plugin_as(...)` 或 `RuntimePluginEngine::push_as(...)` 显式指定。
+`instance_id` 不属于插件 trait。默认实例 ID 来自 `kind()`。`#[plugin]` 宏插件默认会进入自动发现注册表，并由 `Bot::run()` 加载；需要同类型多实例或自定义构造时，再由 `Bot::with_plugin_as(...)` 或 `RuntimePluginEngine::push_as(...)` 显式指定。
 
 这里最关键的不是 trait 名字，而是“命令插件、正则插件、状态插件，最后都进入同一个实例运行时”。
 
@@ -201,7 +201,7 @@ Ayiou 的 Bot 是开发者定义的业务实例，不是外部平台账号。一
 - 不引入 Supervisor / RuntimeGraph
 - adapter 负责把事件归一化到同一个 runtime
 - outbound sender 根据消息来源回复到原渠道
-- 插件看到的是统一 `Context` / `MsgContext`
+- 插件看到的是统一 `Context`
 
 这让多渠道部署只是 I/O 接入问题，而不是内核对象图问题。
 

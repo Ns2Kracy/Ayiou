@@ -8,7 +8,8 @@ use crate::control_plane::{self, ControlPlaneOptions};
 #[cfg(feature = "control-plane")]
 use crate::core::control::RuntimeControlHandle;
 use crate::core::{
-    adapter::Adapter,
+    adapter::{Adapter, AdapterRuntime},
+    context::Context,
     plugin::{
         PluginRuntimeState, RegisteredPlugin, RuntimePlugin, RuntimePluginEngine,
         RuntimePluginServices, discovered_plugins, normalize_command_prefixes,
@@ -42,7 +43,7 @@ impl Default for BotRuntimeOptions {
 
 pub struct Bot<A: Adapter> {
     adapter: A,
-    plugins: Vec<RegisteredPlugin<A::Ctx>>,
+    plugins: Vec<RegisteredPlugin>,
     service_registry: ServiceRegistry,
     command_prefixes: Arc<[String]>,
     runtime_options: BotRuntimeOptions,
@@ -50,24 +51,21 @@ pub struct Bot<A: Adapter> {
     control_plane_options: Option<ControlPlaneOptions>,
 }
 
-struct BotRuntime<C> {
-    engine: Arc<tokio::sync::RwLock<RuntimePluginEngine<C>>>,
+struct BotRuntime {
+    engine: Arc<tokio::sync::RwLock<RuntimePluginEngine>>,
     options: BotRuntimeOptions,
 }
 
-impl<C> BotRuntime<C>
-where
-    C: crate::core::adapter::MsgContext + Send + 'static,
-{
+impl BotRuntime {
     const fn new(
-        engine: Arc<tokio::sync::RwLock<RuntimePluginEngine<C>>>,
+        engine: Arc<tokio::sync::RwLock<RuntimePluginEngine>>,
         options: BotRuntimeOptions,
     ) -> Self {
         Self { engine, options }
     }
 
-    async fn run(self, mut event_rx: mpsc::Receiver<C>) {
-        let (work_tx, work_rx) = mpsc::channel::<C>(self.options.queue_capacity);
+    async fn run(self, mut event_rx: mpsc::Receiver<Context>) {
+        let (work_tx, work_rx) = mpsc::channel::<Context>(self.options.queue_capacity);
         let worker_rx = Arc::new(tokio::sync::Mutex::new(work_rx));
         let worker_handles = self.spawn_workers(&worker_rx);
         let mut drain_workers = true;
@@ -114,7 +112,7 @@ where
 
     fn spawn_workers(
         &self,
-        worker_rx: &Arc<tokio::sync::Mutex<mpsc::Receiver<C>>>,
+        worker_rx: &Arc<tokio::sync::Mutex<mpsc::Receiver<Context>>>,
     ) -> Vec<JoinHandle<()>> {
         (0..self.options.worker_count)
             .map(|_| {
@@ -201,14 +199,14 @@ impl<A: Adapter> Bot<A> {
     }
 
     #[must_use]
-    pub fn with_plugin<P: RuntimePlugin<A::Ctx>>(mut self, plugin: P) -> Self {
+    pub fn with_plugin<P: RuntimePlugin>(mut self, plugin: P) -> Self {
         self.plugins
             .push(RegisteredPlugin::from_plugin(Box::new(plugin)));
         self
     }
 
     #[must_use]
-    pub fn with_plugin_as<P: RuntimePlugin<A::Ctx>>(
+    pub fn with_plugin_as<P: RuntimePlugin>(
         mut self,
         instance_id: impl Into<String>,
         plugin: P,
@@ -232,14 +230,17 @@ impl<A: Adapter> Bot<A> {
 
         self.load_discovered_plugins();
 
-        let adapter_capabilities = self.adapter.capabilities();
-        let adapter_runtime = self.adapter.start_with_runtime().await;
+        let AdapterRuntime {
+            events,
+            sender,
+            capabilities,
+        } = self.adapter.start().await;
         let runtime_state = PluginRuntimeState::default();
         let mut engine = RuntimePluginEngine::with_options(
             RuntimePluginServices::new()
-                .with_sender(adapter_runtime.sender.clone())
-                .with_capabilities(adapter_capabilities_to_runtime(&adapter_capabilities))
-                .with_service_registry(self.service_registry.clone()),
+                .with_sender(sender)
+                .with_capabilities(capabilities)
+                .with_service_registry(self.service_registry),
             runtime_state.clone(),
             self.command_prefixes.clone(),
         );
@@ -269,53 +270,26 @@ impl<A: Adapter> Bot<A> {
             return;
         }
         let runtime = BotRuntime::new(engine.clone(), self.runtime_options.clone());
-        runtime.run(adapter_runtime.events).await;
+        runtime.run(events).await;
 
         if let Err(err) = engine.write().await.stop_all().await {
             error!("Plugin shutdown error: {err}");
         }
     }
 
-    fn load_discovered_plugins(&mut self)
-    where
-        A::Ctx: Send + Sync + 'static,
-    {
+    fn load_discovered_plugins(&mut self) {
         let mut explicit_ids: HashSet<String> = self
             .plugins
             .iter()
             .map(|plugin| plugin.instance_id().to_string())
             .collect();
 
-        for plugin in discovered_plugins::<A::Ctx>() {
+        for plugin in discovered_plugins() {
             if explicit_ids.insert(plugin.instance_id().to_string()) {
                 self.plugins.push(plugin);
             }
         }
     }
-}
-
-fn adapter_capabilities_to_runtime(
-    capabilities: &crate::core::adapter::AdapterCapabilities,
-) -> Vec<crate::core::plugin::Capability> {
-    let mut out = Vec::new();
-
-    if capabilities.proactive_send {
-        out.push(crate::core::plugin::Capability::ProactiveSend);
-    }
-
-    if capabilities.attachments {
-        out.push(crate::core::plugin::Capability::RichSegments);
-    }
-
-    out.extend(
-        capabilities
-            .platform_extensions
-            .iter()
-            .cloned()
-            .map(crate::core::plugin::Capability::custom),
-    );
-
-    out
 }
 
 #[cfg(feature = "adapter-onebot-v11")]

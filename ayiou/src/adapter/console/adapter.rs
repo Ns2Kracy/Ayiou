@@ -1,12 +1,15 @@
 use async_trait::async_trait;
+use std::sync::Arc;
+
 use tokio::sync::mpsc;
 
 use crate::{
     adapter::console::{ctx::Ctx, sender::ConsoleSender},
     core::{
-        adapter::{Adapter, AdapterRuntime, ProtocolAdapter},
+        adapter::{Adapter, AdapterRuntime},
         context::Context,
         driver::Driver,
+        plugin::{Capability, OutboundSender},
     },
     driver::console::ConsoleDriver,
 };
@@ -39,52 +42,32 @@ impl Default for ConsoleAdapter {
     }
 }
 
-struct ConsoleProtocol;
+struct ConsoleProtocol {
+    sender: Arc<dyn OutboundSender>,
+}
 
-#[async_trait]
-impl ProtocolAdapter for ConsoleProtocol {
-    type Inbound = String;
-    type Outbound = String;
-    type Ctx = Context;
-
-    async fn handle_packet(
-        &mut self,
-        raw: Self::Inbound,
-        outbound_tx: mpsc::Sender<Self::Outbound>,
-    ) -> Option<Self::Ctx> {
+impl ConsoleProtocol {
+    fn handle_packet(&mut self, raw: String) -> Option<Context> {
         let text = raw.trim();
         if text.is_empty() {
             return None;
         }
 
-        let sender = std::sync::Arc::new(ConsoleSender::new(outbound_tx));
-        Some(Ctx::new(raw).into_context(Some(sender)))
+        Some(Ctx::new(raw).into_context(Some(self.sender.clone())))
     }
 }
 
 #[async_trait]
 impl Adapter for ConsoleAdapter {
-    type Ctx = Context;
-
-    fn capabilities(&self) -> crate::core::adapter::AdapterCapabilities {
-        crate::core::adapter::AdapterCapabilities {
-            proactive_send: true,
-            attachments: false,
-            platform_extensions: vec!["console".to_string()],
-        }
-    }
-
-    async fn start(self) -> mpsc::Receiver<Self::Ctx> {
-        self.start_with_runtime().await.events
-    }
-
-    async fn start_with_runtime(self) -> AdapterRuntime<Self::Ctx> {
+    async fn start(self) -> AdapterRuntime {
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<String>(100);
         let (raw_tx, mut raw_rx) = mpsc::channel::<String>(100);
         let (ctx_tx, ctx_rx) = mpsc::channel::<Context>(100);
         let driver = self.driver;
-        let protocol_outgoing_tx = outgoing_tx.clone();
-        let mut protocol = ConsoleProtocol;
+        let sender = Arc::new(ConsoleSender::new(outgoing_tx)) as Arc<dyn OutboundSender>;
+        let mut protocol = ConsoleProtocol {
+            sender: sender.clone(),
+        };
 
         tokio::spawn(async move {
             let driver_handle = tokio::spawn(async move {
@@ -94,9 +77,7 @@ impl Adapter for ConsoleAdapter {
             });
 
             while let Some(raw) = raw_rx.recv().await {
-                if let Some(ctx) = protocol
-                    .handle_packet(raw, protocol_outgoing_tx.clone())
-                    .await
+                if let Some(ctx) = protocol.handle_packet(raw)
                     && ctx_tx.send(ctx).await.is_err()
                 {
                     break;
@@ -108,7 +89,8 @@ impl Adapter for ConsoleAdapter {
 
         AdapterRuntime {
             events: ctx_rx,
-            sender: Some(std::sync::Arc::new(ConsoleSender::new(outgoing_tx))),
+            sender: Some(sender),
+            capabilities: vec![Capability::ProactiveSend, Capability::custom("console")],
         }
     }
 }

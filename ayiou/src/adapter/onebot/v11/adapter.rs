@@ -11,10 +11,10 @@ use crate::{
     },
     adapter::onebot::v11::{ctx::Ctx, sender::OneBotSender},
     core::{
-        adapter::{Adapter, AdapterRuntime, ProtocolAdapter},
+        adapter::{Adapter, AdapterRuntime},
         context::Context,
         driver::Driver,
-        plugin::OutboundSender,
+        plugin::{Capability, OutboundSender},
     },
     driver::wsclient::WsDriver,
 };
@@ -106,17 +106,13 @@ impl OneBotV11Protocol {
     }
 }
 
-#[async_trait]
-impl ProtocolAdapter for OneBotV11Protocol {
-    type Inbound = String;
-    type Outbound = String;
-    type Ctx = Context;
-
-    async fn handle_packet(
+impl OneBotV11Protocol {
+    fn handle_packet(
         &mut self,
-        raw: Self::Inbound,
-        outgoing_tx: mpsc::Sender<Self::Outbound>,
-    ) -> Option<Self::Ctx> {
+        raw: String,
+        outgoing_tx: mpsc::Sender<String>,
+        sender: Arc<dyn OutboundSender>,
+    ) -> Option<Context> {
         if let Ok(resp) = serde_json::from_str::<ApiResponse>(&raw) {
             if let Some(echo) = resp.echo.as_ref().and_then(echo_key) {
                 if let Some((_, tx)) = self.pending_api.remove(&echo) {
@@ -141,12 +137,6 @@ impl ProtocolAdapter for OneBotV11Protocol {
                     self.pending_api.clone(),
                     self.echo_seq.clone(),
                 )?;
-                let sender = std::sync::Arc::new(OneBotSender::with_runtime(
-                    raw_ctx.outgoing_tx(),
-                    self.pending_api.clone(),
-                    self.echo_seq.clone(),
-                    self.profile.clone(),
-                ));
                 Some(raw_ctx.into_context(Some(sender)))
             }
             Err(err) => {
@@ -159,21 +149,7 @@ impl ProtocolAdapter for OneBotV11Protocol {
 
 #[async_trait]
 impl Adapter for OneBotV11Adapter {
-    type Ctx = Context;
-
-    fn capabilities(&self) -> crate::core::adapter::AdapterCapabilities {
-        crate::core::adapter::AdapterCapabilities {
-            proactive_send: true,
-            attachments: true,
-            platform_extensions: vec!["onebot/v11".to_string()],
-        }
-    }
-
-    async fn start(self) -> mpsc::Receiver<Context> {
-        self.start_with_runtime().await.events
-    }
-
-    async fn start_with_runtime(self) -> AdapterRuntime<Self::Ctx> {
+    async fn start(self) -> AdapterRuntime {
         let mut protocol = OneBotV11Protocol::new();
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<String>(100);
         let (raw_tx, mut raw_rx) = mpsc::channel::<String>(100);
@@ -185,6 +161,7 @@ impl Adapter for OneBotV11Adapter {
             protocol.echo_seq.clone(),
             protocol.profile.clone(),
         )) as Arc<dyn OutboundSender>;
+        let runtime_sender = sender.clone();
 
         let driver = self.driver;
         tokio::spawn(async move {
@@ -195,9 +172,8 @@ impl Adapter for OneBotV11Adapter {
             });
 
             while let Some(raw) = raw_rx.recv().await {
-                if let Some(ctx) = protocol
-                    .handle_packet(raw, protocol_outgoing_tx.clone())
-                    .await
+                if let Some(ctx) =
+                    protocol.handle_packet(raw, protocol_outgoing_tx.clone(), sender.clone())
                     && ctx_tx.send(ctx).await.is_err()
                 {
                     break;
@@ -209,7 +185,12 @@ impl Adapter for OneBotV11Adapter {
 
         AdapterRuntime {
             events: ctx_rx,
-            sender: Some(sender),
+            sender: Some(runtime_sender),
+            capabilities: vec![
+                Capability::ProactiveSend,
+                Capability::RichSegments,
+                Capability::custom("onebot/v11"),
+            ],
         }
     }
 }

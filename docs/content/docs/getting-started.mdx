@@ -34,7 +34,7 @@ ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["adapter-co
 ## 核心概念
 
 - `Bot<A>`：单 Bot 运行时 builder
-- `Adapter / ProtocolAdapter`：把平台事件归一化到内核
+- `Adapter`：把平台事件归一化为内核 `Context`
 - `RuntimePlugin`：处理消息、命令、生命周期、配置和主动发送
 - `Context`：默认通用上下文
 
@@ -148,7 +148,7 @@ fn manifest(&self) -> RuntimePluginManifest {
 ```
 
 ```rust
-async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Result<()> {
+async fn init(&mut self, services: RuntimePluginServices) -> anyhow::Result<()> {
     self.acl = Some(services.require_service::<AclService>()?);
     Ok(())
 }
@@ -160,8 +160,8 @@ For diagnostics or adaptive behavior, plugins can inspect registered service met
 
 ## 常用 Context API
 
-- `ctx.text() -> String`
-- `ctx.user_id() -> String`
-- `ctx.group_id() -> Option<String>`
+- `ctx.text() -> Cow<'_, str>`
+- `ctx.user_id() -> Cow<'_, str>`
+- `ctx.group_id() -> Option<Cow<'_, str>>`
 - `ctx.reply_text("...")`
 - `ctx.extension::<ConsoleCtx>()` / `ctx.extension::<Ctx>()`

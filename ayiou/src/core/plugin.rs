@@ -1,7 +1,5 @@
 use std::{
-    any::{Any, TypeId},
     collections::HashMap,
-    marker::PhantomData,
     sync::{Arc, OnceLock},
 };
 
@@ -11,6 +9,7 @@ use dashmap::DashMap;
 
 use crate::core::{
     command::parse_command_line_with_prefixes,
+    context::Context,
     model::{BotId, ChannelRef, CommandInvocation, OutboundMessage, OutboundReceipt, PlatformId},
     service::{RuntimeService, ServiceDescriptor, ServiceKey, ServiceRegistry, ServiceSnapshot},
 };
@@ -304,17 +303,16 @@ pub trait OutboundSender: Send + Sync {
     async fn send(&self, message: OutboundMessage) -> Result<OutboundReceipt>;
 }
 
-pub struct RuntimePluginServices<C> {
+pub struct RuntimePluginServices {
     sender: Option<Arc<dyn OutboundSender>>,
     pub instance_id: Option<String>,
     pub bot_id: Option<BotId>,
     pub platform: Option<PlatformId>,
     pub capabilities: Vec<Capability>,
     pub service_registry: ServiceRegistry,
-    _marker: PhantomData<fn() -> C>,
 }
 
-impl<C> Clone for RuntimePluginServices<C> {
+impl Clone for RuntimePluginServices {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
@@ -323,12 +321,11 @@ impl<C> Clone for RuntimePluginServices<C> {
             platform: self.platform.clone(),
             capabilities: self.capabilities.clone(),
             service_registry: self.service_registry.clone(),
-            _marker: PhantomData,
         }
     }
 }
 
-impl<C> RuntimePluginServices<C> {
+impl RuntimePluginServices {
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -338,7 +335,6 @@ impl<C> RuntimePluginServices<C> {
             platform: None,
             capabilities: Vec::new(),
             service_registry: ServiceRegistry::default(),
-            _marker: PhantomData,
         }
     }
 
@@ -360,7 +356,11 @@ impl<C> RuntimePluginServices<C> {
     }
 
     pub async fn send(&self, message: OutboundMessage) -> Result<OutboundReceipt> {
-        self.require_sender()?.send(message).await
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| anyhow!("adapter does not provide proactive message sending"))?;
+        sender.send(message).await
     }
 
     pub async fn send_text(
@@ -451,7 +451,7 @@ impl<C> RuntimePluginServices<C> {
     }
 }
 
-impl<C> Default for RuntimePluginServices<C> {
+impl Default for RuntimePluginServices {
     fn default() -> Self {
         Self::new()
     }
@@ -615,7 +615,7 @@ pub struct RuntimePluginSnapshot {
 }
 
 #[async_trait]
-pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
+pub trait RuntimePlugin: Send + Sync + 'static {
     fn kind(&self) -> &str;
 
     fn manifest(&self) -> RuntimePluginManifest {
@@ -630,11 +630,11 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
         Ok(())
     }
 
-    async fn init(&mut self, _services: RuntimePluginServices<C>) -> Result<()> {
+    async fn init(&mut self, _services: RuntimePluginServices) -> Result<()> {
         Ok(())
     }
 
-    async fn start(&mut self, _services: RuntimePluginServices<C>) -> Result<()> {
+    async fn start(&mut self, _services: RuntimePluginServices) -> Result<()> {
         Ok(())
     }
 
@@ -646,11 +646,11 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
         Ok(ApplyConfigOutcome::skipped())
     }
 
-    async fn handle(&self, ctx: &C) -> Result<HandleOutcome>;
+    async fn handle(&self, ctx: &Context) -> Result<HandleOutcome>;
 
     async fn handle_with_invocation(
         &self,
-        ctx: &C,
+        ctx: &Context,
         invocation: Option<CommandInvocation>,
     ) -> Result<HandleOutcome> {
         let _ = invocation;
@@ -662,17 +662,14 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
     }
 }
 
-pub struct RegisteredPlugin<C> {
+pub struct RegisteredPlugin {
     instance_id: String,
     handlers: Arc<[HandlerDecl]>,
-    plugin: Box<dyn RuntimePlugin<C>>,
+    plugin: Box<dyn RuntimePlugin>,
 }
 
-impl<C> RegisteredPlugin<C>
-where
-    C: Sync + 'static,
-{
-    pub fn new(instance_id: impl Into<String>, plugin: Box<dyn RuntimePlugin<C>>) -> Self {
+impl RegisteredPlugin {
+    pub fn new(instance_id: impl Into<String>, plugin: Box<dyn RuntimePlugin>) -> Self {
         let handlers = plugin.declared_handlers().into();
         Self {
             instance_id: instance_id.into(),
@@ -682,7 +679,7 @@ where
     }
 
     #[must_use]
-    pub fn from_plugin(plugin: Box<dyn RuntimePlugin<C>>) -> Self {
+    pub fn from_plugin(plugin: Box<dyn RuntimePlugin>) -> Self {
         let instance_id = plugin.kind().to_string();
         Self::new(instance_id, plugin)
     }
@@ -693,7 +690,7 @@ where
     }
 
     #[must_use]
-    pub fn plugin(&self) -> &dyn RuntimePlugin<C> {
+    pub fn plugin(&self) -> &dyn RuntimePlugin {
         self.plugin.as_ref()
     }
 
@@ -702,52 +699,27 @@ where
         &self.handlers
     }
 
-    pub fn plugin_mut(&mut self) -> &mut dyn RuntimePlugin<C> {
+    pub fn plugin_mut(&mut self) -> &mut dyn RuntimePlugin {
         self.plugin.as_mut()
     }
 }
 
-pub type ErasedPluginFactory = fn() -> Box<dyn Any + Send + Sync>;
+pub type PluginFactory = fn() -> Box<dyn RuntimePlugin>;
 
 pub struct PluginRegistration {
     pub instance_id: &'static str,
-    pub context_type_id: fn() -> TypeId,
-    pub context_type_name: fn() -> &'static str,
-    pub factory: ErasedPluginFactory,
-}
-
-impl PluginRegistration {
-    #[must_use]
-    pub fn is_for_context<C: 'static>(&self) -> bool {
-        (self.context_type_id)() == TypeId::of::<C>()
-    }
-
-    pub fn instantiate<C>(&self) -> Option<RegisteredPlugin<C>>
-    where
-        C: Send + Sync + 'static,
-    {
-        if !self.is_for_context::<C>() {
-            return None;
-        }
-
-        let plugin = (self.factory)()
-            .downcast::<Box<dyn RuntimePlugin<C>>>()
-            .ok()?;
-
-        Some(RegisteredPlugin::new(self.instance_id, *plugin))
-    }
+    pub factory: PluginFactory,
 }
 
 inventory::collect!(PluginRegistration);
 
 #[must_use]
-pub fn discovered_plugins<C>() -> Vec<RegisteredPlugin<C>>
-where
-    C: Send + Sync + 'static,
-{
+pub fn discovered_plugins() -> Vec<RegisteredPlugin> {
     let mut plugins: Vec<_> = inventory::iter::<PluginRegistration>
         .into_iter()
-        .filter_map(PluginRegistration::instantiate::<C>)
+        .map(|registration| {
+            RegisteredPlugin::new(registration.instance_id, (registration.factory)())
+        })
         .collect();
     plugins.sort_by(|left, right| left.instance_id().cmp(right.instance_id()));
     plugins
@@ -788,12 +760,12 @@ pub struct PluginRequirementFailure {
     pub missing_services: Vec<ServiceKey>,
 }
 
-pub struct RuntimePluginEngine<C> {
-    services: RuntimePluginServices<C>,
+pub struct RuntimePluginEngine {
+    services: RuntimePluginServices,
     runtime_state: PluginRuntimeState,
     command_prefixes: Arc<[String]>,
     regex_cache: RegexCache,
-    plugins: Vec<RegisteredPlugin<C>>,
+    plugins: Vec<RegisteredPlugin>,
     enabled_plugins: HashMap<String, usize>,
     enabled_order: Vec<usize>,
     disabled_plugins: HashMap<String, usize>,
@@ -802,18 +774,15 @@ pub struct RuntimePluginEngine<C> {
 
 type RegexCache = OnceLock<DashMap<String, Option<regex::Regex>>>;
 
-impl<C> RuntimePluginEngine<C>
-where
-    C: Send + Sync + 'static,
-{
+impl RuntimePluginEngine {
     #[must_use]
-    pub fn new(services: RuntimePluginServices<C>, runtime_state: PluginRuntimeState) -> Self {
+    pub fn new(services: RuntimePluginServices, runtime_state: PluginRuntimeState) -> Self {
         Self::with_options(services, runtime_state, Arc::from([]))
     }
 
     #[must_use]
     pub fn with_options(
-        services: RuntimePluginServices<C>,
+        services: RuntimePluginServices,
         runtime_state: PluginRuntimeState,
         command_prefixes: Arc<[String]>,
     ) -> Self {
@@ -830,15 +799,15 @@ where
         }
     }
 
-    pub fn push(&mut self, plugin: Box<dyn RuntimePlugin<C>>) {
+    pub fn push(&mut self, plugin: Box<dyn RuntimePlugin>) {
         self.push_registered(RegisteredPlugin::from_plugin(plugin));
     }
 
-    pub fn push_as(&mut self, instance_id: impl Into<String>, plugin: Box<dyn RuntimePlugin<C>>) {
+    pub fn push_as(&mut self, instance_id: impl Into<String>, plugin: Box<dyn RuntimePlugin>) {
         self.push_registered(RegisteredPlugin::new(instance_id, plugin));
     }
 
-    pub(crate) fn push_registered(&mut self, plugin: RegisteredPlugin<C>) {
+    pub(crate) fn push_registered(&mut self, plugin: RegisteredPlugin) {
         let instance_id = plugin.instance_id().to_string();
         assert!(
             !self.enabled_plugins.contains_key(&instance_id)
@@ -860,7 +829,7 @@ where
     }
 
     #[must_use]
-    pub fn plugins(&self) -> &[RegisteredPlugin<C>] {
+    pub fn plugins(&self) -> &[RegisteredPlugin] {
         &self.plugins
     }
 
@@ -1224,11 +1193,10 @@ where
         self.runtime_state.clear_error(instance_id);
         Ok(outcome)
     }
+}
 
-    pub async fn handle_all(&self, ctx: &C) -> Result<bool>
-    where
-        C: crate::core::adapter::MsgContext,
-    {
+impl RuntimePluginEngine {
+    pub async fn handle_all(&self, ctx: &Context) -> Result<bool> {
         let text = ctx.text();
         let global_prefixes = self.command_prefixes.as_ref();
         let mut matched = Vec::new();
@@ -1410,8 +1378,10 @@ mod tests {
     use anyhow::Result;
 
     use crate::core::{
-        adapter::MsgContext,
-        model::{OutboundMessage, OutboundReceipt},
+        context::Context,
+        model::{
+            BotId, ChannelRef, EventEnvelope, OutboundMessage, OutboundReceipt, PlatformId, UserRef,
+        },
         plugin::OutboundSender,
         service::{RuntimeService, ServiceKey, ServiceRegistry},
     };
@@ -1427,29 +1397,23 @@ mod tests {
 
     use super::*;
 
-    #[derive(Clone, Default)]
-    struct TestCtx {
-        text: String,
-        user_id: String,
-        group_id: Option<String>,
-    }
-
-    impl MsgContext for TestCtx {
-        fn text(&self) -> std::borrow::Cow<'_, str> {
-            std::borrow::Cow::Borrowed(&self.text)
-        }
-
-        fn user_id(&self) -> std::borrow::Cow<'_, str> {
-            if self.user_id.is_empty() {
-                std::borrow::Cow::Borrowed("user")
-            } else {
-                std::borrow::Cow::Borrowed(&self.user_id)
-            }
-        }
-
-        fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
-            self.group_id.as_deref().map(std::borrow::Cow::Borrowed)
-        }
+    fn test_ctx(
+        text: impl Into<String>,
+        user_id: impl Into<String>,
+        group_id: Option<&str>,
+    ) -> Context {
+        let platform = PlatformId::new("test");
+        let user = UserRef::new(platform.clone(), user_id.into());
+        let channel = match group_id {
+            Some(group_id) => ChannelRef::group(platform.clone(), group_id),
+            None => ChannelRef::direct(platform.clone(), "direct"),
+        };
+        let message = crate::core::model::MessageEvent::new(user, channel, text.into());
+        Context::new(
+            EventEnvelope::new(BotId::new("test-bot"), platform).with_message(message),
+            None,
+            (),
+        )
     }
 
     #[derive(Debug)]
@@ -1483,7 +1447,7 @@ mod tests {
     fn runtime_plugin_services_provide_registered_services() {
         let mut registry = ServiceRegistry::default();
         registry.insert(TestCounterService { value: 7 });
-        let services = RuntimePluginServices::<TestCtx>::new().with_service_registry(registry);
+        let services = RuntimePluginServices::new().with_service_registry(registry);
 
         let service = services
             .require_service::<TestCounterService>()
@@ -1496,7 +1460,7 @@ mod tests {
     fn runtime_plugin_services_describe_registered_services() {
         let mut registry = ServiceRegistry::default();
         registry.insert(TestCounterService { value: 7 });
-        let services = RuntimePluginServices::<TestCtx>::new().with_service_registry(registry);
+        let services = RuntimePluginServices::new().with_service_registry(registry);
 
         let descriptor = services
             .service_descriptor::<TestCounterService>()
@@ -1512,7 +1476,7 @@ mod tests {
     fn runtime_plugin_services_report_service_health_snapshots() {
         let mut registry = ServiceRegistry::default();
         registry.insert(UnreadyTestService);
-        let services = RuntimePluginServices::<TestCtx>::new().with_service_registry(registry);
+        let services = RuntimePluginServices::new().with_service_registry(registry);
 
         let snapshot = services
             .service_snapshot::<UnreadyTestService>()
@@ -1533,7 +1497,7 @@ mod tests {
     #[test]
     fn runtime_plugin_services_infer_proactive_send_from_host_sender() {
         let sender: Arc<dyn OutboundSender> = Arc::new(NoopSender);
-        let services = RuntimePluginServices::<TestCtx>::new().with_sender(Some(sender));
+        let services = RuntimePluginServices::new().with_sender(Some(sender));
 
         assert_eq!(
             services.provided_capabilities(),
@@ -1583,7 +1547,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl RuntimePlugin<TestCtx> for PriorityPlugin {
+    impl RuntimePlugin for PriorityPlugin {
         fn kind(&self) -> &str {
             self.instance_id
         }
@@ -1598,7 +1562,7 @@ mod tests {
             vec![handler]
         }
 
-        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
             self.hits.lock().unwrap().push(self.instance_id);
             Ok(HandleOutcome::pass())
         }
@@ -1619,7 +1583,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl RuntimePlugin<TestCtx> for DependencyPlugin {
+    impl RuntimePlugin for DependencyPlugin {
         fn kind(&self) -> &'static str {
             "dependency"
         }
@@ -1627,12 +1591,12 @@ mod tests {
             self.manifest.clone()
         }
 
-        async fn init(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
+        async fn init(&mut self, _services: RuntimePluginServices) -> Result<()> {
             *self.init_calls.lock().unwrap() += 1;
             Ok(())
         }
 
-        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
     }
@@ -1644,7 +1608,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl RuntimePlugin<TestCtx> for ServiceProviderPlugin {
+    impl RuntimePlugin for ServiceProviderPlugin {
         fn kind(&self) -> &'static str {
             "service-provider"
         }
@@ -1657,12 +1621,12 @@ mod tests {
             })
         }
 
-        async fn init(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
+        async fn init(&mut self, _services: RuntimePluginServices) -> Result<()> {
             *self.init_calls.lock().unwrap() += 1;
             Ok(())
         }
 
-        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
     }
@@ -1672,7 +1636,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl RuntimePlugin<TestCtx> for ServiceConsumerPlugin {
+    impl RuntimePlugin for ServiceConsumerPlugin {
         fn kind(&self) -> &'static str {
             "service-consumer"
         }
@@ -1680,13 +1644,13 @@ mod tests {
             RuntimePluginManifest::new("service-consumer").require_service::<TestCounterService>()
         }
 
-        async fn init(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
+        async fn init(&mut self, services: RuntimePluginServices) -> Result<()> {
             let service = services.require_service::<TestCounterService>()?;
             self.observed.lock().unwrap().push(service.value);
             Ok(())
         }
 
-        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
     }
@@ -1698,7 +1662,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl RuntimePlugin<TestCtx> for CountingLifecyclePlugin {
+    impl RuntimePlugin for CountingLifecyclePlugin {
         fn kind(&self) -> &'static str {
             self.instance_id
         }
@@ -1706,7 +1670,7 @@ mod tests {
             vec![HandlerDecl::wildcard_message()]
         }
 
-        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
             *self.handled.lock().unwrap() += 1;
             Ok(HandleOutcome::pass())
         }
@@ -1722,16 +1686,16 @@ mod tests {
     }
 
     #[async_trait]
-    impl RuntimePlugin<TestCtx> for StartCountingPlugin {
+    impl RuntimePlugin for StartCountingPlugin {
         fn kind(&self) -> &'static str {
             "switchable"
         }
-        async fn start(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
+        async fn start(&mut self, _services: RuntimePluginServices) -> Result<()> {
             *self.started.lock().unwrap() += 1;
             Ok(())
         }
 
-        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
     }
@@ -1758,7 +1722,10 @@ mod tests {
 
         assert!(!state.is_enabled("switchable"));
         assert_eq!(*stopped.lock().unwrap(), 1);
-        let blocked = engine.handle_all(&TestCtx::default()).await.unwrap();
+        let blocked = engine
+            .handle_all(&test_ctx("", "user", None))
+            .await
+            .unwrap();
         assert!(!blocked);
         assert_eq!(*handled.lock().unwrap(), 0);
     }
@@ -2026,7 +1993,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl RuntimePlugin<TestCtx> for SnapshotPlugin {
+    impl RuntimePlugin for SnapshotPlugin {
         fn kind(&self) -> &'static str {
             self.kind
         }
@@ -2034,12 +2001,12 @@ mod tests {
             self.manifest.clone()
         }
 
-        async fn init(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
+        async fn init(&mut self, _services: RuntimePluginServices) -> Result<()> {
             *self.init_calls.lock().unwrap() += 1;
             Ok(())
         }
 
-        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
 
@@ -2447,7 +2414,10 @@ mod tests {
         engine.init_all().await.unwrap();
         engine.start_all().await.unwrap();
 
-        let blocked = engine.handle_all(&TestCtx::default()).await.unwrap();
+        let blocked = engine
+            .handle_all(&test_ctx("", "user", None))
+            .await
+            .unwrap();
 
         assert!(blocked);
         assert_eq!(*hits.lock().unwrap(), vec!["first"]);
@@ -2480,11 +2450,7 @@ mod tests {
         engine.start_all().await.unwrap();
 
         engine
-            .handle_all(&TestCtx {
-                text: "hello world".to_string(),
-                user_id: "user".to_string(),
-                group_id: Some("g1".to_string()),
-            })
+            .handle_all(&test_ctx("hello world", "user", Some("g1")))
             .await
             .unwrap();
 
@@ -2510,20 +2476,12 @@ mod tests {
         engine.start_all().await.unwrap();
 
         engine
-            .handle_all(&TestCtx {
-                text: "admin said hello".to_string(),
-                user_id: "guest".to_string(),
-                group_id: None,
-            })
+            .handle_all(&test_ctx("admin said hello", "guest", None))
             .await
             .unwrap();
 
         engine
-            .handle_all(&TestCtx {
-                text: "plain text".to_string(),
-                user_id: "admin".to_string(),
-                group_id: None,
-            })
+            .handle_all(&test_ctx("plain text", "admin", None))
             .await
             .unwrap();
 
@@ -2638,11 +2596,11 @@ mod tests {
     }
 
     #[async_trait]
-    impl RuntimePlugin<TestCtx> for ServiceProbePlugin {
+    impl RuntimePlugin for ServiceProbePlugin {
         fn kind(&self) -> &'static str {
             "service-probe"
         }
-        async fn init(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
+        async fn init(&mut self, services: RuntimePluginServices) -> Result<()> {
             self.seen_instance_ids
                 .lock()
                 .unwrap()
@@ -2650,7 +2608,7 @@ mod tests {
             Ok(())
         }
 
-        async fn start(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
+        async fn start(&mut self, services: RuntimePluginServices) -> Result<()> {
             self.seen_instance_ids
                 .lock()
                 .unwrap()
@@ -2658,7 +2616,7 @@ mod tests {
             Ok(())
         }
 
-        async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
     }

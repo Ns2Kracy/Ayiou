@@ -98,15 +98,19 @@ impl WhoAmI {
 }
 ```
 
-如果平台上下文本身就是你的主入口，也可以指定 `context`：
+如果需要平台私有数据，从统一 `Context` 的 extension 读取：
 
 ```rust
 #[derive(Default)]
 struct OneBotOnlyPlugin;
 
-#[plugin(name = "onebot-only", context = "ayiou::adapter::onebot::v11::ctx::Ctx")]
+#[plugin(name = "onebot-only")]
 impl OneBotOnlyPlugin {
-    async fn ping(&self, ctx: &Ctx) -> anyhow::Result<()> {
+    async fn ping(&self, ctx: &ayiou::Context) -> anyhow::Result<()> {
+        let Some(onebot) = ctx.extension::<ayiou::adapter::onebot::v11::ctx::Ctx>() else {
+            return Ok(());
+        };
+        tracing::debug!(user_id = onebot.user_id(), "onebot ping");
         ctx.reply_text("pong").await
     }
 }

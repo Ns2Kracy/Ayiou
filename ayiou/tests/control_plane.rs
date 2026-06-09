@@ -8,9 +8,8 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use ayiou::{
-    control_plane,
+    Context, control_plane,
     core::{
-        adapter::MsgContext,
         control::RuntimeControlHandle,
         plugin::{
             HandleOutcome, PluginRuntimeState, RuntimePlugin, RuntimePluginEngine,
@@ -22,31 +21,14 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 
-#[derive(Clone, Default)]
-struct ControlCtx;
-
-impl MsgContext for ControlCtx {
-    fn text(&self) -> std::borrow::Cow<'_, str> {
-        std::borrow::Cow::Borrowed("")
-    }
-
-    fn user_id(&self) -> std::borrow::Cow<'_, str> {
-        std::borrow::Cow::Borrowed("user")
-    }
-
-    fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
-        None
-    }
-}
-
 struct TestPlugin;
 
 #[async_trait]
-impl RuntimePlugin<ControlCtx> for TestPlugin {
+impl RuntimePlugin for TestPlugin {
     fn kind(&self) -> &'static str {
         "test-plugin"
     }
-    async fn handle(&self, _ctx: &ControlCtx) -> Result<HandleOutcome> {
+    async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
         Ok(HandleOutcome::pass())
     }
 }

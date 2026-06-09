@@ -51,7 +51,7 @@ fn manifest(&self) -> RuntimePluginManifest {
 ```
 
 ```rust
-async fn init(&mut self, services: RuntimePluginServices<Context>) -> anyhow::Result<()> {
+async fn init(&mut self, services: RuntimePluginServices) -> anyhow::Result<()> {
     self.acl = Some(services.require_service::<AclService>()?);
     Ok(())
 }

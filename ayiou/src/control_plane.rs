@@ -70,12 +70,12 @@ impl Default for ControlPlaneOptions {
     }
 }
 
-struct ControlPlaneState<C> {
-    handle: RuntimeControlHandle<C>,
+struct ControlPlaneState {
+    handle: RuntimeControlHandle,
     token: Arc<str>,
 }
 
-impl<C> Clone for ControlPlaneState<C> {
+impl Clone for ControlPlaneState {
     fn clone(&self) -> Self {
         Self {
             handle: self.handle.clone(),
@@ -84,10 +84,7 @@ impl<C> Clone for ControlPlaneState<C> {
     }
 }
 
-pub fn router<C>(handle: RuntimeControlHandle<C>, token: impl Into<String>) -> Router
-where
-    C: Send + Sync + 'static,
-{
+pub fn router(handle: RuntimeControlHandle, token: impl Into<String>) -> Router {
     let state = ControlPlaneState {
         handle,
         token: Arc::from(token.into()),
@@ -110,13 +107,7 @@ where
     router
 }
 
-pub fn spawn<C>(
-    options: ControlPlaneOptions,
-    handle: RuntimeControlHandle<C>,
-) -> Result<JoinHandle<()>>
-where
-    C: Send + Sync + 'static,
-{
+pub fn spawn(options: ControlPlaneOptions, handle: RuntimeControlHandle) -> Result<JoinHandle<()>> {
     let token = options
         .token_value()
         .ok_or_else(|| anyhow!("control plane token is required"))?
@@ -136,10 +127,7 @@ where
     }))
 }
 
-async fn runtime<C>(State(state): State<ControlPlaneState<C>>, headers: HeaderMap) -> Response
-where
-    C: Send + Sync + 'static,
-{
+async fn runtime(State(state): State<ControlPlaneState>, headers: HeaderMap) -> Response {
     if !authorize(&headers, &state.token) {
         return unauthorized();
     }
@@ -150,10 +138,7 @@ where
     }))
 }
 
-async fn list_plugins<C>(State(state): State<ControlPlaneState<C>>, headers: HeaderMap) -> Response
-where
-    C: Send + Sync + 'static,
-{
+async fn list_plugins(State(state): State<ControlPlaneState>, headers: HeaderMap) -> Response {
     if !authorize(&headers, &state.token) {
         return unauthorized();
     }
@@ -168,14 +153,11 @@ where
     ok(plugins)
 }
 
-async fn get_plugin<C>(
-    State(state): State<ControlPlaneState<C>>,
+async fn get_plugin(
+    State(state): State<ControlPlaneState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Response
-where
-    C: Send + Sync + 'static,
-{
+) -> Response {
     if !authorize(&headers, &state.token) {
         return unauthorized();
     }
@@ -198,58 +180,43 @@ where
     }
 }
 
-async fn enable_plugin<C>(
-    State(state): State<ControlPlaneState<C>>,
+async fn enable_plugin(
+    State(state): State<ControlPlaneState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Response
-where
-    C: Send + Sync + 'static,
-{
+) -> Response {
     plugin_action(headers, &state, &id, PluginAction::Enable).await
 }
 
-async fn disable_plugin<C>(
-    State(state): State<ControlPlaneState<C>>,
+async fn disable_plugin(
+    State(state): State<ControlPlaneState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Response
-where
-    C: Send + Sync + 'static,
-{
+) -> Response {
     plugin_action(headers, &state, &id, PluginAction::Disable).await
 }
 
-async fn start_plugin<C>(
-    State(state): State<ControlPlaneState<C>>,
+async fn start_plugin(
+    State(state): State<ControlPlaneState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Response
-where
-    C: Send + Sync + 'static,
-{
+) -> Response {
     plugin_action(headers, &state, &id, PluginAction::Start).await
 }
 
-async fn stop_plugin<C>(
-    State(state): State<ControlPlaneState<C>>,
+async fn stop_plugin(
+    State(state): State<ControlPlaneState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Response
-where
-    C: Send + Sync + 'static,
-{
+) -> Response {
     plugin_action(headers, &state, &id, PluginAction::Stop).await
 }
 
-async fn reload_plugin<C>(
-    State(state): State<ControlPlaneState<C>>,
+async fn reload_plugin(
+    State(state): State<ControlPlaneState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-) -> Response
-where
-    C: Send + Sync + 'static,
-{
+) -> Response {
     plugin_action(headers, &state, &id, PluginAction::Reload).await
 }
 
@@ -262,15 +229,12 @@ enum PluginAction {
     Reload,
 }
 
-async fn plugin_action<C>(
+async fn plugin_action(
     headers: HeaderMap,
-    state: &ControlPlaneState<C>,
+    state: &ControlPlaneState,
     id: &str,
     action: PluginAction,
-) -> Response
-where
-    C: Send + Sync + 'static,
-{
+) -> Response {
     if !authorize(&headers, &state.token) {
         return unauthorized();
     }

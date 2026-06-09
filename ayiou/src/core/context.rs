@@ -3,7 +3,6 @@ use std::{any::Any, borrow::Cow, sync::Arc};
 use anyhow::{Result, anyhow};
 
 use crate::core::{
-    adapter::MsgContext,
     model::{EventEnvelope, MessageEvent, OutboundMessage},
     plugin::OutboundSender,
 };
@@ -42,6 +41,30 @@ impl Context {
     }
 
     #[must_use]
+    pub fn text(&self) -> Cow<'_, str> {
+        self.message()
+            .map(|msg| Cow::Borrowed(msg.text.as_str()))
+            .unwrap_or_else(|| Cow::Borrowed(""))
+    }
+
+    #[must_use]
+    pub fn user_id(&self) -> Cow<'_, str> {
+        self.message()
+            .map(|msg| Cow::Borrowed(msg.sender.user_id()))
+            .unwrap_or_else(|| Cow::Borrowed(""))
+    }
+
+    #[must_use]
+    pub fn group_id(&self) -> Option<Cow<'_, str>> {
+        self.message().and_then(|msg| match msg.channel.kind() {
+            crate::core::model::ChannelKind::Group => Some(Cow::Borrowed(msg.channel.channel_id())),
+            crate::core::model::ChannelKind::Direct | crate::core::model::ChannelKind::Channel => {
+                None
+            }
+        })
+    }
+
+    #[must_use]
     pub fn extension<T>(&self) -> Option<&T>
     where
         T: Any + Send + Sync + 'static,
@@ -52,7 +75,7 @@ impl Context {
     pub async fn reply(&self, message: OutboundMessage) -> Result<()> {
         let sender = self
             .outbound
-            .clone()
+            .as_ref()
             .ok_or_else(|| anyhow!("adapter does not provide proactive message sending"))?;
 
         sender.send(message).await?;
@@ -65,28 +88,5 @@ impl Context {
             .ok_or_else(|| anyhow!("current event does not carry a message context"))?;
         self.reply(OutboundMessage::text(message.channel.clone(), text))
             .await
-    }
-}
-
-impl MsgContext for Context {
-    fn text(&self) -> Cow<'_, str> {
-        self.message()
-            .map(|msg| Cow::Borrowed(msg.text.as_str()))
-            .unwrap_or_else(|| Cow::Borrowed(""))
-    }
-
-    fn user_id(&self) -> Cow<'_, str> {
-        self.message()
-            .map(|msg| Cow::Borrowed(msg.sender.user_id()))
-            .unwrap_or_else(|| Cow::Borrowed(""))
-    }
-
-    fn group_id(&self) -> Option<Cow<'_, str>> {
-        self.message().and_then(|msg| match msg.channel.kind() {
-            crate::core::model::ChannelKind::Group => Some(Cow::Borrowed(msg.channel.channel_id())),
-            crate::core::model::ChannelKind::Direct | crate::core::model::ChannelKind::Channel => {
-                None
-            }
-        })
     }
 }

@@ -5,11 +5,11 @@ use tokio::sync::RwLock;
 
 use crate::core::plugin::{RuntimePluginEngine, RuntimePluginSnapshot};
 
-pub struct RuntimeControlHandle<C> {
-    engine: Arc<RwLock<RuntimePluginEngine<C>>>,
+pub struct RuntimeControlHandle {
+    engine: Arc<RwLock<RuntimePluginEngine>>,
 }
 
-impl<C> Clone for RuntimeControlHandle<C> {
+impl Clone for RuntimeControlHandle {
     fn clone(&self) -> Self {
         Self {
             engine: self.engine.clone(),
@@ -17,12 +17,9 @@ impl<C> Clone for RuntimeControlHandle<C> {
     }
 }
 
-impl<C> RuntimeControlHandle<C>
-where
-    C: Send + Sync + 'static,
-{
+impl RuntimeControlHandle {
     #[must_use]
-    pub const fn new(engine: Arc<RwLock<RuntimePluginEngine<C>>>) -> Self {
+    pub const fn new(engine: Arc<RwLock<RuntimePluginEngine>>) -> Self {
         Self { engine }
     }
 
@@ -59,7 +56,7 @@ mod tests {
     use async_trait::async_trait;
 
     use crate::core::{
-        adapter::MsgContext,
+        context::Context,
         plugin::{
             HandleOutcome, HandlerDecl, PluginRuntimeState, RuntimePlugin, RuntimePluginEngine,
             RuntimePluginServices,
@@ -68,29 +65,12 @@ mod tests {
 
     use super::*;
 
-    #[derive(Clone, Default)]
-    struct ControlCtx;
-
-    impl MsgContext for ControlCtx {
-        fn text(&self) -> std::borrow::Cow<'_, str> {
-            std::borrow::Cow::Borrowed("")
-        }
-
-        fn user_id(&self) -> std::borrow::Cow<'_, str> {
-            std::borrow::Cow::Borrowed("user")
-        }
-
-        fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
-            None
-        }
-    }
-
     struct ControlPlugin {
         stopped: Arc<Mutex<usize>>,
     }
 
     #[async_trait]
-    impl RuntimePlugin<ControlCtx> for ControlPlugin {
+    impl RuntimePlugin for ControlPlugin {
         fn kind(&self) -> &'static str {
             "control-plugin"
         }
@@ -98,7 +78,7 @@ mod tests {
             vec![HandlerDecl::wildcard_message()]
         }
 
-        async fn handle(&self, _ctx: &ControlCtx) -> Result<HandleOutcome> {
+        async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
             Ok(HandleOutcome::pass())
         }
 
@@ -108,10 +88,7 @@ mod tests {
         }
     }
 
-    fn test_handle(
-        state: PluginRuntimeState,
-        stopped: Arc<Mutex<usize>>,
-    ) -> RuntimeControlHandle<ControlCtx> {
+    fn test_handle(state: PluginRuntimeState, stopped: Arc<Mutex<usize>>) -> RuntimeControlHandle {
         let services = RuntimePluginServices::new();
         let mut engine = RuntimePluginEngine::new(services, state);
         engine.push_as("control-plugin", Box::new(ControlPlugin { stopped }));

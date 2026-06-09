@@ -12,7 +12,7 @@ Ayiou 是一个面向 Rust Bot 场景的插件化框架。
 ## 核心能力
 
 - `Driver`：连接 WebSocket / HTTP / Console 等底层输入输出
-- `ProtocolAdapter`：适配 OneBot、Console 等协议
+- `Adapter`：适配 OneBot、Console 等协议，并输出统一 `Context`
 - `RuntimePlugin`：统一插件行为、生命周期、配置和事件处理
 - `Bot` Runtime：负责插件注册、队列和事件分发；多渠道通过 adapter 接入同一个 Bot
 

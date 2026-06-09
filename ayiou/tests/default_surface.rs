@@ -22,7 +22,7 @@ fn default_build_does_not_export_builtin_drivers_or_adapters() {
 fn core_surface_is_available_without_default_features() {
     assert_eq!(ayiou::RuntimeState::default(), ayiou::RuntimeState::Stopped);
     assert_eq!(
-        std::any::type_name::<ayiou::core::adapter::AdapterCapabilities>(),
-        "ayiou::core::adapter::AdapterCapabilities"
+        std::any::type_name::<ayiou::core::adapter::AdapterRuntime>(),
+        "ayiou::core::adapter::AdapterRuntime"
     );
 }

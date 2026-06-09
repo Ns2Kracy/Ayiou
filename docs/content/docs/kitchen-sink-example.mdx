@@ -51,18 +51,18 @@ kitchen sink example completed
 
 示例只使用一个默认宏入口：
 
-- `#[plugin]`：声明插件元信息、默认上下文和自动发现入口
+- `#[plugin]`：声明插件元信息、统一 `Context` 和自动发现入口
 - async 方法：按方法名注册成命令，并按签名自动解析参数
 
-宏插件默认会自动注册。示例的 Bot 入口没有逐个 `.with_plugin(HelloPlugin)` / `.with_plugin(ToolsPlugin)`，`Bot::run()` 会按 `DemoCtx` 自动加载它们。
+宏插件默认会自动注册。示例的 Bot 入口没有逐个 `.with_plugin(HelloPlugin)` / `.with_plugin(ToolsPlugin)`，`Bot::run()` 会按统一 `Context` 自动加载它们。
 
 ```rust
 #[derive(Default)]
 struct HelloPlugin;
 
-#[plugin(name = "hello", prefix = "/", context = "DemoCtx")]
+#[plugin(name = "hello", prefix = "/")]
 impl HelloPlugin {
-    async fn hello(&self, ctx: &DemoCtx) -> anyhow::Result<()> {
+    async fn hello(&self, ctx: &ayiou::Context) -> anyhow::Result<()> {
         println!("plugin macro handled: {}", ctx.text());
         Ok(())
     }
@@ -77,14 +77,14 @@ impl HelloPlugin {
 #[derive(Default)]
 struct ToolsPlugin;
 
-#[plugin(name = "tools", prefix = "/", context = "DemoCtx")]
+#[plugin(name = "tools", prefix = "/")]
 impl ToolsPlugin {
-    async fn echo(&self, _ctx: &DemoCtx, content: String) -> anyhow::Result<()> {
+    async fn echo(&self, _ctx: &ayiou::Context, content: String) -> anyhow::Result<()> {
         println!("echo: {content}");
         Ok(())
     }
 
-    async fn add(&self, _ctx: &DemoCtx, left: i64, right: i64) -> anyhow::Result<()> {
+    async fn add(&self, _ctx: &ayiou::Context, left: i64, right: i64) -> anyhow::Result<()> {
         println!("add: {}", left + right);
         Ok(())
     }

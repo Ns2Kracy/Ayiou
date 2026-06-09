@@ -10,7 +10,6 @@ struct PluginAttrs {
     description: Option<String>,
     version: Option<String>,
     prefixes: Vec<String>,
-    context: Option<Type>,
     register: bool,
 }
 
@@ -21,7 +20,6 @@ impl Default for PluginAttrs {
             description: None,
             version: None,
             prefixes: Vec::new(),
-            context: None,
             register: true,
         }
     }
@@ -51,11 +49,8 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
     let plugin_attrs = parse_plugin_attrs(args)?;
     let plugin_ty = item_impl.self_ty.clone();
     let plugin_ident = extract_self_type_ident(&plugin_ty)?;
-    let ctx_ty = plugin_attrs
-        .context
-        .clone()
-        .unwrap_or_else(|| syn::parse_quote!(ayiou::Context));
-    let methods = collect_command_methods(&mut item_impl, &ctx_ty)?;
+    let ctx_ty: Type = syn::parse_quote!(ayiou::Context);
+    let methods = collect_command_methods(&mut item_impl)?;
     let identity = plugin_identity(&plugin_attrs, &plugin_ident);
 
     Ok(render_plugin_impl(
@@ -68,7 +63,7 @@ pub fn expand_plugin(args: Vec<Meta>, mut item_impl: ItemImpl) -> Result<TokenSt
     ))
 }
 
-fn collect_command_methods(item_impl: &mut ItemImpl, ctx_ty: &Type) -> Result<Vec<CommandMethod>> {
+fn collect_command_methods(item_impl: &mut ItemImpl) -> Result<Vec<CommandMethod>> {
     let mut methods = Vec::new();
 
     for impl_item in &mut item_impl.items {
@@ -91,7 +86,7 @@ fn collect_command_methods(item_impl: &mut ItemImpl, ctx_ty: &Type) -> Result<Ve
             .attrs
             .push(syn::parse_quote!(#[allow(clippy::unused_async)]));
 
-        methods.push(parse_command_method(method, cmd_attrs, ctx_ty)?);
+        methods.push(parse_command_method(method, cmd_attrs)?);
     }
 
     if methods.is_empty() {
@@ -145,13 +140,11 @@ fn render_plugin_impl(
     let plugin_version = identity.version;
     let registration = if identity.register {
         quote! {
-            ayiou::inventory::submit! {
+                ayiou::inventory::submit! {
                 ayiou::core::plugin::PluginRegistration {
                     instance_id: #plugin_name,
-                    context_type_id: ::std::any::TypeId::of::<#ctx_ty>,
-                    context_type_name: ::std::any::type_name::<#ctx_ty>,
-                    factory: || -> Box<dyn ::std::any::Any + Send + Sync> {
-                        Box::new(Box::new(<#plugin_ty as ::std::default::Default>::default()) as Box<dyn ayiou::core::plugin::RuntimePlugin<#ctx_ty>>)
+                    factory: || -> Box<dyn ayiou::core::plugin::RuntimePlugin> {
+                        Box::new(<#plugin_ty as ::std::default::Default>::default())
                     },
                 }
             }
@@ -179,7 +172,7 @@ fn render_plugin_impl(
         #item_impl
 
         #[async_trait::async_trait]
-        impl ayiou::core::plugin::RuntimePlugin<#ctx_ty> for #plugin_ty {
+        impl ayiou::core::plugin::RuntimePlugin for #plugin_ty {
             fn kind(&self) -> &str {
                 #plugin_name
             }
@@ -247,10 +240,6 @@ fn parse_plugin_attrs(args: Vec<Meta>) -> Result<PluginAttrs> {
                     "description" => out.description = Some(expect_string_expr(value)?),
                     "version" => out.version = Some(expect_string_expr(value)?),
                     "prefix" => out.prefixes.push(expect_string_expr(value)?),
-                    "context" => {
-                        let ty_str = expect_string_expr(value)?;
-                        out.context = Some(syn::parse_str(&ty_str)?);
-                    }
                     "register" => out.register = expect_bool_expr(value)?,
                     _ => {
                         return Err(syn::Error::new(
@@ -313,11 +302,7 @@ fn parse_command_attr(attr: &syn::Attribute) -> Result<CommandAttrs> {
     Ok(out)
 }
 
-fn parse_command_method(
-    method: &syn::ImplItemFn,
-    attrs: CommandAttrs,
-    _ctx_ty: &Type,
-) -> Result<CommandMethod> {
+fn parse_command_method(method: &syn::ImplItemFn, attrs: CommandAttrs) -> Result<CommandMethod> {
     let fn_name = method.sig.ident.clone();
     let mut labels = vec![attrs.name.unwrap_or_else(|| fn_name.to_string())];
     labels.extend(attrs.aliases);

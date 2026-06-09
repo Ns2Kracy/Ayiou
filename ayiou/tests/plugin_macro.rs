@@ -1,28 +1,11 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use ayiou::core::adapter::MsgContext;
-use ayiou::core::model::CommandInvocation;
+use ayiou::Context;
+use ayiou::core::model::{BotId, CommandInvocation, EventEnvelope, PlatformId};
 use ayiou::core::plugin::{HandlerDecl, RuntimePlugin};
 #[allow(unused_imports)]
 use ayiou::{command, plugin};
-
-#[derive(Clone, Default)]
-struct TestCtx;
-
-impl MsgContext for TestCtx {
-    fn text(&self) -> std::borrow::Cow<'_, str> {
-        std::borrow::Cow::Borrowed("")
-    }
-
-    fn user_id(&self) -> std::borrow::Cow<'_, str> {
-        std::borrow::Cow::Borrowed("user")
-    }
-
-    fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
-        None
-    }
-}
 
 struct ToolPlugin {
     seen: Arc<Mutex<Vec<String>>>,
@@ -34,22 +17,30 @@ struct SimplePlugin;
     name = "tool",
     description = "tool command plugin",
     prefix = "/",
-    context = "TestCtx",
     register = false
 )]
 impl ToolPlugin {
     #[command(name = "echo", alias = "say")]
-    async fn echo(&self, _ctx: &TestCtx, content: String) -> Result<()> {
+    async fn echo(&self, _ctx: &Context, content: String) -> Result<()> {
         self.seen.lock().unwrap().push(content);
         Ok(())
     }
 }
 
-#[plugin(name = "simple", prefix = "/", context = "TestCtx", register = false)]
+#[plugin(name = "simple", prefix = "/", register = false)]
 impl SimplePlugin {
-    async fn ping(&self, _ctx: &TestCtx) -> Result<()> {
+    async fn ping(&self, _ctx: &Context) -> Result<()> {
         Ok(())
     }
+}
+
+fn test_context() -> Context {
+    let platform = PlatformId::new("test");
+    Context::new(
+        EventEnvelope::new(BotId::new("test-bot"), platform),
+        None,
+        (),
+    )
 }
 
 #[tokio::test]
@@ -67,9 +58,10 @@ async fn plugin_macro_registers_commands_and_dispatches_invocations() {
         vec![HandlerDecl::message_commands(["echo", "say"], ["/"])]
     );
 
+    let ctx = test_context();
     let outcome = RuntimePlugin::handle_with_invocation(
         &plugin,
-        &TestCtx,
+        &ctx,
         Some(CommandInvocation::new("say", "hello world", Some("/"))),
     )
     .await
@@ -89,9 +81,10 @@ async fn plugin_macro_treats_async_methods_as_commands() {
         vec![HandlerDecl::message_commands(["ping"], ["/"])]
     );
 
+    let ctx = test_context();
     let outcome = RuntimePlugin::handle_with_invocation(
         &plugin,
-        &TestCtx,
+        &ctx,
         Some(CommandInvocation::new("ping", "", Some("/"))),
     )
     .await

@@ -6,57 +6,41 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use ayiou::Bot;
-use ayiou::core::adapter::{Adapter, MsgContext};
+use ayiou::core::adapter::{Adapter, AdapterRuntime};
+use ayiou::core::model::{BotId, ChannelRef, EventEnvelope, MessageEvent, PlatformId, UserRef};
 use ayiou::core::plugin::{
     HandleOutcome, HandlerDecl, RuntimePlugin, RuntimePluginManifest, RuntimePluginServices,
 };
 use ayiou::core::service::{RuntimeService, ServiceRegistry};
 use ayiou::plugin;
+use ayiou::{Bot, Context};
 use tokio::sync::mpsc;
 
 static AUTO_HANDLES: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Clone)]
-struct TestCtx {
-    text: String,
-}
-
-impl TestCtx {
-    fn empty() -> Self {
-        Self {
-            text: String::new(),
-        }
-    }
-
-    fn text(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
-    }
-}
-
-impl MsgContext for TestCtx {
-    fn text(&self) -> std::borrow::Cow<'_, str> {
-        std::borrow::Cow::Borrowed(&self.text)
-    }
-
-    fn user_id(&self) -> std::borrow::Cow<'_, str> {
-        std::borrow::Cow::Borrowed("user")
-    }
-
-    fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
-        None
-    }
+fn test_context(text: impl Into<String>) -> Context {
+    let platform = PlatformId::new("test");
+    let user = UserRef::new(platform.clone(), "user");
+    let channel = ChannelRef::direct(platform.clone(), "user");
+    let message = MessageEvent::new(user, channel, text.into());
+    Context::new(
+        EventEnvelope::new(BotId::new("test-bot"), platform).with_message(message),
+        None,
+        (),
+    )
 }
 
 struct ClosedAdapter;
 
 #[async_trait]
 impl Adapter for ClosedAdapter {
-    type Ctx = TestCtx;
-
-    async fn start(self) -> mpsc::Receiver<Self::Ctx> {
+    async fn start(self) -> AdapterRuntime {
         let (_tx, rx) = mpsc::channel(1);
-        rx
+        AdapterRuntime {
+            events: rx,
+            sender: None,
+            capabilities: Vec::new(),
+        }
     }
 }
 
@@ -64,14 +48,16 @@ struct OneEventAdapter;
 
 #[async_trait]
 impl Adapter for OneEventAdapter {
-    type Ctx = TestCtx;
-
-    async fn start(self) -> mpsc::Receiver<Self::Ctx> {
+    async fn start(self) -> AdapterRuntime {
         let (tx, rx) = mpsc::channel(1);
         tokio::spawn(async move {
-            let _ = tx.send(TestCtx::empty()).await;
+            let _ = tx.send(test_context("")).await;
         });
-        rx
+        AdapterRuntime {
+            events: rx,
+            sender: None,
+            capabilities: Vec::new(),
+        }
     }
 }
 
@@ -79,23 +65,25 @@ struct AutoEventAdapter;
 
 #[async_trait]
 impl Adapter for AutoEventAdapter {
-    type Ctx = TestCtx;
-
-    async fn start(self) -> mpsc::Receiver<Self::Ctx> {
+    async fn start(self) -> AdapterRuntime {
         let (tx, rx) = mpsc::channel(1);
         tokio::spawn(async move {
-            let _ = tx.send(TestCtx::text("/auto")).await;
+            let _ = tx.send(test_context("/auto")).await;
         });
-        rx
+        AdapterRuntime {
+            events: rx,
+            sender: None,
+            capabilities: Vec::new(),
+        }
     }
 }
 
 #[derive(Default)]
 struct AutoDiscoveredPlugin;
 
-#[plugin(name = "auto-discovered", prefix = "/", context = "TestCtx")]
+#[plugin(name = "auto-discovered", prefix = "/")]
 impl AutoDiscoveredPlugin {
-    async fn auto(&self, _ctx: &TestCtx) -> Result<()> {
+    async fn auto(&self, _ctx: &Context) -> Result<()> {
         AUTO_HANDLES.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -106,7 +94,7 @@ struct StartPlugin {
 }
 
 #[async_trait]
-impl RuntimePlugin<TestCtx> for StartPlugin {
+impl RuntimePlugin for StartPlugin {
     fn kind(&self) -> &'static str {
         "start-plugin"
     }
@@ -114,12 +102,12 @@ impl RuntimePlugin<TestCtx> for StartPlugin {
         vec![HandlerDecl::wildcard_message()]
     }
 
-    async fn start(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
+    async fn start(&mut self, _services: RuntimePluginServices) -> Result<()> {
         self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+    async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
         Ok(HandleOutcome::pass())
     }
 }
@@ -129,7 +117,7 @@ struct HandlePlugin {
 }
 
 #[async_trait]
-impl RuntimePlugin<TestCtx> for HandlePlugin {
+impl RuntimePlugin for HandlePlugin {
     fn kind(&self) -> &'static str {
         "handle-plugin"
     }
@@ -137,7 +125,7 @@ impl RuntimePlugin<TestCtx> for HandlePlugin {
         vec![HandlerDecl::wildcard_message()]
     }
 
-    async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+    async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
         self.handles.fetch_add(1, Ordering::SeqCst);
         Ok(HandleOutcome::pass())
     }
@@ -158,7 +146,7 @@ struct ServicePlugin {
 }
 
 #[async_trait]
-impl RuntimePlugin<TestCtx> for ServicePlugin {
+impl RuntimePlugin for ServicePlugin {
     fn kind(&self) -> &'static str {
         "service-plugin"
     }
@@ -166,13 +154,13 @@ impl RuntimePlugin<TestCtx> for ServicePlugin {
         RuntimePluginManifest::new("service-plugin").require_service::<TestAclService>()
     }
 
-    async fn init(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
+    async fn init(&mut self, services: RuntimePluginServices) -> Result<()> {
         let acl = services.require_service::<TestAclService>()?;
         self.observed.lock().unwrap().push(acl.allowed_user.clone());
         Ok(())
     }
 
-    async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+    async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
         Ok(HandleOutcome::pass())
     }
 }
@@ -182,7 +170,7 @@ struct ServiceProviderPlugin {
 }
 
 #[async_trait]
-impl RuntimePlugin<TestCtx> for ServiceProviderPlugin {
+impl RuntimePlugin for ServiceProviderPlugin {
     fn kind(&self) -> &'static str {
         "service-provider-plugin"
     }
@@ -192,7 +180,7 @@ impl RuntimePlugin<TestCtx> for ServiceProviderPlugin {
         })
     }
 
-    async fn handle(&self, _ctx: &TestCtx) -> Result<HandleOutcome> {
+    async fn handle(&self, _ctx: &Context) -> Result<HandleOutcome> {
         Ok(HandleOutcome::pass())
     }
 }
