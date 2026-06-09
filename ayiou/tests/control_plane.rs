@@ -12,10 +12,8 @@ use ayiou::{
     core::{
         adapter::MsgContext,
         control::RuntimeControlHandle,
-        plugin_host::PluginHost,
-        plugin_runtime::PluginRuntimeState,
-        plugin_system::{
-            HandleOutcome, PluginMetadata, RuntimePlugin, RuntimePluginEngine,
+        plugin::{
+            HandleOutcome, PluginRuntimeState, RuntimePlugin, RuntimePluginEngine,
             RuntimePluginServices,
         },
     },
@@ -28,15 +26,15 @@ use tower::ServiceExt;
 struct ControlCtx;
 
 impl MsgContext for ControlCtx {
-    fn text(&self) -> String {
-        String::new()
+    fn text(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed("")
     }
 
-    fn user_id(&self) -> String {
-        "user".to_string()
+    fn user_id(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed("user")
     }
 
-    fn group_id(&self) -> Option<String> {
+    fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
         None
     }
 }
@@ -48,21 +46,13 @@ impl RuntimePlugin<ControlCtx> for TestPlugin {
     fn kind(&self) -> &'static str {
         "test-plugin"
     }
-
-    fn meta(&self) -> PluginMetadata {
-        PluginMetadata::new("test-plugin")
-            .description("control plane test plugin")
-            .version("1.2.3")
-    }
-
     async fn handle(&self, _ctx: &ControlCtx) -> Result<HandleOutcome> {
         Ok(HandleOutcome::pass())
     }
 }
 
 fn app() -> Router {
-    let host = PluginHost::new(None);
-    let services = RuntimePluginServices::new(host);
+    let services = RuntimePluginServices::new();
     let state = PluginRuntimeState::default();
     let mut engine = RuntimePluginEngine::new(services, state);
     engine.push_as("test-plugin", Box::new(TestPlugin));

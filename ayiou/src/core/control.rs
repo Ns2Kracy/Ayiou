@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use tokio::sync::RwLock;
 
-use crate::core::plugin_system::{RuntimePluginEngine, RuntimePluginSnapshot};
+use crate::core::plugin::{RuntimePluginEngine, RuntimePluginSnapshot};
 
 pub struct RuntimeControlHandle<C> {
     engine: Arc<RwLock<RuntimePluginEngine<C>>>,
@@ -60,10 +60,8 @@ mod tests {
 
     use crate::core::{
         adapter::MsgContext,
-        plugin_host::PluginHost,
-        plugin_runtime::PluginRuntimeState,
-        plugin_system::{
-            HandleOutcome, HandlerDecl, PluginMetadata, RuntimePlugin, RuntimePluginEngine,
+        plugin::{
+            HandleOutcome, HandlerDecl, PluginRuntimeState, RuntimePlugin, RuntimePluginEngine,
             RuntimePluginServices,
         },
     };
@@ -74,15 +72,15 @@ mod tests {
     struct ControlCtx;
 
     impl MsgContext for ControlCtx {
-        fn text(&self) -> String {
-            String::new()
+        fn text(&self) -> std::borrow::Cow<'_, str> {
+            std::borrow::Cow::Borrowed("")
         }
 
-        fn user_id(&self) -> String {
-            "user".to_string()
+        fn user_id(&self) -> std::borrow::Cow<'_, str> {
+            std::borrow::Cow::Borrowed("user")
         }
 
-        fn group_id(&self) -> Option<String> {
+        fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
             None
         }
     }
@@ -96,11 +94,6 @@ mod tests {
         fn kind(&self) -> &'static str {
             "control-plugin"
         }
-
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new("control-plugin")
-        }
-
         fn declared_handlers(&self) -> Vec<HandlerDecl> {
             vec![HandlerDecl::wildcard_message()]
         }
@@ -119,8 +112,7 @@ mod tests {
         state: PluginRuntimeState,
         stopped: Arc<Mutex<usize>>,
     ) -> RuntimeControlHandle<ControlCtx> {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let mut engine = RuntimePluginEngine::new(services, state);
         engine.push_as("control-plugin", Box::new(ControlPlugin { stopped }));
         RuntimeControlHandle::new(Arc::new(RwLock::new(engine)))

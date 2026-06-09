@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use anyhow::Result;
 use async_trait::async_trait;
 #[cfg(feature = "control-plane")]
@@ -30,25 +32,25 @@ impl DemoCtx {
 }
 
 impl MsgContext for DemoCtx {
-    fn text(&self) -> String {
+    fn text(&self) -> Cow<'_, str> {
         self.envelope
             .message()
-            .map(|message| message.text.clone())
-            .unwrap_or_default()
+            .map(|message| Cow::Borrowed(message.text.as_str()))
+            .unwrap_or_else(|| Cow::Borrowed(""))
     }
 
-    fn user_id(&self) -> String {
+    fn user_id(&self) -> Cow<'_, str> {
         self.envelope
             .message()
-            .map(|message| message.sender.user_id().to_string())
-            .unwrap_or_default()
+            .map(|message| Cow::Borrowed(message.sender.user_id()))
+            .unwrap_or_else(|| Cow::Borrowed(""))
     }
 
-    fn group_id(&self) -> Option<String> {
+    fn group_id(&self) -> Option<Cow<'_, str>> {
         self.envelope
             .message()
             .and_then(|message| match message.channel.kind() {
-                ChannelKind::Group => Some(message.channel.channel_id().to_string()),
+                ChannelKind::Group => Some(Cow::Borrowed(message.channel.channel_id())),
                 ChannelKind::Direct | ChannelKind::Channel => None,
             })
     }

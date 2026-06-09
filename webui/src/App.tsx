@@ -258,7 +258,7 @@ function PluginRow({
           </Chip>
         )}
       </td>
-      <td className="px-4 py-3 align-top text-zinc-300">{plugin.meta.version}</td>
+      <td className="px-4 py-3 align-top text-zinc-300">{plugin.manifest.version}</td>
       <td className="px-4 py-3 align-top">
         <div className="flex flex-wrap gap-1.5">
           <IconButton
@@ -347,13 +347,15 @@ function PluginDetails({ plugin }: { plugin?: PluginSnapshot }) {
     <aside className="min-h-0 overflow-auto rounded-md border border-zinc-800 bg-zinc-900">
       <div className="border-b border-zinc-800 px-4 py-3">
         <h2 className="text-lg font-semibold text-white">{plugin.instance_id}</h2>
-        <p className="mt-1 text-sm text-zinc-500">{plugin.meta.description || 'No description'}</p>
+        <p className="mt-1 text-sm text-zinc-500">
+          {plugin.manifest.description || 'No description'}
+        </p>
       </div>
       <div className="space-y-4 p-4">
         <DetailGrid
           items={[
             ['Kind', plugin.kind],
-            ['Version', plugin.meta.version],
+            ['Version', plugin.manifest.version],
             ['Config', plugin.lifecycle.config_lifecycle_state],
             ['Desired config', String(plugin.lifecycle.desired_config_version)],
             ['Applied config', String(plugin.lifecycle.applied_config_version)],

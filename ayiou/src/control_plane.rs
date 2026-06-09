@@ -21,8 +21,7 @@ static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../webui/dist");
 
 use crate::core::{
     control::RuntimeControlHandle,
-    plugin_runtime::PluginInstanceState,
-    plugin_system::{Capability, PluginHealth, PluginMetadata, RuntimePluginManifest},
+    plugin::{Capability, PluginHealth, PluginInstanceState, RuntimePluginManifest},
     service::ServiceKey,
 };
 
@@ -141,8 +140,8 @@ async fn runtime<C>(State(state): State<ControlPlaneState<C>>, headers: HeaderMa
 where
     C: Send + Sync + 'static,
 {
-    if let Err(response) = authorize(&headers, &state.token) {
-        return response;
+    if !authorize(&headers, &state.token) {
+        return unauthorized();
     }
 
     let plugins = state.handle.plugin_snapshots().await;
@@ -155,8 +154,8 @@ async fn list_plugins<C>(State(state): State<ControlPlaneState<C>>, headers: Hea
 where
     C: Send + Sync + 'static,
 {
-    if let Err(response) = authorize(&headers, &state.token) {
-        return response;
+    if !authorize(&headers, &state.token) {
+        return unauthorized();
     }
 
     let plugins: Vec<_> = state
@@ -177,8 +176,8 @@ async fn get_plugin<C>(
 where
     C: Send + Sync + 'static,
 {
-    if let Err(response) = authorize(&headers, &state.token) {
-        return response;
+    if !authorize(&headers, &state.token) {
+        return unauthorized();
     }
 
     let plugin = state
@@ -272,8 +271,8 @@ async fn plugin_action<C>(
 where
     C: Send + Sync + 'static,
 {
-    if let Err(response) = authorize(&headers, &state.token) {
-        return response;
+    if !authorize(&headers, &state.token) {
+        return unauthorized();
     }
 
     let result = match action {
@@ -305,22 +304,20 @@ where
     }
 }
 
-fn authorize(headers: &HeaderMap, token: &str) -> std::result::Result<(), Response> {
-    let expected = format!("Bearer {token}");
-    let authorized = headers
+fn authorize(headers: &HeaderMap, token: &str) -> bool {
+    headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == expected);
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|value| value == token)
+}
 
-    if authorized {
-        Ok(())
-    } else {
-        Err(api_error(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "valid bearer token required",
-        ))
-    }
+fn unauthorized() -> Response {
+    api_error(
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        "valid bearer token required",
+    )
 }
 
 fn ok(data: impl Serialize) -> Response {
@@ -349,40 +346,21 @@ fn api_error(status: StatusCode, code: &str, message: impl Into<String>) -> Resp
 struct PluginSnapshotDto {
     instance_id: String,
     kind: String,
-    meta: PluginMetadataDto,
     manifest: RuntimePluginManifestDto,
     lifecycle: PluginInstanceStateDto,
     health: PluginHealthDto,
     reloadable: bool,
 }
 
-impl From<crate::core::plugin_system::RuntimePluginSnapshot> for PluginSnapshotDto {
-    fn from(snapshot: crate::core::plugin_system::RuntimePluginSnapshot) -> Self {
+impl From<crate::core::plugin::RuntimePluginSnapshot> for PluginSnapshotDto {
+    fn from(snapshot: crate::core::plugin::RuntimePluginSnapshot) -> Self {
         Self {
             instance_id: snapshot.instance_id,
             kind: snapshot.kind,
-            meta: snapshot.meta.into(),
             manifest: snapshot.manifest.into(),
             lifecycle: snapshot.lifecycle.into(),
             health: snapshot.health.into(),
             reloadable: false,
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct PluginMetadataDto {
-    name: String,
-    description: String,
-    version: String,
-}
-
-impl From<PluginMetadata> for PluginMetadataDto {
-    fn from(meta: PluginMetadata) -> Self {
-        Self {
-            name: meta.name,
-            description: meta.description,
-            version: meta.version,
         }
     }
 }

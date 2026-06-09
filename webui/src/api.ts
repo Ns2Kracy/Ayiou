@@ -13,11 +13,6 @@ export interface PluginSnapshot {
   instance_id: string
   kind: string
   reloadable: boolean
-  meta: {
-    name: string
-    description: string
-    version: string
-  }
   manifest: {
     kind: string
     description: string

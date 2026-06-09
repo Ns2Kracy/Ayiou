@@ -1,6 +1,6 @@
 use ayiou::adapter::onebot::v11::sender::OneBotSender;
 use ayiou::core::model::{ChannelRef, MessageSegment, OutboundMessage};
-use ayiou::core::plugin_host::MessageSender;
+use ayiou::core::plugin::OutboundSender;
 
 #[tokio::test]
 async fn onebot_sender_serializes_group_message_without_ctx() {

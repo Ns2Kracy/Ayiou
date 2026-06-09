@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use ayiou::core::adapter::MsgContext;
 use ayiou::core::model::CommandInvocation;
-use ayiou::core::plugin_system::{HandlerDecl, RuntimePlugin};
+use ayiou::core::plugin::{HandlerDecl, RuntimePlugin};
 #[allow(unused_imports)]
 use ayiou::{command, plugin};
 
@@ -11,15 +11,15 @@ use ayiou::{command, plugin};
 struct TestCtx;
 
 impl MsgContext for TestCtx {
-    fn text(&self) -> String {
-        String::new()
+    fn text(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed("")
     }
 
-    fn user_id(&self) -> String {
-        "user".to_string()
+    fn user_id(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed("user")
     }
 
-    fn group_id(&self) -> Option<String> {
+    fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
         None
     }
 }
@@ -59,7 +59,7 @@ async fn plugin_macro_registers_commands_and_dispatches_invocations() {
 
     assert_eq!(RuntimePlugin::kind(&plugin), "tool");
     assert_eq!(
-        RuntimePlugin::meta(&plugin).description,
+        RuntimePlugin::manifest(&plugin).description,
         "tool command plugin"
     );
     assert_eq!(

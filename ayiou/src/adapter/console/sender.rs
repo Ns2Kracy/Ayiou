@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 
 use crate::core::{
     model::{MessageSegment, OutboundMessage, OutboundReceipt},
-    plugin_host::OutboundSender,
+    plugin::OutboundSender,
 };
 
 #[derive(Clone)]

@@ -146,12 +146,12 @@ fn render_plugin_impl(
     let registration = if identity.register {
         quote! {
             ayiou::inventory::submit! {
-                ayiou::core::plugin_system::PluginRegistration {
+                ayiou::core::plugin::PluginRegistration {
                     instance_id: #plugin_name,
                     context_type_id: ::std::any::TypeId::of::<#ctx_ty>,
                     context_type_name: ::std::any::type_name::<#ctx_ty>,
                     factory: || -> Box<dyn ::std::any::Any + Send + Sync> {
-                        Box::new(Box::new(<#plugin_ty as ::std::default::Default>::default()) as Box<dyn ayiou::core::plugin_system::RuntimePlugin<#ctx_ty>>)
+                        Box::new(Box::new(<#plugin_ty as ::std::default::Default>::default()) as Box<dyn ayiou::core::plugin::RuntimePlugin<#ctx_ty>>)
                     },
                 }
             }
@@ -170,7 +170,7 @@ fn render_plugin_impl(
             #(#labels)|* => {
                 #(#parser_stmts)*
                 self.#fn_name(ctx, #(#call_args),*).await?;
-                Ok(ayiou::core::plugin_system::HandleOutcome::block())
+                Ok(ayiou::core::plugin::HandleOutcome::block())
             }
         }
     });
@@ -179,21 +179,19 @@ fn render_plugin_impl(
         #item_impl
 
         #[async_trait::async_trait]
-        impl ayiou::core::plugin_system::RuntimePlugin<#ctx_ty> for #plugin_ty {
+        impl ayiou::core::plugin::RuntimePlugin<#ctx_ty> for #plugin_ty {
             fn kind(&self) -> &str {
                 #plugin_name
             }
 
-            fn meta(&self) -> ayiou::core::plugin_system::PluginMetadata {
-                ayiou::core::plugin_system::PluginMetadata {
-                    name: #plugin_name.to_string(),
-                    description: #plugin_description.to_string(),
-                    version: #plugin_version.to_string(),
-                }
+            fn manifest(&self) -> ayiou::core::plugin::RuntimePluginManifest {
+                ayiou::core::plugin::RuntimePluginManifest::new(#plugin_name)
+                    .description(#plugin_description)
+                    .version(#plugin_version)
             }
 
-            fn declared_handlers(&self) -> Vec<ayiou::core::plugin_system::HandlerDecl> {
-                vec![ayiou::core::plugin_system::HandlerDecl::message_commands(
+            fn declared_handlers(&self) -> Vec<ayiou::core::plugin::HandlerDecl> {
+                vec![ayiou::core::plugin::HandlerDecl::message_commands(
                     vec![#(#command_values),*],
                     Vec::<String>::from([#(#prefix_values),*]),
                 )]
@@ -203,15 +201,15 @@ fn render_plugin_impl(
                 &self,
                 ctx: &#ctx_ty,
                 invocation: Option<ayiou::core::model::CommandInvocation>,
-            ) -> anyhow::Result<ayiou::core::plugin_system::HandleOutcome> {
+            ) -> anyhow::Result<ayiou::core::plugin::HandleOutcome> {
                 let Some(line) = invocation else {
-                    return Ok(ayiou::core::plugin_system::HandleOutcome::pass());
+                    return Ok(ayiou::core::plugin::HandleOutcome::pass());
                 };
                 self.__ayiou_dispatch_command(ctx, line.command(), line.args()).await
             }
 
-            async fn handle(&self, _ctx: &#ctx_ty) -> anyhow::Result<ayiou::core::plugin_system::HandleOutcome> {
-                Ok(ayiou::core::plugin_system::HandleOutcome::pass())
+            async fn handle(&self, _ctx: &#ctx_ty) -> anyhow::Result<ayiou::core::plugin::HandleOutcome> {
+                Ok(ayiou::core::plugin::HandleOutcome::pass())
             }
         }
 
@@ -221,10 +219,10 @@ fn render_plugin_impl(
                 ctx: &#ctx_ty,
                 command: &str,
                 args: &str,
-            ) -> anyhow::Result<ayiou::core::plugin_system::HandleOutcome> {
+            ) -> anyhow::Result<ayiou::core::plugin::HandleOutcome> {
                 match command {
                     #(#dispatch_arms,)*
-                    _ => Ok(ayiou::core::plugin_system::HandleOutcome::pass()),
+                    _ => Ok(ayiou::core::plugin::HandleOutcome::pass()),
                 }
             }
         }

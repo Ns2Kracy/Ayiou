@@ -1,11 +1,11 @@
-use std::{any::Any, sync::Arc};
+use std::{any::Any, borrow::Cow, sync::Arc};
 
 use anyhow::{Result, anyhow};
 
 use crate::core::{
     adapter::MsgContext,
     model::{EventEnvelope, MessageEvent, OutboundMessage},
-    plugin_host::OutboundSender,
+    plugin::OutboundSender,
 };
 
 #[derive(Clone)]
@@ -69,21 +69,21 @@ impl Context {
 }
 
 impl MsgContext for Context {
-    fn text(&self) -> String {
+    fn text(&self) -> Cow<'_, str> {
         self.message()
-            .map(|msg| msg.text.clone())
-            .unwrap_or_default()
+            .map(|msg| Cow::Borrowed(msg.text.as_str()))
+            .unwrap_or_else(|| Cow::Borrowed(""))
     }
 
-    fn user_id(&self) -> String {
+    fn user_id(&self) -> Cow<'_, str> {
         self.message()
-            .map(|msg| msg.sender.user_id().to_string())
-            .unwrap_or_default()
+            .map(|msg| Cow::Borrowed(msg.sender.user_id()))
+            .unwrap_or_else(|| Cow::Borrowed(""))
     }
 
-    fn group_id(&self) -> Option<String> {
+    fn group_id(&self) -> Option<Cow<'_, str>> {
         self.message().and_then(|msg| match msg.channel.kind() {
-            crate::core::model::ChannelKind::Group => Some(msg.channel.channel_id().to_string()),
+            crate::core::model::ChannelKind::Group => Some(Cow::Borrowed(msg.channel.channel_id())),
             crate::core::model::ChannelKind::Direct | crate::core::model::ChannelKind::Channel => {
                 None
             }

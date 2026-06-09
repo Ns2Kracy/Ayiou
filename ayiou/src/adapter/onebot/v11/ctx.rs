@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -21,7 +22,7 @@ use crate::core::{
         BotId, ChannelRef, EventEnvelope, MessageEvent as KernelMessageEvent,
         MessageSegment as KernelMessageSegment, PlatformId, UserRef,
     },
-    plugin_host::OutboundSender,
+    plugin::OutboundSender,
 };
 
 /// Message event type
@@ -40,22 +41,25 @@ const API_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct Ctx {
     event: Arc<OneBotEvent>,
     msg: MsgEvent,
+    array_text: Option<String>,
+    user_id_text: String,
+    group_id_text: Option<String>,
     outgoing_tx: mpsc::Sender<String>,
     pending_api: Arc<DashMap<String, oneshot::Sender<ApiResponse>>>,
     echo_seq: Arc<AtomicU64>,
 }
 
 impl MsgContext for Ctx {
-    fn text(&self) -> String {
+    fn text(&self) -> Cow<'_, str> {
         self.text()
     }
 
-    fn user_id(&self) -> String {
-        self.user_id().to_string()
+    fn user_id(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.user_id_text)
     }
 
-    fn group_id(&self) -> Option<String> {
-        self.group_id().map(|id| id.to_string())
+    fn group_id(&self) -> Option<Cow<'_, str>> {
+        self.group_id_text.as_deref().map(Cow::Borrowed)
     }
 }
 
@@ -75,10 +79,41 @@ impl Ctx {
             MessageEvent::Private(p) => MsgEvent::Private(Arc::new(*p.clone())),
             MessageEvent::Group(g) => MsgEvent::Group(Arc::new(*g.clone())),
         };
+        let user_id_text = match &msg {
+            MsgEvent::Private(p) => p.user_id.to_string(),
+            MsgEvent::Group(g) => g.user_id.to_string(),
+        };
+        let group_id_text = match &msg {
+            MsgEvent::Private(_) => None,
+            MsgEvent::Group(g) => Some(g.group_id.to_string()),
+        };
+        let message = match &msg {
+            MsgEvent::Private(p) => &p.message,
+            MsgEvent::Group(g) => &g.message,
+        };
+        let array_text = if let Message::Array(segments) = message {
+            let mut text = String::new();
+            for segment in segments {
+                if let MessageSegment::Text { text: value } = segment {
+                    text.push_str(value);
+                }
+            }
+            let trimmed = text.trim();
+            Some(if trimmed.len() == text.len() {
+                text
+            } else {
+                trimmed.to_string()
+            })
+        } else {
+            None
+        };
 
         Some(Self {
             event,
             msg,
+            array_text,
+            user_id_text,
+            group_id_text,
             outgoing_tx,
             pending_api,
             echo_seq,
@@ -94,31 +129,19 @@ impl Ctx {
 
     /// Get plain text from message
     #[must_use]
-    pub fn text(&self) -> String {
+    pub fn text(&self) -> Cow<'_, str> {
         let message = match &self.msg {
             MsgEvent::Private(p) => &p.message,
             MsgEvent::Group(g) => &g.message,
         };
 
         match message {
-            Message::String(s) => s.trim().to_string(),
+            Message::String(s) => Cow::Borrowed(s.trim()),
             Message::Segment(seg) => match seg {
-                MessageSegment::Text { text } => text.trim().to_string(),
-                _ => String::new(),
+                MessageSegment::Text { text } => Cow::Borrowed(text.trim()),
+                _ => Cow::Borrowed(""),
             },
-            Message::Array(segments) => segments
-                .iter()
-                .filter_map(|seg| {
-                    if let MessageSegment::Text { text } = seg {
-                        Some(text.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("")
-                .trim()
-                .to_string(),
+            Message::Array(_) => Cow::Borrowed(self.array_text.as_deref().unwrap_or("")),
         }
     }
 

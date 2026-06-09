@@ -41,6 +41,14 @@ impl std::error::Error for ArgsParseError {}
 
 #[must_use]
 pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandInvocation> {
+    parse_command_line_with_prefixes(text, prefixes.iter().copied())
+}
+
+#[must_use]
+pub(crate) fn parse_command_line_with_prefixes<'a>(
+    text: &str,
+    prefixes: impl IntoIterator<Item = &'a str>,
+) -> Option<CommandInvocation> {
     let trimmed = text.trim_start();
     if trimmed.is_empty() {
         return None;
@@ -61,7 +69,7 @@ pub fn parse_command_line(text: &str, prefixes: &[&str]) -> Option<CommandInvoca
             && !stripped.is_empty()
         {
             command = stripped;
-            matched_prefix = Some((*prefix).to_string());
+            matched_prefix = Some(prefix.to_string());
             break;
         }
     }

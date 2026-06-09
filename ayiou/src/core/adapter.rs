@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use std::future::Future;
 
@@ -7,13 +7,13 @@ use log::error;
 use tokio::sync::mpsc;
 
 use crate::core::driver::Driver;
-use crate::core::plugin_host::OutboundSender;
+use crate::core::plugin::OutboundSender;
 
 /// Trait for contexts that support message operations.
 pub trait MsgContext: Send + Sync + Clone + 'static {
-    fn text(&self) -> String;
-    fn user_id(&self) -> String;
-    fn group_id(&self) -> Option<String>;
+    fn text(&self) -> Cow<'_, str>;
+    fn user_id(&self) -> Cow<'_, str>;
+    fn group_id(&self) -> Option<Cow<'_, str>>;
 }
 
 /// High-level adapter trait.

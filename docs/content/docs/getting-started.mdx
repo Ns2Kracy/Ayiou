@@ -110,7 +110,7 @@ if let Some(onebot) = ctx.extension::<Ctx>() {
 
 ## 高级插件
 
-默认入口只推荐 `#[plugin]`。如果需要非命令 handler、能力声明、配置生命周期或复杂会话控制，手写 `RuntimePlugin` 并从 `ayiou::core::plugin_system` 引入运行时类型。
+默认入口只推荐 `#[plugin]`。如果需要非命令 handler、能力声明、配置生命周期或复杂会话控制，手写 `RuntimePlugin` 并从 `ayiou::core::plugin` 引入运行时类型。
 
 ## 控制面
 

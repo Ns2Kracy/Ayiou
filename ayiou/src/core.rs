@@ -1,13 +1,10 @@
 pub mod adapter;
 pub mod command;
-pub mod config_store;
 pub mod context;
 pub mod control;
 pub mod driver;
 pub mod event_bus;
 pub mod model;
-pub mod plugin_host;
-pub mod plugin_runtime;
-pub mod plugin_system;
+pub mod plugin;
 pub mod runtime;
 pub mod service;

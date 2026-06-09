@@ -8,9 +8,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use ayiou::Bot;
 use ayiou::core::adapter::{Adapter, MsgContext};
-use ayiou::core::plugin_system::{
-    HandleOutcome, HandlerDecl, PluginMetadata, RuntimePlugin, RuntimePluginManifest,
-    RuntimePluginServices,
+use ayiou::core::plugin::{
+    HandleOutcome, HandlerDecl, RuntimePlugin, RuntimePluginManifest, RuntimePluginServices,
 };
 use ayiou::core::service::{RuntimeService, ServiceRegistry};
 use ayiou::plugin;
@@ -36,15 +35,15 @@ impl TestCtx {
 }
 
 impl MsgContext for TestCtx {
-    fn text(&self) -> String {
-        self.text.clone()
+    fn text(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(&self.text)
     }
 
-    fn user_id(&self) -> String {
-        "user".to_string()
+    fn user_id(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed("user")
     }
 
-    fn group_id(&self) -> Option<String> {
+    fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
         None
     }
 }
@@ -111,11 +110,6 @@ impl RuntimePlugin<TestCtx> for StartPlugin {
     fn kind(&self) -> &'static str {
         "start-plugin"
     }
-
-    fn meta(&self) -> PluginMetadata {
-        PluginMetadata::new("start-plugin")
-    }
-
     fn declared_handlers(&self) -> Vec<HandlerDecl> {
         vec![HandlerDecl::wildcard_message()]
     }
@@ -139,11 +133,6 @@ impl RuntimePlugin<TestCtx> for HandlePlugin {
     fn kind(&self) -> &'static str {
         "handle-plugin"
     }
-
-    fn meta(&self) -> PluginMetadata {
-        PluginMetadata::new("handle-plugin")
-    }
-
     fn declared_handlers(&self) -> Vec<HandlerDecl> {
         vec![HandlerDecl::wildcard_message()]
     }
@@ -173,11 +162,6 @@ impl RuntimePlugin<TestCtx> for ServicePlugin {
     fn kind(&self) -> &'static str {
         "service-plugin"
     }
-
-    fn meta(&self) -> PluginMetadata {
-        PluginMetadata::new("service-plugin")
-    }
-
     fn manifest(&self) -> RuntimePluginManifest {
         RuntimePluginManifest::new("service-plugin").require_service::<TestAclService>()
     }
@@ -202,11 +186,6 @@ impl RuntimePlugin<TestCtx> for ServiceProviderPlugin {
     fn kind(&self) -> &'static str {
         "service-provider-plugin"
     }
-
-    fn meta(&self) -> PluginMetadata {
-        PluginMetadata::new("service-provider-plugin")
-    }
-
     fn register_services(&mut self, registry: &mut ServiceRegistry) -> Result<()> {
         registry.try_insert(TestAclService {
             allowed_user: self.allowed_user.clone(),

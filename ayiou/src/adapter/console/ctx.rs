@@ -1,8 +1,10 @@
+use std::borrow::Cow;
+
 use crate::core::{
     adapter::MsgContext,
     context::Context,
     model::{BotId, ChannelRef, EventEnvelope, MessageEvent, PlatformId, UserRef},
-    plugin_host::OutboundSender,
+    plugin::OutboundSender,
 };
 
 #[derive(Clone)]
@@ -38,15 +40,15 @@ impl Ctx {
 }
 
 impl MsgContext for Ctx {
-    fn text(&self) -> String {
-        self.line.trim().to_string()
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.line.trim())
     }
 
-    fn user_id(&self) -> String {
-        "console-user".to_string()
+    fn user_id(&self) -> Cow<'_, str> {
+        Cow::Borrowed("console-user")
     }
 
-    fn group_id(&self) -> Option<String> {
+    fn group_id(&self) -> Option<Cow<'_, str>> {
         None
     }
 }

@@ -19,7 +19,7 @@ use crate::core::{
     model::{
         ChannelKind, MessageSegment as KernelMessageSegment, OutboundMessage, OutboundReceipt,
     },
-    plugin_host::OutboundSender,
+    plugin::OutboundSender,
 };
 
 const ONEBOT_FORWARD_KIND: &str = "onebot_v11_forward";

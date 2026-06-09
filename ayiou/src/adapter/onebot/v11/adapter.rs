@@ -14,7 +14,7 @@ use crate::{
         adapter::{Adapter, AdapterRuntime, ProtocolAdapter},
         context::Context,
         driver::Driver,
-        plugin_host::OutboundSender,
+        plugin::OutboundSender,
     },
     driver::wsclient::WsDriver,
 };

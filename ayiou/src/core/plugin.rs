@@ -1,90 +1,31 @@
 use std::{
     any::{Any, TypeId},
-    sync::Arc,
+    collections::HashMap,
+    marker::PhantomData,
+    sync::{Arc, OnceLock},
 };
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use dashmap::DashMap;
 
 use crate::core::{
-    command::parse_command_line,
-    model::{BotId, CommandInvocation, PlatformId},
-    plugin_host::PluginHost,
-    plugin_runtime::{PluginInstanceState, PluginLifecycleState, PluginRuntimeState},
+    command::parse_command_line_with_prefixes,
+    model::{BotId, ChannelRef, CommandInvocation, OutboundMessage, OutboundReceipt, PlatformId},
     service::{RuntimeService, ServiceDescriptor, ServiceKey, ServiceRegistry, ServiceSnapshot},
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PluginMetadata {
-    pub name: String,
-    pub description: String,
-    pub version: String,
-}
-
-impl PluginMetadata {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            description: String::new(),
-            version: "0.0.0".to_string(),
-        }
-    }
-
-    #[must_use]
-    pub fn description(mut self, desc: impl Into<String>) -> Self {
-        self.description = desc.into();
-        self
-    }
-
-    #[must_use]
-    pub fn version(mut self, version: impl Into<String>) -> Self {
-        self.version = version.into();
-        self
-    }
-}
-
-impl Default for PluginMetadata {
-    fn default() -> Self {
-        Self {
-            name: "unnamed".to_string(),
-            description: String::new(),
-            version: "0.0.0".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DispatchOptions {
-    command_prefixes: Arc<[String]>,
-}
-
-impl DispatchOptions {
-    pub fn new(command_prefixes: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        let mut prefixes: Vec<String> = command_prefixes
-            .into_iter()
-            .map(Into::into)
-            .filter(|p| !p.is_empty())
-            .collect();
-        prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
-        prefixes.dedup();
-
-        Self {
-            command_prefixes: prefixes.into(),
-        }
-    }
-
-    #[must_use]
-    pub fn command_prefixes(&self) -> &[String] {
-        self.command_prefixes.as_ref()
-    }
-}
-
-impl Default for DispatchOptions {
-    fn default() -> Self {
-        Self {
-            command_prefixes: Arc::from([]),
-        }
-    }
+pub(crate) fn normalize_command_prefixes(
+    command_prefixes: impl IntoIterator<Item = impl Into<String>>,
+) -> Arc<[String]> {
+    let mut prefixes: Vec<String> = command_prefixes
+        .into_iter()
+        .map(Into::into)
+        .filter(|prefix| !prefix.is_empty())
+        .collect();
+    prefixes.sort_by_key(|prefix| std::cmp::Reverse(prefix.len()));
+    prefixes.dedup();
+    prefixes.into()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -358,39 +299,76 @@ impl HandleOutcome {
     }
 }
 
+#[async_trait]
+pub trait OutboundSender: Send + Sync {
+    async fn send(&self, message: OutboundMessage) -> Result<OutboundReceipt>;
+}
+
 pub struct RuntimePluginServices<C> {
-    pub host: PluginHost<C>,
+    sender: Option<Arc<dyn OutboundSender>>,
     pub instance_id: Option<String>,
     pub bot_id: Option<BotId>,
     pub platform: Option<PlatformId>,
     pub capabilities: Vec<Capability>,
     pub service_registry: ServiceRegistry,
+    _marker: PhantomData<fn() -> C>,
 }
 
 impl<C> Clone for RuntimePluginServices<C> {
     fn clone(&self) -> Self {
         Self {
-            host: self.host.clone(),
+            sender: self.sender.clone(),
             instance_id: self.instance_id.clone(),
             bot_id: self.bot_id.clone(),
             platform: self.platform.clone(),
             capabilities: self.capabilities.clone(),
             service_registry: self.service_registry.clone(),
+            _marker: PhantomData,
         }
     }
 }
 
 impl<C> RuntimePluginServices<C> {
     #[must_use]
-    pub fn new(host: PluginHost<C>) -> Self {
+    pub fn new() -> Self {
         Self {
-            host,
+            sender: None,
             instance_id: None,
             bot_id: None,
             platform: None,
             capabilities: Vec::new(),
             service_registry: ServiceRegistry::default(),
+            _marker: PhantomData,
         }
+    }
+
+    #[must_use]
+    pub fn with_sender(mut self, sender: Option<Arc<dyn OutboundSender>>) -> Self {
+        self.sender = sender;
+        self
+    }
+
+    #[must_use]
+    pub fn sender(&self) -> Option<Arc<dyn OutboundSender>> {
+        self.sender.clone()
+    }
+
+    pub fn require_sender(&self) -> Result<Arc<dyn OutboundSender>> {
+        self.sender
+            .clone()
+            .ok_or_else(|| anyhow!("adapter does not provide proactive message sending"))
+    }
+
+    pub async fn send(&self, message: OutboundMessage) -> Result<OutboundReceipt> {
+        self.require_sender()?.send(message).await
+    }
+
+    pub async fn send_text(
+        &self,
+        target: ChannelRef,
+        text: impl Into<String>,
+    ) -> Result<OutboundReceipt> {
+        self.send(OutboundMessage::text(target, text)).await
     }
 
     #[must_use]
@@ -466,10 +444,148 @@ impl<C> RuntimePluginServices<C> {
     #[must_use]
     pub fn provided_capabilities(&self) -> Vec<Capability> {
         let mut capabilities = self.capabilities.clone();
-        if self.host.sender().is_some() && !capabilities.contains(&Capability::ProactiveSend) {
+        if self.sender.is_some() && !capabilities.contains(&Capability::ProactiveSend) {
             capabilities.push(Capability::ProactiveSend);
         }
         capabilities
+    }
+}
+
+impl<C> Default for RuntimePluginServices<C> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PluginLifecycleState {
+    #[default]
+    Registered,
+    Initializing,
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ConfigLifecycleState {
+    Draft,
+    Validated,
+    #[default]
+    Applied,
+    Rejected,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginInstanceState {
+    pub enabled: bool,
+    pub desired_config_version: u64,
+    pub applied_config_version: u64,
+    pub config_lifecycle_state: ConfigLifecycleState,
+    pub lifecycle_state: PluginLifecycleState,
+    pub last_error: Option<String>,
+}
+
+impl Default for PluginInstanceState {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            desired_config_version: 0,
+            applied_config_version: 0,
+            config_lifecycle_state: ConfigLifecycleState::Applied,
+            lifecycle_state: PluginLifecycleState::Registered,
+            last_error: None,
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct PluginRuntimeState {
+    instances: Arc<DashMap<String, PluginInstanceState>>,
+}
+
+impl PluginRuntimeState {
+    fn update(&self, plugin: &str, f: impl FnOnce(&mut PluginInstanceState)) {
+        let mut entry = self.instances.entry(plugin.to_string()).or_default();
+        f(entry.value_mut());
+    }
+
+    #[must_use]
+    pub fn snapshot(&self, plugin: &str) -> PluginInstanceState {
+        self.instances
+            .get(plugin)
+            .map(|entry| entry.clone())
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn snapshots(&self) -> Vec<(String, PluginInstanceState)> {
+        let mut snapshots: Vec<_> = self
+            .instances
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        snapshots.sort_by(|a, b| a.0.cmp(&b.0));
+        snapshots
+    }
+
+    pub fn set_enabled(&self, plugin: &str, on: bool) {
+        self.update(plugin, |state| state.enabled = on);
+    }
+
+    #[must_use]
+    pub fn is_enabled(&self, plugin: &str) -> bool {
+        self.instances
+            .get(plugin)
+            .map(|entry| entry.enabled)
+            .unwrap_or(true)
+    }
+
+    pub fn set_desired_config_version(&self, plugin: &str, version: u64) {
+        self.update(plugin, |state| {
+            state.desired_config_version = version;
+            state.config_lifecycle_state = ConfigLifecycleState::Draft;
+        });
+    }
+
+    pub fn mark_config_validated(&self, plugin: &str, version: u64) {
+        self.update(plugin, |state| {
+            state.desired_config_version = state.desired_config_version.max(version);
+            state.config_lifecycle_state = ConfigLifecycleState::Validated;
+        });
+    }
+
+    pub fn mark_config_applied(&self, plugin: &str, version: u64) {
+        self.update(plugin, |state| {
+            state.applied_config_version = version;
+            state.desired_config_version = state.desired_config_version.max(version);
+            state.config_lifecycle_state = ConfigLifecycleState::Applied;
+        });
+    }
+
+    pub fn reject_config(&self, plugin: &str, version: u64, error: impl Into<String>) {
+        self.update(plugin, |state| {
+            state.desired_config_version = state.desired_config_version.max(version);
+            state.config_lifecycle_state = ConfigLifecycleState::Rejected;
+            state.last_error = Some(error.into());
+        });
+    }
+
+    pub fn set_lifecycle(&self, plugin: &str, lifecycle_state: PluginLifecycleState) {
+        self.update(plugin, |state| state.lifecycle_state = lifecycle_state);
+    }
+
+    pub fn record_error(&self, plugin: &str, error: impl Into<String>) {
+        self.update(plugin, |state| {
+            state.lifecycle_state = PluginLifecycleState::Failed;
+            state.last_error = Some(error.into());
+        });
+    }
+
+    pub fn clear_error(&self, plugin: &str) {
+        self.update(plugin, |state| state.last_error = None);
     }
 }
 
@@ -493,7 +609,6 @@ impl PluginHealth {
 pub struct RuntimePluginSnapshot {
     pub instance_id: String,
     pub kind: String,
-    pub meta: PluginMetadata,
     pub manifest: RuntimePluginManifest,
     pub lifecycle: PluginInstanceState,
     pub health: PluginHealth,
@@ -503,13 +618,8 @@ pub struct RuntimePluginSnapshot {
 pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
     fn kind(&self) -> &str;
 
-    fn meta(&self) -> PluginMetadata;
-
     fn manifest(&self) -> RuntimePluginManifest {
-        let meta = self.meta();
         RuntimePluginManifest::new(self.kind())
-            .description(meta.description)
-            .version(meta.version)
     }
 
     fn declared_handlers(&self) -> Vec<HandlerDecl> {
@@ -554,6 +664,7 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
 
 pub struct RegisteredPlugin<C> {
     instance_id: String,
+    handlers: Arc<[HandlerDecl]>,
     plugin: Box<dyn RuntimePlugin<C>>,
 }
 
@@ -562,15 +673,17 @@ where
     C: Sync + 'static,
 {
     pub fn new(instance_id: impl Into<String>, plugin: Box<dyn RuntimePlugin<C>>) -> Self {
+        let handlers = plugin.declared_handlers().into();
         Self {
             instance_id: instance_id.into(),
+            handlers,
             plugin,
         }
     }
 
     #[must_use]
     pub fn from_plugin(plugin: Box<dyn RuntimePlugin<C>>) -> Self {
-        let instance_id = default_instance_id(plugin.as_ref());
+        let instance_id = plugin.kind().to_string();
         Self::new(instance_id, plugin)
     }
 
@@ -584,25 +697,13 @@ where
         self.plugin.as_ref()
     }
 
+    #[must_use]
+    pub fn handlers(&self) -> &[HandlerDecl] {
+        &self.handlers
+    }
+
     pub fn plugin_mut(&mut self) -> &mut dyn RuntimePlugin<C> {
         self.plugin.as_mut()
-    }
-
-    #[must_use]
-    pub fn into_parts(self) -> (String, Box<dyn RuntimePlugin<C>>) {
-        (self.instance_id, self.plugin)
-    }
-}
-
-fn default_instance_id<C>(plugin: &dyn RuntimePlugin<C>) -> String
-where
-    C: Sync + 'static,
-{
-    let meta = plugin.meta();
-    if meta.name.trim().is_empty() {
-        plugin.kind().to_string()
-    } else {
-        meta.name
     }
 }
 
@@ -680,18 +781,6 @@ pub fn negotiate_capabilities(
     }
 }
 
-fn missing_required_services(
-    manifest: &RuntimePluginManifest,
-    registry: &ServiceRegistry,
-) -> Vec<ServiceKey> {
-    manifest
-        .required_services
-        .iter()
-        .filter(|service| !registry.contains_key(service))
-        .copied()
-        .collect()
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginRequirementFailure {
     pub instance_id: String,
@@ -699,35 +788,19 @@ pub struct PluginRequirementFailure {
     pub missing_services: Vec<ServiceKey>,
 }
 
-impl PluginRequirementFailure {
-    fn message(&self) -> String {
-        let mut parts = Vec::new();
-        if !self.missing_capabilities.is_empty() {
-            parts.push(format!(
-                "missing required capabilities: {:?}",
-                self.missing_capabilities
-            ));
-        }
-        if !self.missing_services.is_empty() {
-            let missing_names: Vec<_> = self
-                .missing_services
-                .iter()
-                .map(ServiceKey::type_name)
-                .collect();
-            parts.push(format!("missing required services: {missing_names:?}"));
-        }
-
-        format!("plugin `{}` {}", self.instance_id, parts.join("; "))
-    }
-}
-
 pub struct RuntimePluginEngine<C> {
     services: RuntimePluginServices<C>,
     runtime_state: PluginRuntimeState,
-    dispatch_options: DispatchOptions,
+    command_prefixes: Arc<[String]>,
+    regex_cache: RegexCache,
     plugins: Vec<RegisteredPlugin<C>>,
-    plugin_services_registered: bool,
+    enabled_plugins: HashMap<String, usize>,
+    enabled_order: Vec<usize>,
+    disabled_plugins: HashMap<String, usize>,
+    service_registered: Vec<bool>,
 }
+
+type RegexCache = OnceLock<DashMap<String, Option<regex::Regex>>>;
 
 impl<C> RuntimePluginEngine<C>
 where
@@ -735,21 +808,25 @@ where
 {
     #[must_use]
     pub fn new(services: RuntimePluginServices<C>, runtime_state: PluginRuntimeState) -> Self {
-        Self::with_options(services, runtime_state, DispatchOptions::default())
+        Self::with_options(services, runtime_state, Arc::from([]))
     }
 
     #[must_use]
-    pub const fn with_options(
+    pub fn with_options(
         services: RuntimePluginServices<C>,
         runtime_state: PluginRuntimeState,
-        dispatch_options: DispatchOptions,
+        command_prefixes: Arc<[String]>,
     ) -> Self {
         Self {
             services,
             runtime_state,
-            dispatch_options,
+            command_prefixes,
+            regex_cache: OnceLock::new(),
             plugins: Vec::new(),
-            plugin_services_registered: false,
+            enabled_plugins: HashMap::new(),
+            enabled_order: Vec::new(),
+            disabled_plugins: HashMap::new(),
+            service_registered: Vec::new(),
         }
     }
 
@@ -761,9 +838,24 @@ where
         self.push_registered(RegisteredPlugin::new(instance_id, plugin));
     }
 
-    fn push_registered(&mut self, plugin: RegisteredPlugin<C>) {
+    pub(crate) fn push_registered(&mut self, plugin: RegisteredPlugin<C>) {
+        let instance_id = plugin.instance_id().to_string();
+        assert!(
+            !self.enabled_plugins.contains_key(&instance_id)
+                && !self.disabled_plugins.contains_key(&instance_id),
+            "plugin instance `{instance_id}` is already registered"
+        );
+
+        let plugin_index = self.plugins.len();
         self.runtime_state
-            .set_lifecycle(plugin.instance_id(), PluginLifecycleState::Registered);
+            .set_lifecycle(&instance_id, PluginLifecycleState::Registered);
+        if self.runtime_state.is_enabled(&instance_id) {
+            self.enabled_plugins.insert(instance_id, plugin_index);
+            self.enabled_order.push(plugin_index);
+        } else {
+            self.disabled_plugins.insert(instance_id, plugin_index);
+        }
+        self.service_registered.push(false);
         self.plugins.push(plugin);
     }
 
@@ -784,7 +876,6 @@ where
                     lifecycle: self.runtime_state.snapshot(&instance_id),
                     instance_id,
                     kind: plugin.kind().to_string(),
-                    meta: plugin.meta(),
                     manifest: plugin.manifest(),
                     health: plugin.health(),
                 }
@@ -796,26 +887,15 @@ where
 
     pub async fn init_all(&mut self) -> Result<()> {
         self.register_plugin_services()?;
+        self.preflight_startup_requirements()?;
 
-        let failures = self.validate_startup_requirements();
-        if !failures.is_empty() {
-            let messages: Vec<_> = failures
-                .iter()
-                .map(PluginRequirementFailure::message)
-                .collect();
-            for (failure, message) in failures.iter().zip(&messages) {
-                self.runtime_state
-                    .record_error(&failure.instance_id, message.clone());
-            }
-            return Err(anyhow!("{}", messages.join("; ")));
-        }
-
-        for registered in &mut self.plugins {
-            let instance_id = registered.instance_id().to_string();
+        for order_index in 0..self.enabled_order.len() {
+            let plugin_index = self.enabled_order[order_index];
+            let instance_id = self.plugins[plugin_index].instance_id().to_string();
             self.runtime_state
                 .set_lifecycle(&instance_id, PluginLifecycleState::Initializing);
 
-            if let Err(err) = registered
+            if let Err(err) = self.plugins[plugin_index]
                 .plugin_mut()
                 .init(self.services.clone().with_instance_id(instance_id.clone()))
                 .await
@@ -832,13 +912,14 @@ where
     }
 
     fn register_plugin_services(&mut self) -> Result<()> {
-        if self.plugin_services_registered {
-            return Ok(());
-        }
+        for order_index in 0..self.enabled_order.len() {
+            let plugin_index = self.enabled_order[order_index];
+            if self.service_registered[plugin_index] {
+                continue;
+            }
 
-        for registered in &mut self.plugins {
-            let instance_id = registered.instance_id().to_string();
-            if let Err(err) = registered
+            let instance_id = self.plugins[plugin_index].instance_id().to_string();
+            if let Err(err) = self.plugins[plugin_index]
                 .plugin_mut()
                 .register_services(&mut self.services.service_registry)
             {
@@ -847,18 +928,57 @@ where
                     .record_error(&instance_id, err.to_string());
                 return Err(err);
             }
+
+            self.service_registered[plugin_index] = true;
         }
 
-        self.plugin_services_registered = true;
         Ok(())
+    }
+
+    fn preflight_startup_requirements(&self) -> Result<()> {
+        let failures = self.validate_startup_requirements();
+        if failures.is_empty() {
+            return Ok(());
+        }
+
+        let messages: Vec<_> = failures
+            .iter()
+            .map(|failure| {
+                let mut parts = Vec::new();
+                if !failure.missing_capabilities.is_empty() {
+                    parts.push(format!(
+                        "missing required capabilities: {:?}",
+                        failure.missing_capabilities
+                    ));
+                }
+                if !failure.missing_services.is_empty() {
+                    let missing_names: Vec<_> = failure
+                        .missing_services
+                        .iter()
+                        .map(ServiceKey::type_name)
+                        .collect();
+                    parts.push(format!("missing required services: {missing_names:?}"));
+                }
+
+                format!("plugin `{}` {}", failure.instance_id, parts.join("; "))
+            })
+            .collect();
+        for (failure, message) in failures.iter().zip(&messages) {
+            self.runtime_state
+                .record_error(&failure.instance_id, message.clone());
+        }
+
+        Err(anyhow!("{}", messages.join("; ")))
     }
 
     #[must_use]
     pub fn validate_startup_requirements(&self) -> Vec<PluginRequirementFailure> {
         let provided_capabilities = self.services.provided_capabilities();
-        self.plugins
+        self.enabled_order
             .iter()
-            .filter_map(|registered| {
+            .copied()
+            .filter_map(|plugin_index| {
+                let registered = &self.plugins[plugin_index];
                 let manifest = registered.plugin().manifest();
                 let missing_capabilities =
                     if let CapabilityNegotiation::Failed { missing_required } =
@@ -868,8 +988,12 @@ where
                     } else {
                         Vec::new()
                     };
-                let missing_services =
-                    missing_required_services(&manifest, &self.services.service_registry);
+                let missing_services: Vec<ServiceKey> = manifest
+                    .required_services
+                    .iter()
+                    .filter(|service| !self.services.service_registry.contains_key(service))
+                    .copied()
+                    .collect();
 
                 (!missing_capabilities.is_empty() || !missing_services.is_empty()).then(|| {
                     PluginRequirementFailure {
@@ -883,12 +1007,13 @@ where
     }
 
     pub async fn start_all(&mut self) -> Result<()> {
-        for registered in &mut self.plugins {
-            let instance_id = registered.instance_id().to_string();
+        for order_index in 0..self.enabled_order.len() {
+            let plugin_index = self.enabled_order[order_index];
+            let instance_id = self.plugins[plugin_index].instance_id().to_string();
             self.runtime_state
                 .set_lifecycle(&instance_id, PluginLifecycleState::Starting);
 
-            if let Err(err) = registered
+            if let Err(err) = self.plugins[plugin_index]
                 .plugin_mut()
                 .start(self.services.clone().with_instance_id(instance_id.clone()))
                 .await
@@ -907,7 +1032,15 @@ where
     }
 
     pub async fn enable_plugin(&mut self, instance_id: &str) -> Result<()> {
-        self.ensure_plugin_registered(instance_id)?;
+        let plugin_index = self.plugin_index(instance_id)?;
+        self.disabled_plugins.remove(instance_id);
+        if self
+            .enabled_plugins
+            .insert(instance_id.to_string(), plugin_index)
+            .is_none()
+        {
+            self.enabled_order.push(plugin_index);
+        }
         self.runtime_state.set_enabled(instance_id, true);
 
         match self.runtime_state.snapshot(instance_id).lifecycle_state {
@@ -922,7 +1055,13 @@ where
     }
 
     pub async fn disable_plugin(&mut self, instance_id: &str) -> Result<()> {
-        self.ensure_plugin_registered(instance_id)?;
+        let plugin_index = self.plugin_index(instance_id)?;
+        if self.enabled_plugins.remove(instance_id).is_some() {
+            self.enabled_order
+                .retain(|enabled| *enabled != plugin_index);
+        }
+        self.disabled_plugins
+            .insert(instance_id.to_string(), plugin_index);
         self.runtime_state.set_enabled(instance_id, false);
 
         match self.runtime_state.snapshot(instance_id).lifecycle_state {
@@ -938,7 +1077,8 @@ where
     }
 
     pub async fn start_plugin(&mut self, instance_id: &str) -> Result<()> {
-        if !self.runtime_state.is_enabled(instance_id) {
+        let plugin_index = self.plugin_index(instance_id)?;
+        if !self.enabled_plugins.contains_key(instance_id) {
             return Ok(());
         }
 
@@ -948,7 +1088,6 @@ where
             self.init_plugin(instance_id).await?;
         }
 
-        let plugin_index = self.plugin_index(instance_id)?;
         let services = self
             .services
             .clone()
@@ -973,23 +1112,10 @@ where
     }
 
     pub async fn init_plugin(&mut self, instance_id: &str) -> Result<()> {
-        self.ensure_plugin_registered(instance_id)?;
-        self.register_plugin_services()?;
-
-        let failures = self.validate_startup_requirements();
-        if !failures.is_empty() {
-            let messages: Vec<_> = failures
-                .iter()
-                .map(PluginRequirementFailure::message)
-                .collect();
-            for (failure, message) in failures.iter().zip(&messages) {
-                self.runtime_state
-                    .record_error(&failure.instance_id, message.clone());
-            }
-            return Err(anyhow!("{}", messages.join("; ")));
-        }
-
         let plugin_index = self.plugin_index(instance_id)?;
+        self.register_plugin_services()?;
+        self.preflight_startup_requirements()?;
+
         let services = self
             .services
             .clone()
@@ -1027,7 +1153,7 @@ where
     }
 
     pub async fn reload_plugin(&mut self, instance_id: &str) -> Result<()> {
-        self.ensure_plugin_registered(instance_id)?;
+        self.plugin_index(instance_id)?;
         self.runtime_state.record_error(
             instance_id,
             format!("plugin `{instance_id}` is not reloadable"),
@@ -1035,18 +1161,11 @@ where
         Err(anyhow!("plugin `{instance_id}` is not reloadable"))
     }
 
-    fn ensure_plugin_registered(&self, instance_id: &str) -> Result<()> {
-        self.plugins
-            .iter()
-            .any(|registered| registered.instance_id() == instance_id)
-            .then_some(())
-            .ok_or_else(|| anyhow!("plugin instance `{instance_id}` is not registered"))
-    }
-
     fn plugin_index(&self, instance_id: &str) -> Result<usize> {
-        self.plugins
-            .iter()
-            .position(|registered| registered.instance_id() == instance_id)
+        self.enabled_plugins
+            .get(instance_id)
+            .or_else(|| self.disabled_plugins.get(instance_id))
+            .copied()
             .ok_or_else(|| anyhow!("plugin instance `{instance_id}` is not registered"))
     }
 
@@ -1083,11 +1202,7 @@ where
         instance_id: &str,
         update: ConfigUpdate,
     ) -> Result<ApplyConfigOutcome> {
-        let registered = self
-            .plugins
-            .iter_mut()
-            .find(|registered| registered.instance_id() == instance_id)
-            .ok_or_else(|| anyhow!("plugin instance `{instance_id}` is not registered"))?;
+        let plugin_index = self.plugin_index(instance_id)?;
 
         self.runtime_state
             .set_desired_config_version(instance_id, update.version);
@@ -1097,7 +1212,10 @@ where
             self.runtime_state.clear_error(instance_id);
             return Ok(ApplyConfigOutcome::skipped());
         }
-        let outcome = registered.plugin_mut().apply_config(update).await?;
+        let outcome = self.plugins[plugin_index]
+            .plugin_mut()
+            .apply_config(update)
+            .await?;
 
         if let Some(version) = outcome.applied_version {
             self.runtime_state.mark_config_applied(instance_id, version);
@@ -1111,7 +1229,134 @@ where
     where
         C: crate::core::adapter::MsgContext,
     {
-        let mut matched = self.matched_handlers(ctx);
+        let text = ctx.text();
+        let global_prefixes = self.command_prefixes.as_ref();
+        let mut matched = Vec::new();
+        for plugin_index in self.enabled_order.iter().copied() {
+            let registered = &self.plugins[plugin_index];
+            let mut best: Option<MatchedHandler> = None;
+            for handler in registered.handlers() {
+                if !handler.permissions.is_empty() {
+                    let user_id = ctx.user_id();
+                    let group_id = ctx.group_id();
+                    let permissions_matched =
+                        handler
+                            .permissions
+                            .iter()
+                            .all(|permission| match permission {
+                                Permission::Any => true,
+                                Permission::User(allowed_user) => user_id == *allowed_user,
+                                Permission::Group(allowed_group) => {
+                                    group_id.as_deref() == Some(allowed_group.as_str())
+                                }
+                                Permission::Bot(bot_id) => self
+                                    .services
+                                    .bot_id
+                                    .as_ref()
+                                    .is_some_and(|current| current.as_str() == bot_id),
+                                Permission::PlatformCapability(capability) => {
+                                    self.services.capabilities.contains(capability)
+                                        || (*capability == Capability::ProactiveSend
+                                            && self.services.sender.is_some())
+                                }
+                            });
+                    if !permissions_matched {
+                        continue;
+                    }
+                }
+
+                let mut candidate = None;
+                if !handler.commands.is_empty() {
+                    let command_matches = |invocation: &CommandInvocation| {
+                        handler
+                            .commands
+                            .iter()
+                            .any(|command| command == invocation.command())
+                    };
+                    let command_match = parse_command_line_with_prefixes(
+                        &text,
+                        handler.command_prefixes.iter().map(String::as_str),
+                    )
+                    .filter(command_matches)
+                    .or_else(|| {
+                        parse_command_line_with_prefixes(
+                            &text,
+                            global_prefixes.iter().map(String::as_str),
+                        )
+                        .filter(command_matches)
+                    })
+                    .or_else(|| {
+                        parse_command_line_with_prefixes(&text, std::iter::empty::<&str>())
+                            .filter(command_matches)
+                    });
+
+                    if let Some(invocation) = command_match {
+                        candidate = Some(MatchedHandler {
+                            plugin_index,
+                            priority: handler.priority,
+                            block: handler.block,
+                            invocation: Some(invocation),
+                            match_rank: 0,
+                        });
+                    }
+                }
+
+                if candidate.is_none() && handler.wildcard {
+                    candidate = Some(MatchedHandler {
+                        plugin_index,
+                        priority: handler.priority,
+                        block: handler.block,
+                        invocation: None,
+                        match_rank: 1,
+                    });
+                }
+
+                if candidate.is_none() && !handler.regex_patterns.is_empty() {
+                    let cache = self.regex_cache.get_or_init(DashMap::new);
+                    let regex_matched = handler.regex_patterns.iter().any(|pattern| {
+                        if let Some(compiled) = cache.get(pattern.as_str()) {
+                            return compiled.as_ref().is_some_and(|regex| regex.is_match(&text));
+                        }
+
+                        let compiled = regex::Regex::new(pattern).ok();
+                        let matched = compiled.as_ref().is_some_and(|regex| regex.is_match(&text));
+                        cache.insert(pattern.clone(), compiled);
+                        matched
+                    });
+
+                    if regex_matched {
+                        candidate = Some(MatchedHandler {
+                            plugin_index,
+                            priority: handler.priority,
+                            block: handler.block,
+                            invocation: None,
+                            match_rank: 2,
+                        });
+                    }
+                }
+
+                if let Some(candidate) = candidate {
+                    let replace_best = match &best {
+                        Some(current) => {
+                            candidate
+                                .priority
+                                .cmp(&current.priority)
+                                .then(candidate.match_rank.cmp(&current.match_rank))
+                                == std::cmp::Ordering::Less
+                        }
+                        None => true,
+                    };
+                    if replace_best {
+                        best = Some(candidate);
+                    }
+                }
+            }
+
+            if let Some(best) = best {
+                matched.push(best);
+            }
+        }
+
         matched.sort_by(|left, right| {
             left.priority
                 .cmp(&right.priority)
@@ -1120,15 +1365,21 @@ where
         });
 
         for candidate in matched {
-            let registered = &self.plugins[candidate.plugin_index];
+            let MatchedHandler {
+                plugin_index,
+                block,
+                invocation,
+                ..
+            } = candidate;
+            let registered = &self.plugins[plugin_index];
             match registered
                 .plugin()
-                .handle_with_invocation(ctx, candidate.invocation.clone())
+                .handle_with_invocation(ctx, invocation)
                 .await
             {
                 Ok(outcome) => {
                     self.runtime_state.clear_error(registered.instance_id());
-                    if outcome.block || candidate.block {
+                    if outcome.block || block {
                         return Ok(true);
                     }
                 }
@@ -1142,168 +1393,14 @@ where
 
         Ok(false)
     }
-
-    fn matched_handlers(&self, ctx: &C) -> Vec<MatchedHandler>
-    where
-        C: crate::core::adapter::MsgContext,
-    {
-        let text = ctx.text();
-        let global_prefixes = self.dispatch_options.command_prefixes();
-        let mut matched = Vec::new();
-
-        for (plugin_index, registered) in self.plugins.iter().enumerate() {
-            if !self.runtime_state.is_enabled(registered.instance_id()) {
-                continue;
-            }
-
-            let best = registered
-                .plugin()
-                .declared_handlers()
-                .into_iter()
-                .filter_map(|handler| {
-                    self.match_handler(ctx, &text, plugin_index, &handler, global_prefixes)
-                })
-                .min_by(|left, right| {
-                    left.priority
-                        .cmp(&right.priority)
-                        .then(left.match_rank.cmp(&right.match_rank))
-                });
-
-            if let Some(best) = best {
-                matched.push(best);
-            }
-        }
-
-        matched
-    }
-
-    fn match_handler(
-        &self,
-        ctx: &C,
-        text: &str,
-        plugin_index: usize,
-        handler: &HandlerDecl,
-        global_prefixes: &[String],
-    ) -> Option<MatchedHandler>
-    where
-        C: crate::core::adapter::MsgContext,
-    {
-        if !permissions_match(&handler.permissions, ctx, &self.services) {
-            return None;
-        }
-
-        let command_match = if handler.commands.is_empty() {
-            None
-        } else {
-            match_handler_command(
-                text,
-                &handler.commands,
-                &handler.command_prefixes,
-                global_prefixes,
-            )
-        };
-
-        if let Some(invocation) = command_match {
-            return Some(MatchedHandler {
-                plugin_index,
-                priority: handler.priority,
-                block: handler.block,
-                invocation: Some(invocation),
-                match_rank: 0,
-            });
-        }
-
-        if handler.wildcard {
-            return Some(MatchedHandler {
-                plugin_index,
-                priority: handler.priority,
-                block: handler.block,
-                invocation: None,
-                match_rank: 1,
-            });
-        }
-
-        if regex_patterns_match(text, &handler.regex_patterns) {
-            return Some(MatchedHandler {
-                plugin_index,
-                priority: handler.priority,
-                block: handler.block,
-                invocation: None,
-                match_rank: 2,
-            });
-        }
-
-        None
-    }
 }
 
-#[derive(Clone)]
 struct MatchedHandler {
     plugin_index: usize,
     priority: i32,
     block: bool,
     invocation: Option<CommandInvocation>,
     match_rank: u8,
-}
-
-fn match_handler_command(
-    text: &str,
-    commands: &[String],
-    handler_prefixes: &[String],
-    global_prefixes: &[String],
-) -> Option<CommandInvocation> {
-    let handler_prefix_refs: Vec<&str> = handler_prefixes.iter().map(String::as_str).collect();
-    let global_prefix_refs: Vec<&str> = global_prefixes.iter().map(String::as_str).collect();
-
-    parse_command_line(text, &handler_prefix_refs)
-        .filter(|invocation| {
-            commands
-                .iter()
-                .any(|command| command == invocation.command())
-        })
-        .or_else(|| {
-            parse_command_line(text, &global_prefix_refs).filter(|invocation| {
-                commands
-                    .iter()
-                    .any(|command| command == invocation.command())
-            })
-        })
-        .or_else(|| {
-            parse_command_line(text, &[]).filter(|invocation| {
-                commands
-                    .iter()
-                    .any(|command| command == invocation.command())
-            })
-        })
-}
-
-fn regex_patterns_match(text: &str, patterns: &[String]) -> bool {
-    !patterns.is_empty()
-        && patterns
-            .iter()
-            .any(|pattern| regex::Regex::new(pattern).is_ok_and(|regex| regex.is_match(text)))
-}
-
-fn permissions_match<C>(
-    permissions: &[Permission],
-    ctx: &C,
-    services: &RuntimePluginServices<C>,
-) -> bool
-where
-    C: crate::core::adapter::MsgContext,
-{
-    permissions.iter().all(|permission| match permission {
-        Permission::Any => true,
-        Permission::User(user_id) => ctx.user_id() == *user_id,
-        Permission::Group(group_id) => ctx.group_id().as_deref() == Some(group_id.as_str()),
-        Permission::Bot(bot_id) => services
-            .bot_id
-            .as_ref()
-            .is_some_and(|current| current.as_str() == bot_id),
-        Permission::PlatformCapability(capability) => {
-            services.provided_capabilities().contains(capability)
-        }
-    })
 }
 
 #[cfg(test)]
@@ -1314,9 +1411,19 @@ mod tests {
 
     use crate::core::{
         adapter::MsgContext,
-        plugin_host::PluginHost,
+        model::{OutboundMessage, OutboundReceipt},
+        plugin::OutboundSender,
         service::{RuntimeService, ServiceKey, ServiceRegistry},
     };
+
+    struct NoopSender;
+
+    #[async_trait]
+    impl OutboundSender for NoopSender {
+        async fn send(&self, _message: OutboundMessage) -> Result<OutboundReceipt> {
+            Ok(OutboundReceipt::default())
+        }
+    }
 
     use super::*;
 
@@ -1328,20 +1435,20 @@ mod tests {
     }
 
     impl MsgContext for TestCtx {
-        fn text(&self) -> String {
-            self.text.clone()
+        fn text(&self) -> std::borrow::Cow<'_, str> {
+            std::borrow::Cow::Borrowed(&self.text)
         }
 
-        fn user_id(&self) -> String {
+        fn user_id(&self) -> std::borrow::Cow<'_, str> {
             if self.user_id.is_empty() {
-                "user".to_string()
+                std::borrow::Cow::Borrowed("user")
             } else {
-                self.user_id.clone()
+                std::borrow::Cow::Borrowed(&self.user_id)
             }
         }
 
-        fn group_id(&self) -> Option<String> {
-            self.group_id.clone()
+        fn group_id(&self) -> Option<std::borrow::Cow<'_, str>> {
+            self.group_id.as_deref().map(std::borrow::Cow::Borrowed)
         }
     }
 
@@ -1374,10 +1481,9 @@ mod tests {
 
     #[test]
     fn runtime_plugin_services_provide_registered_services() {
-        let host = PluginHost::<TestCtx>::new(None);
         let mut registry = ServiceRegistry::default();
         registry.insert(TestCounterService { value: 7 });
-        let services = RuntimePluginServices::new(host).with_service_registry(registry);
+        let services = RuntimePluginServices::<TestCtx>::new().with_service_registry(registry);
 
         let service = services
             .require_service::<TestCounterService>()
@@ -1388,10 +1494,9 @@ mod tests {
 
     #[test]
     fn runtime_plugin_services_describe_registered_services() {
-        let host = PluginHost::<TestCtx>::new(None);
         let mut registry = ServiceRegistry::default();
         registry.insert(TestCounterService { value: 7 });
-        let services = RuntimePluginServices::new(host).with_service_registry(registry);
+        let services = RuntimePluginServices::<TestCtx>::new().with_service_registry(registry);
 
         let descriptor = services
             .service_descriptor::<TestCounterService>()
@@ -1405,10 +1510,9 @@ mod tests {
 
     #[test]
     fn runtime_plugin_services_report_service_health_snapshots() {
-        let host = PluginHost::<TestCtx>::new(None);
         let mut registry = ServiceRegistry::default();
         registry.insert(UnreadyTestService);
-        let services = RuntimePluginServices::new(host).with_service_registry(registry);
+        let services = RuntimePluginServices::<TestCtx>::new().with_service_registry(registry);
 
         let snapshot = services
             .service_snapshot::<UnreadyTestService>()
@@ -1424,6 +1528,33 @@ mod tests {
             }
         );
         assert_eq!(services.service_snapshots(), vec![snapshot]);
+    }
+
+    #[test]
+    fn runtime_plugin_services_infer_proactive_send_from_host_sender() {
+        let sender: Arc<dyn OutboundSender> = Arc::new(NoopSender);
+        let services = RuntimePluginServices::<TestCtx>::new().with_sender(Some(sender));
+
+        assert_eq!(
+            services.provided_capabilities(),
+            vec![Capability::ProactiveSend]
+        );
+    }
+
+    #[test]
+    fn runtime_state_tracks_versions_and_errors() {
+        let state = PluginRuntimeState::default();
+        state.set_enabled("echo", false);
+        state.set_desired_config_version("echo", 3);
+        state.mark_config_applied("echo", 2);
+        state.record_error("echo", "boom");
+
+        let snapshot = state.snapshot("echo");
+        assert!(!snapshot.enabled);
+        assert_eq!(snapshot.desired_config_version, 3);
+        assert_eq!(snapshot.applied_config_version, 2);
+        assert_eq!(snapshot.lifecycle_state, PluginLifecycleState::Failed);
+        assert_eq!(snapshot.last_error.as_deref(), Some("boom"));
     }
 
     #[test]
@@ -1456,11 +1587,6 @@ mod tests {
         fn kind(&self) -> &str {
             self.instance_id
         }
-
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new(self.instance_id)
-        }
-
         fn manifest(&self) -> RuntimePluginManifest {
             self.manifest.clone()
         }
@@ -1497,11 +1623,6 @@ mod tests {
         fn kind(&self) -> &'static str {
             "dependency"
         }
-
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new("dependency")
-        }
-
         fn manifest(&self) -> RuntimePluginManifest {
             self.manifest.clone()
         }
@@ -1527,11 +1648,6 @@ mod tests {
         fn kind(&self) -> &'static str {
             "service-provider"
         }
-
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new("service-provider")
-        }
-
         fn register_services(&mut self, registry: &mut ServiceRegistry) -> Result<()> {
             if self.fail_registration {
                 return Err(anyhow!("provider registration failed"));
@@ -1560,11 +1676,6 @@ mod tests {
         fn kind(&self) -> &'static str {
             "service-consumer"
         }
-
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new("service-consumer")
-        }
-
         fn manifest(&self) -> RuntimePluginManifest {
             RuntimePluginManifest::new("service-consumer").require_service::<TestCounterService>()
         }
@@ -1591,11 +1702,6 @@ mod tests {
         fn kind(&self) -> &'static str {
             self.instance_id
         }
-
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new(self.instance_id)
-        }
-
         fn declared_handlers(&self) -> Vec<HandlerDecl> {
             vec![HandlerDecl::wildcard_message()]
         }
@@ -1620,11 +1726,6 @@ mod tests {
         fn kind(&self) -> &'static str {
             "switchable"
         }
-
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new("switchable")
-        }
-
         async fn start(&mut self, _services: RuntimePluginServices<TestCtx>) -> Result<()> {
             *self.started.lock().unwrap() += 1;
             Ok(())
@@ -1637,8 +1738,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_plugin_is_stopped_and_skipped_by_dispatch() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let stopped = Arc::new(std::sync::Mutex::new(0));
         let handled = Arc::new(std::sync::Mutex::new(0));
@@ -1664,9 +1764,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabled_plugin_is_not_preflighted_or_initialized() {
+        let services = RuntimePluginServices::new();
+        let state = PluginRuntimeState::default();
+        state.set_enabled("disabled", false);
+        let ready_init_calls = Arc::new(std::sync::Mutex::new(0));
+        let disabled_init_calls = Arc::new(std::sync::Mutex::new(0));
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "disabled",
+            Box::new(DependencyPlugin {
+                manifest: RuntimePluginManifest::new("disabled")
+                    .require_capability(Capability::Reaction),
+                init_calls: disabled_init_calls.clone(),
+            }),
+        );
+        engine.push_as(
+            "ready",
+            Box::new(DependencyPlugin {
+                manifest: RuntimePluginManifest::new("ready"),
+                init_calls: ready_init_calls.clone(),
+            }),
+        );
+
+        engine.init_all().await.unwrap();
+
+        assert_eq!(*ready_init_calls.lock().unwrap(), 1);
+        assert_eq!(*disabled_init_calls.lock().unwrap(), 0);
+        assert!(!state.is_enabled("disabled"));
+        assert_eq!(
+            state.snapshot("disabled").lifecycle_state,
+            PluginLifecycleState::Registered
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_plugin_does_not_register_services() {
+        let services = RuntimePluginServices::new();
+        let state = PluginRuntimeState::default();
+        state.set_enabled("provider", false);
+
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_as(
+            "provider",
+            Box::new(ServiceProviderPlugin {
+                service_value: 7,
+                fail_registration: false,
+                init_calls: Arc::new(std::sync::Mutex::new(0)),
+            }),
+        );
+        engine.push_as(
+            "consumer",
+            Box::new(ServiceConsumerPlugin {
+                observed: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }),
+        );
+
+        let err = engine.init_all().await.unwrap_err();
+
+        assert!(err.to_string().contains("missing required services"));
+        assert_eq!(
+            state.snapshot("provider").lifecycle_state,
+            PluginLifecycleState::Registered
+        );
+        assert_eq!(
+            state.snapshot("consumer").lifecycle_state,
+            PluginLifecycleState::Failed
+        );
+    }
+
+    #[tokio::test]
     async fn enable_plugin_restarts_initialized_plugin() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let started = Arc::new(std::sync::Mutex::new(0));
         let mut engine = RuntimePluginEngine::new(services, state.clone());
@@ -1692,8 +1862,7 @@ mod tests {
 
     #[tokio::test]
     async fn reload_non_reloadable_plugin_reports_structured_error() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let mut engine = RuntimePluginEngine::new(services, state.clone());
         engine.push_as(
@@ -1718,8 +1887,7 @@ mod tests {
 
     #[tokio::test]
     async fn plugin_provided_service_satisfies_consumer_manifest() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let provider_init_calls = Arc::new(std::sync::Mutex::new(0));
         let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1748,8 +1916,7 @@ mod tests {
 
     #[tokio::test]
     async fn plugin_service_registration_runs_before_dependency_preflight() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -1776,8 +1943,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_plugin_provided_service_fails_startup() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let first_init_calls = Arc::new(std::sync::Mutex::new(0));
         let second_init_calls = Arc::new(std::sync::Mutex::new(0));
@@ -1817,8 +1983,7 @@ mod tests {
 
     #[tokio::test]
     async fn plugin_service_registration_failure_prevents_partial_init() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let ready_init_calls = Arc::new(std::sync::Mutex::new(0));
 
@@ -1855,7 +2020,6 @@ mod tests {
 
     struct SnapshotPlugin {
         kind: &'static str,
-        meta_name: &'static str,
         manifest: RuntimePluginManifest,
         health: PluginHealth,
         init_calls: Arc<std::sync::Mutex<usize>>,
@@ -1866,13 +2030,6 @@ mod tests {
         fn kind(&self) -> &'static str {
             self.kind
         }
-
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new(self.meta_name)
-                .description("snapshot plugin")
-                .version("9.9.9")
-        }
-
         fn manifest(&self) -> RuntimePluginManifest {
             self.manifest.clone()
         }
@@ -1893,8 +2050,7 @@ mod tests {
 
     #[test]
     fn runtime_plugin_engine_reports_plugin_snapshots() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         state.set_enabled("snapshot.instance", false);
         state.set_desired_config_version("snapshot.instance", 12);
@@ -1905,8 +2061,9 @@ mod tests {
             "snapshot.instance",
             Box::new(SnapshotPlugin {
                 kind: "snapshot-kind",
-                meta_name: "snapshot-meta",
                 manifest: RuntimePluginManifest::new("snapshot-kind")
+                    .description("snapshot plugin")
+                    .version("9.9.9")
                     .require_capability(Capability::Reaction)
                     .require_service::<TestCounterService>(),
                 health: PluginHealth {
@@ -1923,10 +2080,9 @@ mod tests {
         let snapshot = &snapshots[0];
         assert_eq!(snapshot.instance_id, "snapshot.instance");
         assert_eq!(snapshot.kind, "snapshot-kind");
-        assert_eq!(snapshot.meta.name, "snapshot-meta");
-        assert_eq!(snapshot.meta.description, "snapshot plugin");
-        assert_eq!(snapshot.meta.version, "9.9.9");
         assert_eq!(snapshot.manifest.kind, "snapshot-kind");
+        assert_eq!(snapshot.manifest.description, "snapshot plugin");
+        assert_eq!(snapshot.manifest.version, "9.9.9");
         assert_eq!(
             snapshot.manifest.required_capabilities,
             vec![Capability::Reaction]
@@ -1939,7 +2095,7 @@ mod tests {
         assert_eq!(snapshot.lifecycle.desired_config_version, 12);
         assert_eq!(
             snapshot.lifecycle.config_lifecycle_state,
-            crate::core::plugin_runtime::ConfigLifecycleState::Draft
+            ConfigLifecycleState::Draft
         );
         assert_eq!(
             snapshot.health,
@@ -1952,8 +2108,7 @@ mod tests {
 
     #[test]
     fn plugin_snapshots_are_sorted_by_instance_id() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
 
         let mut engine = RuntimePluginEngine::new(services, state);
@@ -1978,8 +2133,7 @@ mod tests {
 
     #[test]
     fn plugin_snapshots_do_not_trigger_lifecycle_hooks() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let init_calls = Arc::new(std::sync::Mutex::new(0));
 
@@ -1988,7 +2142,6 @@ mod tests {
             "snapshot-only",
             Box::new(SnapshotPlugin {
                 kind: "snapshot-only",
-                meta_name: "snapshot-only",
                 manifest: RuntimePluginManifest::new("snapshot-only"),
                 health: PluginHealth::healthy(),
                 init_calls: init_calls.clone(),
@@ -2007,8 +2160,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_fails_init_when_required_service_is_missing() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let init_calls = Arc::new(std::sync::Mutex::new(0));
 
@@ -2039,10 +2191,9 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_initializes_when_required_service_is_available() {
-        let host = PluginHost::new(None);
         let mut registry = ServiceRegistry::default();
         registry.insert(TestCounterService { value: 1 });
-        let services = RuntimePluginServices::new(host).with_service_registry(registry);
+        let services = RuntimePluginServices::new().with_service_registry(registry);
         let state = PluginRuntimeState::default();
         let init_calls = Arc::new(std::sync::Mutex::new(0));
 
@@ -2063,10 +2214,9 @@ mod tests {
 
     #[tokio::test]
     async fn required_service_readiness_policy_is_explicit() {
-        let host = PluginHost::new(None);
         let mut registry = ServiceRegistry::default();
         registry.insert(UnreadyTestService);
-        let services = RuntimePluginServices::new(host).with_service_registry(registry);
+        let services = RuntimePluginServices::new().with_service_registry(registry);
         let state = PluginRuntimeState::default();
         let init_calls = Arc::new(std::sync::Mutex::new(0));
 
@@ -2087,8 +2237,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_allows_missing_optional_services() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let init_calls = Arc::new(std::sync::Mutex::new(0));
 
@@ -2109,8 +2258,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_preflights_required_dependencies_before_init() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let ready_init_calls = Arc::new(std::sync::Mutex::new(0));
         let missing_service_init_calls = Arc::new(std::sync::Mutex::new(0));
@@ -2167,8 +2315,7 @@ mod tests {
 
     #[test]
     fn runtime_plugin_engine_reports_all_startup_requirement_failures() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
 
         let mut engine = RuntimePluginEngine::new(services, state);
@@ -2210,8 +2357,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_does_not_init_any_plugin_when_preflight_fails() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let ready_init_calls = Arc::new(std::sync::Mutex::new(0));
 
@@ -2244,8 +2390,7 @@ mod tests {
 
     #[test]
     fn startup_requirement_validation_is_read_only() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let init_calls = Arc::new(std::sync::Mutex::new(0));
 
@@ -2270,8 +2415,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_orders_handlers_by_priority_and_respects_block() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -2311,8 +2455,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_filters_by_regex_and_permission() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -2321,7 +2464,7 @@ mod tests {
             instance_id: "regex",
             priority: 0,
             block_decl: false,
-            handler: HandlerDecl::message_regex(["^hello\\s+\\w+$"]),
+            handler: HandlerDecl::message_regex(["[", "^hello\\s+\\w+$"]),
             manifest: RuntimePluginManifest::new("regex"),
             hits: hits.clone(),
         }));
@@ -2350,8 +2493,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_uses_context_ids_for_permission_checks() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -2390,8 +2532,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_supports_dry_run_config_lifecycle() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -2416,14 +2557,13 @@ mod tests {
         assert_eq!(snapshot.applied_config_version, 0);
         assert_eq!(
             snapshot.config_lifecycle_state,
-            crate::core::plugin_runtime::ConfigLifecycleState::Validated
+            ConfigLifecycleState::Validated
         );
     }
 
     #[tokio::test]
     async fn runtime_plugin_engine_fails_startup_when_required_capability_is_missing() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -2446,8 +2586,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_plugin_engine_accepts_declared_services_capabilities() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host)
+        let services = RuntimePluginServices::new()
             .with_capabilities([Capability::GroupModeration, Capability::Reaction]);
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2471,8 +2610,7 @@ mod tests {
 
     #[tokio::test]
     async fn engine_can_register_plugin_with_explicit_instance_id() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -2504,11 +2642,6 @@ mod tests {
         fn kind(&self) -> &'static str {
             "service-probe"
         }
-
-        fn meta(&self) -> PluginMetadata {
-            PluginMetadata::new("service-probe")
-        }
-
         async fn init(&mut self, services: RuntimePluginServices<TestCtx>) -> Result<()> {
             self.seen_instance_ids
                 .lock()
@@ -2532,8 +2665,7 @@ mod tests {
 
     #[tokio::test]
     async fn engine_scopes_services_to_runtime_instance_id() {
-        let host = PluginHost::new(None);
-        let services = RuntimePluginServices::new(host);
+        let services = RuntimePluginServices::new();
         let state = PluginRuntimeState::default();
         let seen_instance_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
 

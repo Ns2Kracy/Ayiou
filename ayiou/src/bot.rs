@@ -9,11 +9,9 @@ use crate::control_plane::{self, ControlPlaneOptions};
 use crate::core::control::RuntimeControlHandle;
 use crate::core::{
     adapter::Adapter,
-    plugin_host::PluginHost,
-    plugin_runtime::PluginRuntimeState,
-    plugin_system::{
-        DispatchOptions, RegisteredPlugin, RuntimePlugin, RuntimePluginEngine,
-        RuntimePluginServices, discovered_plugins,
+    plugin::{
+        PluginRuntimeState, RegisteredPlugin, RuntimePlugin, RuntimePluginEngine,
+        RuntimePluginServices, discovered_plugins, normalize_command_prefixes,
     },
     service::{RuntimeService, ServiceRegistry},
 };
@@ -46,7 +44,7 @@ pub struct Bot<A: Adapter> {
     adapter: A,
     plugins: Vec<RegisteredPlugin<A::Ctx>>,
     service_registry: ServiceRegistry,
-    dispatch_options: DispatchOptions,
+    command_prefixes: Arc<[String]>,
     runtime_options: BotRuntimeOptions,
     #[cfg(feature = "control-plane")]
     control_plane_options: Option<ControlPlaneOptions>,
@@ -153,7 +151,7 @@ impl<A: Adapter> Bot<A> {
             adapter,
             plugins: Vec::new(),
             service_registry: ServiceRegistry::default(),
-            dispatch_options: DispatchOptions::default(),
+            command_prefixes: Arc::from([]),
             runtime_options: BotRuntimeOptions::default(),
             #[cfg(feature = "control-plane")]
             control_plane_options: None,
@@ -180,7 +178,7 @@ impl<A: Adapter> Bot<A> {
 
     #[must_use]
     pub fn command_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.dispatch_options = DispatchOptions::new([prefix]);
+        self.command_prefixes = normalize_command_prefixes([prefix]);
         self
     }
 
@@ -189,7 +187,7 @@ impl<A: Adapter> Bot<A> {
         mut self,
         prefixes: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.dispatch_options = DispatchOptions::new(prefixes);
+        self.command_prefixes = normalize_command_prefixes(prefixes);
         self
     }
 
@@ -237,17 +235,16 @@ impl<A: Adapter> Bot<A> {
         let adapter_capabilities = self.adapter.capabilities();
         let adapter_runtime = self.adapter.start_with_runtime().await;
         let runtime_state = PluginRuntimeState::default();
-        let plugin_host = PluginHost::new(adapter_runtime.sender.clone());
         let mut engine = RuntimePluginEngine::with_options(
-            RuntimePluginServices::new(plugin_host)
+            RuntimePluginServices::new()
+                .with_sender(adapter_runtime.sender.clone())
                 .with_capabilities(adapter_capabilities_to_runtime(&adapter_capabilities))
                 .with_service_registry(self.service_registry.clone()),
             runtime_state.clone(),
-            self.dispatch_options.clone(),
+            self.command_prefixes.clone(),
         );
         for registered in self.plugins.drain(..) {
-            let (instance_id, plugin) = registered.into_parts();
-            engine.push_as(instance_id, plugin);
+            engine.push_registered(registered);
         }
 
         if let Err(err) = engine.init_all().await {
@@ -265,11 +262,11 @@ impl<A: Adapter> Bot<A> {
         #[cfg(feature = "control-plane")]
         let control = RuntimeControlHandle::new(engine.clone());
         #[cfg(feature = "control-plane")]
-        if let Some(options) = control_plane_options {
-            if let Err(err) = control_plane::spawn(options, control.clone()) {
-                error!("Control plane configuration error: {err}");
-                return;
-            }
+        if let Some(options) = control_plane_options
+            && let Err(err) = control_plane::spawn(options, control.clone())
+        {
+            error!("Control plane configuration error: {err}");
+            return;
         }
         let runtime = BotRuntime::new(engine.clone(), self.runtime_options.clone());
         runtime.run(adapter_runtime.events).await;
@@ -299,15 +296,15 @@ impl<A: Adapter> Bot<A> {
 
 fn adapter_capabilities_to_runtime(
     capabilities: &crate::core::adapter::AdapterCapabilities,
-) -> Vec<crate::core::plugin_system::Capability> {
+) -> Vec<crate::core::plugin::Capability> {
     let mut out = Vec::new();
 
     if capabilities.proactive_send {
-        out.push(crate::core::plugin_system::Capability::ProactiveSend);
+        out.push(crate::core::plugin::Capability::ProactiveSend);
     }
 
     if capabilities.attachments {
-        out.push(crate::core::plugin_system::Capability::RichSegments);
+        out.push(crate::core::plugin::Capability::RichSegments);
     }
 
     out.extend(
@@ -315,7 +312,7 @@ fn adapter_capabilities_to_runtime(
             .platform_extensions
             .iter()
             .cloned()
-            .map(crate::core::plugin_system::Capability::custom),
+            .map(crate::core::plugin::Capability::custom),
     );
 
     out

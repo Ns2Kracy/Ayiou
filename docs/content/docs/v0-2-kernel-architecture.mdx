@@ -58,14 +58,9 @@ v0.2 追求的结果是：
 
 # 核心设计
 
-## 1. 统一为 RuntimePlugin
+## 1. RuntimePlugin
 
-旧设计里曾同时存在：
-
-- 面向消息分发的 `Plugin<C>`
-- 面向生命周期管理的 `ManagedPlugin`
-
-v0.2 不再保留这两套平行体系，而是统一为：
+插件运行时只保留一套模型：
 
 - `RuntimePlugin`：插件行为、生命周期、配置应用、事件处理、健康状态
 - `RuntimePluginEngine`：单 Bot 内的插件运行时与 handler 调度器
@@ -76,8 +71,7 @@ v0.2 不再保留这两套平行体系，而是统一为：
 #[async_trait::async_trait]
 pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
     fn kind(&self) -> &str;
-    fn meta(&self) -> PluginMetadata;
-    fn manifest(&self) -> RuntimePluginManifest;
+    fn manifest(&self) -> RuntimePluginManifest { RuntimePluginManifest::new(self.kind()) }
     fn declared_handlers(&self) -> Vec<HandlerDecl>;
 
     async fn init(&mut self, services: RuntimePluginServices<C>) -> anyhow::Result<()> { Ok(()) }
@@ -89,20 +83,15 @@ pub trait RuntimePlugin<C: Sync + 'static>: Send + Sync + 'static {
 }
 ```
 
-`instance_id` 不属于插件 trait。默认实例 ID 来自 `meta().name`。`#[plugin]` 宏插件默认会进入自动发现注册表，并由 `Bot::run()` 按上下文类型加载；需要同类型多实例或自定义构造时，再由 `Bot::with_plugin_as(...)` 或 `RuntimePluginEngine::push_as(...)` 显式指定。
+`instance_id` 不属于插件 trait。默认实例 ID 来自 `kind()`。`#[plugin]` 宏插件默认会进入自动发现注册表，并由 `Bot::run()` 按上下文类型加载；需要同类型多实例或自定义构造时，再由 `Bot::with_plugin_as(...)` 或 `RuntimePluginEngine::push_as(...)` 显式指定。
 
 这里最关键的不是 trait 名字，而是“命令插件、正则插件、状态插件，最后都进入同一个实例运行时”。
 
-运行时对外暴露只读 `RuntimePluginSnapshot` 清单，用于控制面、CLI 诊断和健康检查。snapshot 包含 instance id、metadata、manifest、当前 lifecycle/config state 和 `health()`，但不会触发 `init()` / `start()` / `stop()` 等生命周期 hook。
+运行时对外暴露只读 `RuntimePluginSnapshot` 清单，用于控制面、CLI 诊断和健康检查。snapshot 包含 instance id、kind、manifest、当前 lifecycle/config state 和 `health()`，但不会触发 `init()` / `start()` / `stop()` 等生命周期 hook。
 
-## 2. 用 Handler 管线替代 commands/wildcard 二分法
+## 2. Handler 管线
 
-旧分发模型是：
-
-- 先匹配 command
-- 再跑 wildcard
-
-这个模型足够做 Demo，但不够支撑复杂插件生态。v0.2 把插件入口预编译成 `HandlerDecl`：
+插件入口预编译成 `HandlerDecl`：
 
 - `HandlerEventKind`
 - command / prefix / regex rule
