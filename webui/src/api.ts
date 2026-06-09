@@ -61,7 +61,7 @@ async function request<T>(path: string, token: string, init?: RequestInit): Prom
     ...init,
     headers: {
       Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
+      ...init?.headers,
     },
   })
   const envelope = (await response.json()) as ApiEnvelope<T>

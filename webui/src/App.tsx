@@ -1,22 +1,17 @@
+import { Button, Card, Chip, Input } from '@heroui/react'
 import {
-  Button,
-  Card,
-  Chip,
-  Input,
-} from '@heroui/react'
-import {
-  Activity,
-  Ban,
-  CheckCircle2,
+  ArrowClockwise,
+  ArrowsClockwise,
+  CheckCircle,
   Pause,
   Play,
   Power,
-  RefreshCcw,
-  RotateCw,
-  Shield,
-  Square,
+  Prohibit,
+  Pulse,
+  ShieldCheck,
+  Stop,
   XCircle,
-} from 'lucide-react'
+} from '@phosphor-icons/react'
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { listPlugins, pluginAction, type PluginAction, type PluginSnapshot } from './api'
@@ -36,7 +31,9 @@ function App() {
     [plugins, selectedId],
   )
 
-  const runningCount = plugins.filter((plugin) => plugin.lifecycle.lifecycle_state === 'Running').length
+  const runningCount = plugins.filter(
+    (plugin) => plugin.lifecycle.lifecycle_state === 'Running',
+  ).length
   const healthyCount = plugins.filter((plugin) => plugin.health.healthy).length
   const disabledCount = plugins.filter((plugin) => !plugin.lifecycle.enabled).length
 
@@ -67,7 +64,7 @@ function App() {
     if (token) {
       void refresh()
     }
-  }, [])
+  }, [refresh, token])
 
   async function runAction(plugin: PluginSnapshot, action: PluginAction) {
     setLoading(true)
@@ -90,7 +87,7 @@ function App() {
         <header className="flex flex-col gap-4 border-b border-zinc-800 pb-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="flex items-center gap-2 text-sm font-medium text-emerald-300">
-              <Shield className="h-4 w-4" />
+              <ShieldCheck className="h-4 w-4" />
               Ayiou Control Plane
             </div>
             <h1 className="mt-2 text-2xl font-semibold tracking-normal text-white sm:text-3xl">
@@ -113,7 +110,7 @@ function App() {
               onClick={() => void refresh()}
               isDisabled={loading}
             >
-              <RefreshCcw className="h-4 w-4" />
+              <ArrowClockwise className="h-4 w-4" />
               Refresh
             </Button>
           </div>
@@ -137,7 +134,9 @@ function App() {
         <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
           <section className="min-h-0 overflow-hidden rounded-md border border-zinc-800 bg-zinc-900">
             <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Plugins</h2>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
+                Plugins
+              </h2>
               <span className="text-xs text-zinc-500">{plugins.length} total</span>
             </div>
             <div className="overflow-auto">
@@ -208,7 +207,12 @@ function PluginRow({
   return (
     <tr className={selected ? 'bg-emerald-400/10' : 'border-t border-zinc-800'}>
       <td className="px-4 py-3 align-top">
-        <button className="text-left" type="button" onClick={onSelect}>
+        <button
+          aria-label={`Select ${plugin.instance_id}`}
+          className="text-left"
+          type="button"
+          onClick={onSelect}
+        >
           <div className="font-medium text-zinc-100">{plugin.instance_id}</div>
           <div className="mt-1 text-xs text-zinc-500">{plugin.kind}</div>
         </button>
@@ -218,22 +222,38 @@ function PluginRow({
       </td>
       <td className="px-4 py-3 align-top">
         {plugin.lifecycle.enabled ? (
-          <Chip className="border border-emerald-400/30 bg-emerald-400/10 text-emerald-300" size="sm" variant="soft">
-            <CheckCircle2 className="h-4 w-4" /> enabled
+          <Chip
+            className="border border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+            size="sm"
+            variant="soft"
+          >
+            <CheckCircle className="h-4 w-4" /> enabled
           </Chip>
         ) : (
-          <Chip className="border border-zinc-700 bg-zinc-950 text-zinc-500" size="sm" variant="soft">
-            <Ban className="h-4 w-4" /> disabled
+          <Chip
+            className="border border-zinc-700 bg-zinc-950 text-zinc-500"
+            size="sm"
+            variant="soft"
+          >
+            <Prohibit className="h-4 w-4" /> disabled
           </Chip>
         )}
       </td>
       <td className="px-4 py-3 align-top">
         {plugin.health.healthy ? (
-          <Chip className="border border-emerald-400/30 bg-emerald-400/10 text-emerald-300" size="sm" variant="soft">
-            <Activity className="h-4 w-4" /> healthy
+          <Chip
+            className="border border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+            size="sm"
+            variant="soft"
+          >
+            <Pulse className="h-4 w-4" /> healthy
           </Chip>
         ) : (
-          <Chip className="border border-red-400/30 bg-red-400/10 text-red-300" size="sm" variant="soft">
+          <Chip
+            className="border border-red-400/30 bg-red-400/10 text-red-300"
+            size="sm"
+            variant="soft"
+          >
             <XCircle className="h-4 w-4" /> unhealthy
           </Chip>
         )}
@@ -242,20 +262,32 @@ function PluginRow({
       <td className="px-4 py-3 align-top">
         <div className="flex flex-wrap gap-1.5">
           <IconButton
-            label={plugin.lifecycle.enabled ? 'Disable' : 'Enable'}
+            aria-label={plugin.lifecycle.enabled ? 'Disable' : 'Enable'}
             disabled={busy}
             onClick={() => void onAction(plugin, plugin.lifecycle.enabled ? 'disable' : 'enable')}
           >
             <Power className="h-4 w-4" />
           </IconButton>
-          <IconButton label="Start" disabled={busy} onClick={() => void onAction(plugin, 'start')}>
+          <IconButton
+            aria-label="Start"
+            disabled={busy}
+            onClick={() => void onAction(plugin, 'start')}
+          >
             <Play className="h-4 w-4" />
           </IconButton>
-          <IconButton label="Stop" disabled={busy} onClick={() => void onAction(plugin, 'stop')}>
-            <Square className="h-4 w-4" />
+          <IconButton
+            aria-label="Stop"
+            disabled={busy}
+            onClick={() => void onAction(plugin, 'stop')}
+          >
+            <Stop className="h-4 w-4" />
           </IconButton>
-          <IconButton label="Reload" disabled={busy || !plugin.reloadable} onClick={() => void onAction(plugin, 'reload')}>
-            <RotateCw className="h-4 w-4" />
+          <IconButton
+            aria-label="Reload"
+            disabled={busy || !plugin.reloadable}
+            onClick={() => void onAction(plugin, 'reload')}
+          >
+            <ArrowsClockwise className="h-4 w-4" />
           </IconButton>
         </div>
       </td>
@@ -264,28 +296,26 @@ function PluginRow({
 }
 
 function IconButton({
-  label,
+  'aria-label': ariaLabel,
   disabled,
   onClick,
   children,
 }: {
-  label: string
+  'aria-label': string
   disabled?: boolean
   onClick: () => void
   children: ReactNode
 }) {
   return (
-    <Button
-      isIconOnly
-      aria-label={label}
-      className="h-8 w-8 min-w-8 border border-zinc-700 bg-zinc-950 text-zinc-300 data-[hover=true]:border-emerald-400 data-[hover=true]:text-emerald-300"
-      isDisabled={disabled}
-      size="sm"
-      variant="outline"
+    <button
+      aria-label={ariaLabel}
+      className="inline-flex h-8 w-8 min-w-8 items-center justify-center rounded-md border border-zinc-700 bg-zinc-950 text-zinc-300 transition-colors hover:border-emerald-400 hover:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={disabled}
+      type="button"
       onClick={onClick}
     >
       {children}
-    </Button>
+    </button>
   )
 }
 
@@ -343,10 +373,16 @@ function PluginDetails({ plugin }: { plugin?: PluginSnapshot }) {
 
         <Section title="Health">
           <div className="flex items-center gap-2 text-sm text-zinc-300">
-            {plugin.health.healthy ? <CheckCircle2 className="h-4 w-4 text-emerald-300" /> : <Pause className="h-4 w-4 text-red-300" />}
+            {plugin.health.healthy ? (
+              <CheckCircle className="h-4 w-4 text-emerald-300" />
+            ) : (
+              <Pause className="h-4 w-4 text-red-300" />
+            )}
             {plugin.health.healthy ? 'healthy' : 'unhealthy'}
           </div>
-          {plugin.health.detail ? <p className="mt-2 text-sm text-zinc-500">{plugin.health.detail}</p> : null}
+          {plugin.health.detail ? (
+            <p className="mt-2 text-sm text-zinc-500">{plugin.health.detail}</p>
+          ) : null}
         </Section>
 
         {plugin.lifecycle.last_error ? (
@@ -390,7 +426,12 @@ function TagGroup({ label, values }: { label: string; values: string[] }) {
       <div className="flex flex-wrap gap-1.5">
         {values.length > 0 ? (
           values.map((value) => (
-            <Chip key={value} className="max-w-full border border-zinc-700 bg-zinc-950 text-zinc-300" size="sm" variant="soft">
+            <Chip
+              key={value}
+              className="max-w-full border border-zinc-700 bg-zinc-950 text-zinc-300"
+              size="sm"
+              variant="soft"
+            >
               {value}
             </Chip>
           ))
