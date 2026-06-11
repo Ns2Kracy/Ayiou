@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "ayiou"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "ayiou-macros"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "darling",
  "proc-macro2",
