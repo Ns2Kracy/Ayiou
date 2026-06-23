@@ -3,4 +3,5 @@ resolver = "3"
 members = [
     "ayiou",
     "ayiou-macros",
+    "ayiou-wasm",
 ]

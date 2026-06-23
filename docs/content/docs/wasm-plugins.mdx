@@ -1,0 +1,118 @@
+---
+title: WASM 动态插件
+description: 使用 WASM component artifact 为 Rust 主程序提供可热加载、可隔离的动态插件 backend
+---
+
+WASM 插件是 Ayiou 的动态插件路线。Rust/inventory 插件继续作为静态、高性能插件存在；它们已经链接进主程序，所以只支持 enable/disable/start/stop，不支持代码热替换。
+
+## 为什么是 WASM
+
+Ayiou 的 host 是 Rust native binary。和 Python/JavaScript 不同，普通 Rust 代码不是运行时脚本模块，不能安全地在进程内卸载和替换。WASM 提供更合适的边界：
+
+- artifact 可以运行时加载；
+- guest 运行在 sandbox 中；
+- host 只暴露明确的 imports；
+- 可以限制 memory、fuel、epoch；
+- reload 可以通过控制面的同一个 `reload` 入口做原子替换。
+
+## 两类插件
+
+```text
+Rust inventory plugin
+  - 编译进主程序
+  - 强类型、低开销
+  - 不支持代码热替换
+
+WASM plugin
+  - 运行时加载 component artifact
+  - 通过 Ayiou host imports 使用能力
+  - 支持 reload
+  - 适合第三方动态扩展
+```
+
+两者最终都适配成同一套 `RuntimePlugin` 模型。运行时调度、权限、配置、会话和控制面不分叉。
+
+## Artifact 与 sidecar
+
+第一版 WASM backend 加载 WASM component artifact，并读取同目录的 sidecar JSON：
+
+```text
+plugin.wasm
+manifest.json
+handlers.json
+handle-outcome.json
+```
+
+`manifest.json` 描述插件身份：
+
+```json
+{
+  "kind": "weather-wasm",
+  "version": "0.1.0",
+  "description": "Weather plugin compiled to WASM"
+}
+```
+
+`handlers.json` 描述 handler 声明：
+
+```json
+[
+  {
+    "commands": ["weather"],
+    "regex_patterns": [],
+    "wildcard": false,
+    "priority": 0,
+    "block": true
+  }
+]
+```
+
+后续可以把这些 metadata 移入 component exports；sidecar 的价值是先稳定 runtime/backend 边界，避免 guest ABI 过早膨胀。
+
+## Host imports
+
+WASM guest 不拿 Rust 对象，也不访问 raw `ServiceRegistry`。host 只开放明确能力：
+
+- `host-log(level, message)`：写 host 日志；
+- `send-message(target, text)`：通过 adapter sender 发消息；
+- `permission-check(kind, value)`：调用 `PermissionService`；
+- `conversation-get/put/remove(key, ...)`：调用 `ConversationStore`，并由 host 强制加上当前 plugin instance scope。
+
+会话 key 的真实 scope 由 host 生成：
+
+```text
+{plugin_instance}:{guest_key} + context.user_id + context.group_id
+```
+
+guest 不能伪造另一个插件的会话空间。
+
+## Reload 语义
+
+控制面仍然只调用：
+
+```text
+POST /api/plugins/:id/reload
+```
+
+运行时行为：
+
+1. 找到当前插件和它的 reload descriptor。
+2. Rust/inventory 插件返回 `not_reloadable`。
+3. WASM backend 重新加载 artifact。
+4. 构建候选 `RuntimePlugin`。
+5. 校验 manifest、handler、capability、service。
+6. 初始化并启动候选插件。
+7. 替换旧实例并重建路由表。
+8. 停止旧实例。
+9. 任一步失败时保留旧实例，并记录错误。
+
+## 资源限制
+
+WASM backend 使用 Wasmtime component model，并启用：
+
+- async support；
+- fuel consumption；
+- epoch interruption；
+- component model。
+
+这保证动态插件默认在受控运行时中执行。任何新的 host import 都必须先进入 capability/service 设计，不允许直接暴露文件系统、网络或 registry。

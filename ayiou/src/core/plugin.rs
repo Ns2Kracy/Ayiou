@@ -840,6 +840,26 @@ pub struct RuntimePluginSnapshot {
     pub manifest: RuntimePluginManifest,
     pub lifecycle: PluginInstanceState,
     pub health: PluginHealth,
+    pub reloadable: bool,
+}
+
+#[async_trait]
+pub trait PluginReloader: Send + Sync + 'static {
+    async fn reload(&self, instance_id: &str) -> Result<RegisteredPlugin>;
+}
+
+#[derive(Clone, Default)]
+pub enum PluginReloadDescriptor {
+    #[default]
+    NotReloadable,
+    Reloadable(Arc<dyn PluginReloader>),
+}
+
+impl PluginReloadDescriptor {
+    #[must_use]
+    pub const fn is_reloadable(&self) -> bool {
+        matches!(self, Self::Reloadable(_))
+    }
 }
 
 #[async_trait]
@@ -894,6 +914,7 @@ pub struct RegisteredPlugin {
     instance_id: String,
     handlers: Arc<[HandlerDecl]>,
     plugin: Box<dyn RuntimePlugin>,
+    reload: PluginReloadDescriptor,
 }
 
 impl RegisteredPlugin {
@@ -903,6 +924,7 @@ impl RegisteredPlugin {
             instance_id: instance_id.into(),
             handlers,
             plugin,
+            reload: PluginReloadDescriptor::NotReloadable,
         }
     }
 
@@ -910,6 +932,17 @@ impl RegisteredPlugin {
     pub fn from_plugin(plugin: Box<dyn RuntimePlugin>) -> Self {
         let instance_id = plugin.kind().to_string();
         Self::new(instance_id, plugin)
+    }
+
+    #[must_use]
+    pub fn with_reloader(mut self, reloader: Arc<dyn PluginReloader>) -> Self {
+        self.reload = PluginReloadDescriptor::Reloadable(reloader);
+        self
+    }
+
+    #[must_use]
+    pub fn reload_descriptor(&self) -> &PluginReloadDescriptor {
+        &self.reload
     }
 
     #[must_use]
@@ -1175,6 +1208,7 @@ impl RuntimePluginEngine {
                     kind: plugin.kind().to_string(),
                     manifest: plugin.manifest(),
                     health: plugin.health(),
+                    reloadable: registered.reload_descriptor().is_reloadable(),
                 }
             })
             .collect();
@@ -1453,12 +1487,63 @@ impl RuntimePluginEngine {
     }
 
     pub async fn reload_plugin(&mut self, instance_id: &str) -> Result<()> {
-        self.plugin_index(instance_id)?;
-        self.runtime_state.record_error(
-            instance_id,
-            format!("plugin `{instance_id}` is not reloadable"),
-        );
-        Err(anyhow!("plugin `{instance_id}` is not reloadable"))
+        let plugin_index = self.plugin_index(instance_id)?;
+        let PluginReloadDescriptor::Reloadable(reloader) =
+            self.plugins[plugin_index].reload_descriptor().clone()
+        else {
+            self.runtime_state.record_error(
+                instance_id,
+                format!("plugin `{instance_id}` is not reloadable"),
+            );
+            return Err(anyhow!("plugin `{instance_id}` is not reloadable"));
+        };
+
+        let candidate = match reloader.reload(instance_id).await {
+            Ok(candidate) => candidate,
+            Err(err) => {
+                self.runtime_state
+                    .record_error(instance_id, err.to_string());
+                return Err(err);
+            }
+        };
+        if candidate.instance_id() != instance_id {
+            let err = anyhow!(
+                "reload candidate instance `{}` does not match `{instance_id}`",
+                candidate.instance_id()
+            );
+            self.runtime_state
+                .record_error(instance_id, err.to_string());
+            return Err(err);
+        }
+
+        let was_enabled = self.enabled_plugins.contains_key(instance_id);
+        let was_running = self.runtime_state.snapshot(instance_id).lifecycle_state
+            == PluginLifecycleState::Running;
+        let old = std::mem::replace(&mut self.plugins[plugin_index], candidate);
+        if let Err(err) = self.rebuild_routing_table() {
+            self.plugins[plugin_index] = old;
+            let _ = self.rebuild_routing_table();
+            self.runtime_state
+                .record_error(instance_id, err.to_string());
+            return Err(err);
+        }
+
+        if was_enabled {
+            if let Err(err) = self.init_plugin(instance_id).await {
+                self.plugins[plugin_index] = old;
+                let _ = self.rebuild_routing_table();
+                return Err(err);
+            }
+            if was_running && let Err(err) = self.start_plugin(instance_id).await {
+                self.plugins[plugin_index] = old;
+                let _ = self.rebuild_routing_table();
+                return Err(err);
+            }
+        }
+        let mut old = old;
+        let _ = old.plugin_mut().stop().await;
+        self.runtime_state.clear_error(instance_id);
+        Ok(())
     }
 
     fn plugin_index(&self, instance_id: &str) -> Result<usize> {
@@ -2035,6 +2120,28 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct TestReloader {
+        kind: &'static str,
+        handled: Arc<std::sync::Mutex<usize>>,
+        stopped: Arc<std::sync::Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl PluginReloader for TestReloader {
+        async fn reload(&self, instance_id: &str) -> Result<RegisteredPlugin> {
+            Ok(RegisteredPlugin::new(
+                instance_id.to_string(),
+                Box::new(CountingLifecyclePlugin {
+                    instance_id: self.kind,
+                    handled: self.handled.clone(),
+                    stopped: self.stopped.clone(),
+                }),
+            )
+            .with_reloader(Arc::new(self.clone())))
+        }
+    }
+
     #[tokio::test]
     async fn disabled_plugin_is_stopped_and_skipped_by_dispatch() {
         let services = RuntimePluginServices::new();
@@ -2184,6 +2291,50 @@ mod tests {
                 .last_error
                 .as_deref()
                 .is_some_and(|err| err.contains("not reloadable"))
+        );
+    }
+
+    #[tokio::test]
+    async fn reload_reloadable_plugin_swaps_candidate_atomically() {
+        let services = RuntimePluginServices::new();
+        let state = PluginRuntimeState::default();
+        let old_handled = Arc::new(std::sync::Mutex::new(0));
+        let old_stopped = Arc::new(std::sync::Mutex::new(0));
+        let new_handled = Arc::new(std::sync::Mutex::new(0));
+        let new_stopped = Arc::new(std::sync::Mutex::new(0));
+        let reloader = Arc::new(TestReloader {
+            kind: "new-kind",
+            handled: new_handled.clone(),
+            stopped: new_stopped.clone(),
+        });
+        let mut engine = RuntimePluginEngine::new(services, state.clone());
+        engine.push_registered(
+            RegisteredPlugin::new(
+                "reloadable",
+                Box::new(CountingLifecyclePlugin {
+                    instance_id: "old-kind",
+                    handled: old_handled.clone(),
+                    stopped: old_stopped.clone(),
+                }),
+            )
+            .with_reloader(reloader),
+        );
+        engine.init_all().await.unwrap();
+        engine.start_all().await.unwrap();
+
+        engine.reload_plugin("reloadable").await.unwrap();
+        engine
+            .handle_all(&test_ctx("hello", "user", None))
+            .await
+            .unwrap();
+
+        assert_eq!(*old_stopped.lock().unwrap(), 1);
+        assert_eq!(*old_handled.lock().unwrap(), 0);
+        assert_eq!(*new_handled.lock().unwrap(), 1);
+        assert!(engine.plugin_snapshots()[0].reloadable);
+        assert_eq!(
+            state.snapshot("reloadable").lifecycle_state,
+            PluginLifecycleState::Running
         );
     }
 

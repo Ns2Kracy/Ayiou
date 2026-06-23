@@ -9,6 +9,7 @@
     "---插件系统---",
     "plugin-macro",
     "command-system-dx",
-    "control-plane"
+    "control-plane",
+    "wasm-plugins"
   ]
 }

@@ -1,0 +1,19 @@
+package ayiou:plugin;
+
+world plugin {
+  import host-log: func(level: string, message: string);
+  import send-message: func(target: string, text: string) -> result<string, string>;
+  import permission-check: func(permission-kind: string, permission-value: string) -> result<bool, string>;
+  import conversation-get: func(key: string) -> result<option<string>, string>;
+  import conversation-put: func(key: string, value: string, ttl-ms: option<u64>) -> result<_, string>;
+  import conversation-remove: func(key: string) -> result<_, string>;
+
+  export manifest: func() -> string;
+  export handlers: func() -> string;
+  export init: func(services-json: string) -> result<_, string>;
+  export start: func() -> result<_, string>;
+  export stop: func() -> result<_, string>;
+  export apply-config: func(update-json: string) -> result<string, string>;
+  export handle: func(context-json: string, invocation-json: option<string>) -> result<string, string>;
+  export health: func() -> string;
+}

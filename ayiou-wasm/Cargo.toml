@@ -1,0 +1,21 @@
+[package]
+name = "ayiou-wasm"
+version = "0.1.0"
+edition = "2024"
+description = "WASM plugin backend for Ayiou."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+ayiou = { path = "../ayiou", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tokio = { version = "1.48", features = ["sync"] }
+wasmtime = { version = "38", features = ["component-model", "async"] }
+wasmtime-wasi = "38"
+log = "0.4"
+
+[dev-dependencies]
+wat = "1"
+tempfile = "3.25.0"
