@@ -1,11 +1,11 @@
 ---
 title: 控制面与热加载
-description: 使用内嵌管理 UI 查看插件状态、控制生命周期，并为 Rhai/WASM 热加载预留统一入口
+description: 使用内嵌管理 UI 查看插件状态、控制生命周期，并为 WASM 热加载预留统一入口
 ---
 
 控制面是可选 feature。它提供 token 保护的 HTTP API 和内嵌管理 UI，用来查看插件 snapshot、开关插件、执行 start/stop/reload 操作。
 
-当前 Rust/inventory 插件支持生命周期控制，但不支持代码热替换，因为它们已经编译进进程。后续 Rhai/WASM 插件会接入同一套 `reload` 入口。
+当前 Rust/inventory 插件支持生命周期控制，但不支持代码热替换，因为它们已经编译进进程。后续 WASM 插件会接入同一套 `reload` 入口。
 
 ## 启用 feature
 
@@ -112,7 +112,7 @@ POST /api/plugins/:id/reload
 - `enable`：设置 `enabled = true`，必要时调用 `init()` 和 `start()`。
 - `stop`：调用 `stop()`，但不改变 `enabled`。
 - `start`：插件 enabled 时调用 `start()`。
-- `reload`：当前 Rust 插件返回 `not_reloadable`；未来 Rhai/WASM 插件会在同一入口做原子替换。
+- `reload`：当前 Rust 插件返回 `not_reloadable`；未来 WASM 插件会在同一入口做原子替换。
 
 ## 安全默认
 

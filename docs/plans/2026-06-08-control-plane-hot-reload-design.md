@@ -6,7 +6,7 @@ Add an Ayiou-managed control plane for plugin inspection, lifecycle control, and
 
 ## Non-Goals
 
-- Do not introduce a second plugin model for Rhai or WASM.
+- Do not introduce a second plugin model for WASM.
 - Do not make compiled Rust inventory plugins code-reloadable; they can be controlled, but their code is already linked into the process.
 - Do not expose direct plugin-to-plugin access or raw service registry access through the control plane.
 - Do not start a public unauthenticated admin server.
@@ -23,7 +23,7 @@ Bot
   -> optional embedded Web UI
 ```
 
-Rhai and WASM should later enter the system as reloadable backends that produce `RuntimePlugin` instances. The control plane should not care whether a plugin was compiled Rust, Rhai, or WASM; it should only observe a plugin descriptor that says whether reload is supported.
+WASM should later enter the system as a reloadable backend that produces `RuntimePlugin` instances. The control plane should not care whether a plugin was compiled Rust or WASM; it should only observe a plugin descriptor that says whether reload is supported.
 
 ## Control Plane Configuration
 
@@ -79,7 +79,7 @@ The handle is the only object the control plane API receives. This keeps HTTP ha
 - `start_plugin(id)` calls `start()` only when the plugin is enabled.
 - `reload_plugin(id)` attempts a backend-specific replacement. If a plugin is not reloadable, it returns a structured `not_reloadable` error.
 
-For the first implementation, compiled Rust inventory plugins are `reloadable = false`. Rhai and WASM backends will provide reloadable plugin descriptors later.
+For the first implementation, compiled Rust inventory plugins are `reloadable = false`. The WASM backend will provide reloadable plugin descriptors later.
 
 ## Hot Reload Semantics
 
@@ -93,7 +93,7 @@ Reload must be atomic from the user's point of view:
 6. Stop the old instance.
 7. If any candidate step fails, keep the old instance running and record the error on the plugin runtime state.
 
-This reload contract lets the control plane ship before Rhai/WASM while preserving the correct boundary for dynamic backends.
+This reload contract lets the control plane ship before WASM while preserving the correct boundary for dynamic backends.
 
 ## Control Plane API
 
@@ -162,7 +162,7 @@ The default `ayiou` feature set remains minimal.
 - HTTP handlers never expose stack traces.
 - POST is required for state-changing actions.
 - Control plane code never receives direct plugin instances.
-- Future Rhai/WASM plugins must only access resources through Ayiou host APIs and runtime-granted capabilities.
+- Future WASM plugins must only access resources through Ayiou host APIs and runtime-granted capabilities.
 
 ## Testing Strategy
 
@@ -188,7 +188,6 @@ Integration checks:
 
 ## Open Extension Points
 
-- Rhai backend: loads script files, exposes only registered host functions, and enforces execution/resource limits.
 - WASM backend: loads WASM/component artifacts, exposes only Ayiou host imports, and enforces memory/fuel/epoch limits.
 - Plugin filesystem watcher: debounced change events trigger `reload_plugin(id)` for reloadable plugins.
 - Config file integration: default plugin enabled state and control plane options can be read from host configuration later.
