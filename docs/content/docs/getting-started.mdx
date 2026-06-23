@@ -132,7 +132,7 @@ async fn main() {
 
 ## Runtime Services
 
-Plugins should not call other plugin instances directly. Register host-provided services on `Bot`, then request them from `RuntimePluginServices` during plugin initialization:
+插件不要直接调用另一个插件实例。宿主能力统一注册到 `Bot`，插件在 `init` 阶段通过 `RuntimePluginServices` 获取：
 
 ```rust
 let bot = Bot::new(adapter)
@@ -153,6 +153,12 @@ async fn init(&mut self, services: RuntimePluginServices) -> anyhow::Result<()> 
     Ok(())
 }
 ```
+
+权限和会话已有一等服务接口：
+
+- `PermissionService`：处理 `Permission::role(...)` / `Permission::custom(...)` 等动态权限
+- `ConversationStore`：用 `ConversationKey::from_context(instance_id, ctx)` 管理多轮会话状态
+- `MemoryConversationStore`：单进程默认实现，支持 TTL；生产环境可以替换为自己的 `RuntimeService`
 
 Required service declarations are preflighted before any plugin `init()` runs, so a missing dependency fails startup without partially initializing the plugin set.
 

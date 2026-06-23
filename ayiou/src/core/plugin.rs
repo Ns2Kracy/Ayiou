@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    sync::Arc,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Result, anyhow};
@@ -125,12 +126,58 @@ pub enum HandlerEventKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandMeta {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub summary: String,
+    pub usage: String,
+    pub examples: Vec<String>,
+}
+
+impl CommandMeta {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            aliases: Vec::new(),
+            summary: String::new(),
+            usage: String::new(),
+            examples: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn aliases(mut self, aliases: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.aliases = aliases.into_iter().map(Into::into).collect();
+        self
+    }
+
+    #[must_use]
+    pub fn summary(mut self, summary: impl Into<String>) -> Self {
+        self.summary = summary.into();
+        self
+    }
+
+    #[must_use]
+    pub fn usage(mut self, usage: impl Into<String>) -> Self {
+        self.usage = usage.into();
+        self
+    }
+
+    #[must_use]
+    pub fn examples(mut self, examples: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.examples = examples.into_iter().map(Into::into).collect();
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HandlerDecl {
     pub event_kind: HandlerEventKind,
     pub commands: Vec<String>,
     pub command_prefixes: Vec<String>,
     pub regex_patterns: Vec<String>,
     pub permissions: Vec<Permission>,
+    pub command_meta: Vec<CommandMeta>,
     pub priority: i32,
     pub block: bool,
     pub wildcard: bool,
@@ -146,6 +193,7 @@ impl HandlerDecl {
             command_prefixes: Vec::new(),
             regex_patterns: Vec::new(),
             permissions: Vec::new(),
+            command_meta: Vec::new(),
             priority: 0,
             block: false,
             wildcard: true,
@@ -163,6 +211,7 @@ impl HandlerDecl {
             command_prefixes: command_prefixes.into_iter().map(Into::into).collect(),
             regex_patterns: Vec::new(),
             permissions: Vec::new(),
+            command_meta: Vec::new(),
             priority: 0,
             block: false,
             wildcard: false,
@@ -177,6 +226,7 @@ impl HandlerDecl {
             command_prefixes: Vec::new(),
             regex_patterns: patterns.into_iter().map(Into::into).collect(),
             permissions: Vec::new(),
+            command_meta: Vec::new(),
             priority: 0,
             block: false,
             wildcard: false,
@@ -191,6 +241,21 @@ impl HandlerDecl {
     }
 
     #[must_use]
+    pub fn require_permissions(
+        mut self,
+        permissions: impl IntoIterator<Item = Permission>,
+    ) -> Self {
+        self.permissions.extend(permissions);
+        self
+    }
+
+    #[must_use]
+    pub fn command_meta(mut self, meta: impl IntoIterator<Item = CommandMeta>) -> Self {
+        self.command_meta = meta.into_iter().collect();
+        self
+    }
+
+    #[must_use]
     pub const fn priority(mut self, priority: i32) -> Self {
         self.priority = priority;
         self
@@ -201,6 +266,12 @@ impl HandlerDecl {
         self.block = block;
         self
     }
+
+    #[must_use]
+    pub const fn concurrency(mut self, concurrency: ConcurrencyPolicy) -> Self {
+        self.concurrency = concurrency;
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -209,6 +280,8 @@ pub enum Permission {
     User(String),
     Group(String),
     Bot(String),
+    Role(String),
+    Custom(String),
     PlatformCapability(Capability),
 }
 
@@ -220,36 +293,49 @@ impl Permission {
     pub fn group(group_id: impl Into<String>) -> Self {
         Self::Group(group_id.into())
     }
+
+    pub fn role(role: impl Into<String>) -> Self {
+        Self::Role(role.into())
+    }
+
+    pub fn custom(name: impl Into<String>) -> Self {
+        Self::Custom(name.into())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ConcurrencyPolicy {
     #[default]
     Parallel,
-    Serialize,
+    PluginSerial,
+    UserSerial,
+    GroupSerial,
+    ConversationSerial,
     Drop,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ConfigUpdate {
     pub version: u64,
-    pub content: String,
+    pub values: serde_json::Value,
     pub dry_run: bool,
 }
 
 impl ConfigUpdate {
-    pub fn new(version: u64, content: impl Into<String>) -> Self {
+    pub fn new(version: u64, values: impl Into<serde_json::Value>) -> Self {
+        let values = values.into();
         Self {
             version,
-            content: content.into(),
+            values,
             dry_run: false,
         }
     }
 
-    pub fn dry_run(version: u64, content: impl Into<String>) -> Self {
+    pub fn dry_run(version: u64, values: impl Into<serde_json::Value>) -> Self {
+        let values = values.into();
         Self {
             version,
-            content: content.into(),
+            values,
             dry_run: true,
         }
     }
@@ -301,6 +387,117 @@ impl HandleOutcome {
 #[async_trait]
 pub trait OutboundSender: Send + Sync {
     async fn send(&self, message: OutboundMessage) -> Result<OutboundReceipt>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PermissionDecision {
+    Allow,
+    Deny(String),
+}
+
+impl PermissionDecision {
+    #[must_use]
+    pub const fn allowed(&self) -> bool {
+        matches!(self, Self::Allow)
+    }
+}
+
+#[async_trait]
+pub trait PermissionService: RuntimeService {
+    async fn check(&self, ctx: &Context, permission: &Permission) -> Result<PermissionDecision>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ConversationKey {
+    pub plugin_id: String,
+    pub user_id: String,
+    pub group_id: Option<String>,
+}
+
+impl ConversationKey {
+    pub fn new(
+        plugin_id: impl Into<String>,
+        user_id: impl Into<String>,
+        group_id: Option<impl Into<String>>,
+    ) -> Self {
+        Self {
+            plugin_id: plugin_id.into(),
+            user_id: user_id.into(),
+            group_id: group_id.map(Into::into),
+        }
+    }
+
+    #[must_use]
+    pub fn from_context(plugin_id: impl Into<String>, ctx: &Context) -> Self {
+        Self {
+            plugin_id: plugin_id.into(),
+            user_id: ctx.user_id().into_owned(),
+            group_id: ctx.group_id().map(std::borrow::Cow::into_owned),
+        }
+    }
+}
+
+#[async_trait]
+pub trait ConversationStore: RuntimeService {
+    async fn get(&self, key: &ConversationKey) -> Result<Option<serde_json::Value>>;
+    async fn put(
+        &self,
+        key: ConversationKey,
+        value: serde_json::Value,
+        ttl: Option<Duration>,
+    ) -> Result<()>;
+    async fn remove(&self, key: &ConversationKey) -> Result<()>;
+}
+
+#[derive(Default)]
+pub struct MemoryConversationStore {
+    entries: DashMap<ConversationKey, ConversationEntry>,
+}
+
+struct ConversationEntry {
+    value: serde_json::Value,
+    expires_at: Option<Instant>,
+}
+
+impl RuntimeService for MemoryConversationStore {
+    fn name(&self) -> &'static str {
+        "memory-conversation-store"
+    }
+}
+
+#[async_trait]
+impl ConversationStore for MemoryConversationStore {
+    async fn get(&self, key: &ConversationKey) -> Result<Option<serde_json::Value>> {
+        let Some(entry) = self.entries.get(key) else {
+            return Ok(None);
+        };
+        if entry
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= Instant::now())
+        {
+            drop(entry);
+            self.entries.remove(key);
+            return Ok(None);
+        }
+        Ok(Some(entry.value.clone()))
+    }
+
+    async fn put(
+        &self,
+        key: ConversationKey,
+        value: serde_json::Value,
+        ttl: Option<Duration>,
+    ) -> Result<()> {
+        let expires_at = ttl.map(|ttl| Instant::now() + ttl);
+        self.entries
+            .insert(key, ConversationEntry { value, expires_at });
+        Ok(())
+    }
+
+    async fn remove(&self, key: &ConversationKey) -> Result<()> {
+        self.entries.remove(key);
+        Ok(())
+    }
 }
 
 pub struct RuntimePluginServices {
@@ -411,6 +608,36 @@ impl RuntimePluginServices {
     pub fn require_service<S>(&self) -> Result<Arc<S>>
     where
         S: RuntimeService,
+    {
+        self.service_registry.require::<S>()
+    }
+
+    #[must_use]
+    pub fn permission_service<S>(&self) -> Option<Arc<S>>
+    where
+        S: PermissionService,
+    {
+        self.service_registry.get::<S>()
+    }
+
+    pub fn require_permission_service<S>(&self) -> Result<Arc<S>>
+    where
+        S: PermissionService,
+    {
+        self.service_registry.require::<S>()
+    }
+
+    #[must_use]
+    pub fn conversation_store<S>(&self) -> Option<Arc<S>>
+    where
+        S: ConversationStore,
+    {
+        self.service_registry.get::<S>()
+    }
+
+    pub fn require_conversation_store<S>(&self) -> Result<Arc<S>>
+    where
+        S: ConversationStore,
     {
         self.service_registry.require::<S>()
     }
@@ -764,7 +991,8 @@ pub struct RuntimePluginEngine {
     services: RuntimePluginServices,
     runtime_state: PluginRuntimeState,
     command_prefixes: Arc<[String]>,
-    regex_cache: RegexCache,
+    routing_table: RoutingTable,
+    concurrency_locks: DashMap<ConcurrencyKey, Arc<tokio::sync::Semaphore>>,
     plugins: Vec<RegisteredPlugin>,
     enabled_plugins: HashMap<String, usize>,
     enabled_order: Vec<usize>,
@@ -772,7 +1000,47 @@ pub struct RuntimePluginEngine {
     service_registered: Vec<bool>,
 }
 
-type RegexCache = OnceLock<DashMap<String, Option<regex::Regex>>>;
+#[derive(Default)]
+struct RoutingTable {
+    command_prefixes: Arc<[String]>,
+    commands: HashMap<String, Vec<Route>>,
+    wildcard: Vec<Route>,
+    regex: Vec<RegexRoute>,
+}
+
+#[derive(Clone)]
+struct Route {
+    plugin_index: usize,
+    priority: i32,
+    block: bool,
+    concurrency: ConcurrencyPolicy,
+}
+
+struct RegexRoute {
+    route: Route,
+    regex: regex::Regex,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ConcurrencyKey {
+    Plugin(usize),
+    User(String),
+    Group(String),
+    Conversation {
+        user_id: String,
+        group_id: Option<String>,
+    },
+}
+
+fn compare_routes(left: &Route, right: &Route) -> std::cmp::Ordering {
+    left.priority
+        .cmp(&right.priority)
+        .then(left.plugin_index.cmp(&right.plugin_index))
+}
+
+fn sort_routes(routes: &mut [Route]) {
+    routes.sort_by(compare_routes);
+}
 
 impl RuntimePluginEngine {
     #[must_use]
@@ -790,7 +1058,8 @@ impl RuntimePluginEngine {
             services,
             runtime_state,
             command_prefixes,
-            regex_cache: OnceLock::new(),
+            routing_table: RoutingTable::default(),
+            concurrency_locks: DashMap::new(),
             plugins: Vec::new(),
             enabled_plugins: HashMap::new(),
             enabled_order: Vec::new(),
@@ -826,6 +1095,59 @@ impl RuntimePluginEngine {
         }
         self.service_registered.push(false);
         self.plugins.push(plugin);
+        self.rebuild_routing_table()
+            .expect("plugin handler declarations must be valid");
+    }
+
+    fn rebuild_routing_table(&mut self) -> Result<()> {
+        let mut command_prefixes: Vec<String> = self.command_prefixes.iter().cloned().collect();
+        let mut table = RoutingTable::default();
+        for plugin_index in self.enabled_order.iter().copied() {
+            let registered = &self.plugins[plugin_index];
+            for handler in registered.handlers() {
+                let route = Route {
+                    plugin_index,
+                    priority: handler.priority,
+                    block: handler.block,
+                    concurrency: handler.concurrency,
+                };
+                for command in &handler.commands {
+                    table
+                        .commands
+                        .entry(command.clone())
+                        .or_default()
+                        .push(route.clone());
+                }
+                command_prefixes.extend(handler.command_prefixes.iter().cloned());
+                if handler.wildcard {
+                    table.wildcard.push(route.clone());
+                }
+                for pattern in &handler.regex_patterns {
+                    let regex = regex::Regex::new(pattern).map_err(|err| {
+                        anyhow!(
+                            "plugin `{}` declared invalid regex `{}`: {}",
+                            registered.instance_id(),
+                            pattern,
+                            err
+                        )
+                    })?;
+                    table.regex.push(RegexRoute {
+                        route: route.clone(),
+                        regex,
+                    });
+                }
+            }
+        }
+        table.command_prefixes = normalize_command_prefixes(command_prefixes);
+        for routes in table.commands.values_mut() {
+            sort_routes(routes);
+        }
+        sort_routes(&mut table.wildcard);
+        table
+            .regex
+            .sort_by(|left, right| compare_routes(&left.route, &right.route));
+        self.routing_table = table;
+        Ok(())
     }
 
     #[must_use]
@@ -856,6 +1178,7 @@ impl RuntimePluginEngine {
 
     pub async fn init_all(&mut self) -> Result<()> {
         self.register_plugin_services()?;
+        self.rebuild_routing_table()?;
         self.preflight_startup_requirements()?;
 
         for order_index in 0..self.enabled_order.len() {
@@ -1011,6 +1334,7 @@ impl RuntimePluginEngine {
             self.enabled_order.push(plugin_index);
         }
         self.runtime_state.set_enabled(instance_id, true);
+        self.rebuild_routing_table()?;
 
         match self.runtime_state.snapshot(instance_id).lifecycle_state {
             PluginLifecycleState::Initializing
@@ -1032,6 +1356,7 @@ impl RuntimePluginEngine {
         self.disabled_plugins
             .insert(instance_id.to_string(), plugin_index);
         self.runtime_state.set_enabled(instance_id, false);
+        self.rebuild_routing_table()?;
 
         match self.runtime_state.snapshot(instance_id).lifecycle_state {
             PluginLifecycleState::Starting | PluginLifecycleState::Running => {
@@ -1198,156 +1523,76 @@ impl RuntimePluginEngine {
 impl RuntimePluginEngine {
     pub async fn handle_all(&self, ctx: &Context) -> Result<bool> {
         let text = ctx.text();
-        let global_prefixes = self.command_prefixes.as_ref();
+        let invocation = parse_command_line_with_prefixes(
+            &text,
+            self.routing_table
+                .command_prefixes
+                .iter()
+                .map(String::as_str),
+        )
+        .or_else(|| parse_command_line_with_prefixes(&text, std::iter::empty::<&str>()));
+
         let mut matched = Vec::new();
-        for plugin_index in self.enabled_order.iter().copied() {
-            let registered = &self.plugins[plugin_index];
-            let mut best: Option<MatchedHandler> = None;
-            for handler in registered.handlers() {
-                if !handler.permissions.is_empty() {
-                    let user_id = ctx.user_id();
-                    let group_id = ctx.group_id();
-                    let permissions_matched =
-                        handler
-                            .permissions
-                            .iter()
-                            .all(|permission| match permission {
-                                Permission::Any => true,
-                                Permission::User(allowed_user) => user_id == *allowed_user,
-                                Permission::Group(allowed_group) => {
-                                    group_id.as_deref() == Some(allowed_group.as_str())
-                                }
-                                Permission::Bot(bot_id) => self
-                                    .services
-                                    .bot_id
-                                    .as_ref()
-                                    .is_some_and(|current| current.as_str() == bot_id),
-                                Permission::PlatformCapability(capability) => {
-                                    self.services.capabilities.contains(capability)
-                                        || (*capability == Capability::ProactiveSend
-                                            && self.services.sender.is_some())
-                                }
-                            });
-                    if !permissions_matched {
-                        continue;
-                    }
-                }
-
-                let mut candidate = None;
-                if !handler.commands.is_empty() {
-                    let command_matches = |invocation: &CommandInvocation| {
-                        handler
-                            .commands
-                            .iter()
-                            .any(|command| command == invocation.command())
-                    };
-                    let command_match = parse_command_line_with_prefixes(
-                        &text,
-                        handler.command_prefixes.iter().map(String::as_str),
-                    )
-                    .filter(command_matches)
-                    .or_else(|| {
-                        parse_command_line_with_prefixes(
-                            &text,
-                            global_prefixes.iter().map(String::as_str),
-                        )
-                        .filter(command_matches)
-                    })
-                    .or_else(|| {
-                        parse_command_line_with_prefixes(&text, std::iter::empty::<&str>())
-                            .filter(command_matches)
-                    });
-
-                    if let Some(invocation) = command_match {
-                        candidate = Some(MatchedHandler {
-                            plugin_index,
-                            priority: handler.priority,
-                            block: handler.block,
-                            invocation: Some(invocation),
-                            match_rank: 0,
-                        });
-                    }
-                }
-
-                if candidate.is_none() && handler.wildcard {
-                    candidate = Some(MatchedHandler {
-                        plugin_index,
-                        priority: handler.priority,
-                        block: handler.block,
-                        invocation: None,
-                        match_rank: 1,
-                    });
-                }
-
-                if candidate.is_none() && !handler.regex_patterns.is_empty() {
-                    let cache = self.regex_cache.get_or_init(DashMap::new);
-                    let regex_matched = handler.regex_patterns.iter().any(|pattern| {
-                        if let Some(compiled) = cache.get(pattern.as_str()) {
-                            return compiled.as_ref().is_some_and(|regex| regex.is_match(&text));
-                        }
-
-                        let compiled = regex::Regex::new(pattern).ok();
-                        let matched = compiled.as_ref().is_some_and(|regex| regex.is_match(&text));
-                        cache.insert(pattern.clone(), compiled);
-                        matched
-                    });
-
-                    if regex_matched {
-                        candidate = Some(MatchedHandler {
-                            plugin_index,
-                            priority: handler.priority,
-                            block: handler.block,
-                            invocation: None,
-                            match_rank: 2,
-                        });
-                    }
-                }
-
-                if let Some(candidate) = candidate {
-                    let replace_best = match &best {
-                        Some(current) => {
-                            candidate
-                                .priority
-                                .cmp(&current.priority)
-                                .then(candidate.match_rank.cmp(&current.match_rank))
-                                == std::cmp::Ordering::Less
-                        }
-                        None => true,
-                    };
-                    if replace_best {
-                        best = Some(candidate);
-                    }
-                }
-            }
-
-            if let Some(best) = best {
-                matched.push(best);
-            }
+        if let Some(invocation) = invocation
+            && let Some(routes) = self.routing_table.commands.get(invocation.command())
+        {
+            matched.extend(routes.iter().cloned().map(|route| MatchedHandler {
+                invocation: Some(invocation.clone()),
+                match_rank: 0,
+                route,
+            }));
         }
 
+        if matched.is_empty() {
+            matched.extend(self.routing_table.wildcard.iter().cloned().map(|route| {
+                MatchedHandler {
+                    invocation: None,
+                    match_rank: 1,
+                    route,
+                }
+            }));
+        }
+
+        matched.extend(
+            self.routing_table
+                .regex
+                .iter()
+                .filter(|route| route.regex.is_match(&text))
+                .map(|route| MatchedHandler {
+                    invocation: None,
+                    match_rank: 2,
+                    route: route.route.clone(),
+                }),
+        );
+
         matched.sort_by(|left, right| {
-            left.priority
-                .cmp(&right.priority)
+            left.route
+                .priority
+                .cmp(&right.route.priority)
                 .then(left.match_rank.cmp(&right.match_rank))
-                .then(left.plugin_index.cmp(&right.plugin_index))
+                .then(left.route.plugin_index.cmp(&right.route.plugin_index))
         });
 
         for candidate in matched {
-            let MatchedHandler {
-                plugin_index,
-                block,
-                invocation,
-                ..
-            } = candidate;
+            let plugin_index = candidate.route.plugin_index;
             let registered = &self.plugins[plugin_index];
+            if !self
+                .permissions_match(ctx, registered.handlers(), &candidate)
+                .await?
+            {
+                continue;
+            }
+
+            let _permit = self.acquire_concurrency(ctx, &candidate.route).await?;
+
             match registered
                 .plugin()
-                .handle_with_invocation(ctx, invocation)
+                .handle_with_invocation(ctx, candidate.invocation)
                 .await
             {
                 Ok(outcome) => {
                     self.runtime_state.clear_error(registered.instance_id());
-                    if outcome.block || block {
+                    if outcome.block || candidate.route.block {
                         return Ok(true);
                     }
                 }
@@ -1361,14 +1606,94 @@ impl RuntimePluginEngine {
 
         Ok(false)
     }
+
+    async fn acquire_concurrency(
+        &self,
+        ctx: &Context,
+        route: &Route,
+    ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>> {
+        let key = match route.concurrency {
+            ConcurrencyPolicy::Parallel => return Ok(None),
+            ConcurrencyPolicy::Drop => return Ok(None),
+            ConcurrencyPolicy::PluginSerial => ConcurrencyKey::Plugin(route.plugin_index),
+            ConcurrencyPolicy::UserSerial => ConcurrencyKey::User(ctx.user_id().into_owned()),
+            ConcurrencyPolicy::GroupSerial => {
+                let Some(group_id) = ctx.group_id() else {
+                    return Ok(None);
+                };
+                ConcurrencyKey::Group(group_id.into_owned())
+            }
+            ConcurrencyPolicy::ConversationSerial => ConcurrencyKey::Conversation {
+                user_id: ctx.user_id().into_owned(),
+                group_id: ctx.group_id().map(std::borrow::Cow::into_owned),
+            },
+        };
+        let semaphore = self
+            .concurrency_locks
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(1)))
+            .clone();
+        Ok(Some(semaphore.acquire_owned().await?))
+    }
+
+    async fn permissions_match(
+        &self,
+        ctx: &Context,
+        handlers: &[HandlerDecl],
+        candidate: &MatchedHandler,
+    ) -> Result<bool> {
+        let Some(handler) = handlers.iter().find(|handler| {
+            handler.priority == candidate.route.priority
+                && handler.block == candidate.route.block
+                && handler.concurrency == candidate.route.concurrency
+                && match candidate.match_rank {
+                    0 => candidate.invocation.as_ref().is_some_and(|invocation| {
+                        handler
+                            .commands
+                            .iter()
+                            .any(|command| command == invocation.command())
+                    }),
+                    1 => handler.wildcard,
+                    2 => !handler.regex_patterns.is_empty(),
+                    _ => false,
+                }
+        }) else {
+            return Ok(true);
+        };
+
+        for permission in &handler.permissions {
+            if !self.permission_matches(ctx, permission).await? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    async fn permission_matches(&self, ctx: &Context, permission: &Permission) -> Result<bool> {
+        let user_id = ctx.user_id();
+        let group_id = ctx.group_id();
+        Ok(match permission {
+            Permission::Any => true,
+            Permission::User(allowed_user) => user_id == *allowed_user,
+            Permission::Group(allowed_group) => group_id.as_deref() == Some(allowed_group.as_str()),
+            Permission::Bot(bot_id) => self
+                .services
+                .bot_id
+                .as_ref()
+                .is_some_and(|current| current.as_str() == bot_id),
+            Permission::PlatformCapability(capability) => {
+                self.services.capabilities.contains(capability)
+                    || (*capability == Capability::ProactiveSend && self.services.sender.is_some())
+            }
+            Permission::Role(_) | Permission::Custom(_) => false,
+        })
+    }
 }
 
 struct MatchedHandler {
-    plugin_index: usize,
-    priority: i32,
-    block: bool,
     invocation: Option<CommandInvocation>,
     match_rank: u8,
+    route: Route,
 }
 
 #[cfg(test)]
@@ -2434,7 +2759,7 @@ mod tests {
             instance_id: "regex",
             priority: 0,
             block_decl: false,
-            handler: HandlerDecl::message_regex(["[", "^hello\\s+\\w+$"]),
+            handler: HandlerDecl::message_regex(["^hello\\s+\\w+$"]),
             manifest: RuntimePluginManifest::new("regex"),
             hits: hits.clone(),
         }));

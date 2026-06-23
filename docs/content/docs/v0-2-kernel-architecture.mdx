@@ -89,72 +89,69 @@ pub trait RuntimePlugin: Send + Sync + 'static {
 
 运行时对外暴露只读 `RuntimePluginSnapshot` 清单，用于控制面、CLI 诊断和健康检查。snapshot 包含 instance id、kind、manifest、当前 lifecycle/config state 和 `health()`，但不会触发 `init()` / `start()` / `stop()` 等生命周期 hook。
 
-## 2. Handler 管线
+## 2. Handler 路由管线
 
-插件入口预编译成 `HandlerDecl`：
+插件入口先声明成 `HandlerDecl`，运行时在注册、enable/disable 和 init 时重建路由表：
 
-- `HandlerEventKind`
-- command / prefix / regex rule
+- command / prefix
+- 预编译 regex rule
 - `Permission`
+- `CommandMeta` help 元数据
 - `Priority`
 - `Block`
 - `ConcurrencyPolicy`
 
-建议的执行管线：
+执行管线：
 
-1. adapter 产出统一上下文
-2. runtime 做能力补全与基础解析
-3. router 根据事件类型粗筛 handler
-4. rule 阶段做命令、前缀、正则、来源等过滤
-5. permission 阶段做用户 / 群 / 平台能力校验
+1. adapter 产出统一 `Context`
+2. runtime 只解析一次命令前缀和命令名
+3. router 通过命令索引、通配 handler 和预编译正则表找候选 handler
+4. permission 阶段先做静态 user/group 检查，再把 role/custom 权限交给 `PermissionService`
+5. concurrency 阶段按插件、用户、群或会话 key 获取运行时锁
 6. handler 执行业务
 7. block 阶段决定是否终止后续 handler
 
 直接收益：
 
-- 正则不再只是预留字段
-- 优先级、拦截、权限成为内建语义
-- 消息命令、系统事件、后续调度事件能进入同一模型
+- 命令不再每条消息线性扫描全插件
+- 正则在启动/路由构建期编译，非法表达式直接失败，不在消息路径静默跳过
+- help/控制面可以从 `HandlerDecl::command_meta` 读取命令名、别名、summary、usage 和 examples
+- 优先级、拦截、权限和并发成为内建语义
 
-## 3. 存储、会话、Cron 和观测性先不进核心
+## 3. 运行时服务：权限和会话进主路径
 
-这些能力都更像“插件服务”而不是当前最小内核的一部分。它们需要先回答几个问题：
+插件互调仍然不走“直接拿另一个插件实例”。跨插件或宿主能力通过 `RuntimePluginServices` 暴露：
 
-- 插件之间如何声明、发现和调用服务
-- 服务生命周期归谁管理
-- 状态、定时任务和指标如何按插件实例隔离
-- 跨 adapter/source 的状态 key 如何定义
+- `PermissionService`：处理角色、租户、外部 ACL 或自定义权限名，返回 `PermissionDecision::Allow/Deny`
+- `ConversationStore`：按 `ConversationKey { plugin_id, user_id, group_id }` 存储多轮对话状态
+- `MemoryConversationStore`：单进程默认实现，支持 TTL；生产环境可以替换成 Redis/数据库实现
 
-在这些问题没稳定前，提前把 `Store`、`Conversation`、`Scheduler` 或 `MetricsSink` 做成公开主路径，会让插件作者依赖一套很快会改的 API。
+这让“聊天机器人必需”的权限和会话能力稳定为服务接口，同时避免把数据库、Cron、指标等具体设施塞进插件 trait。
 
-当前内核只保留必要的运行时上下文：
+仍然不进核心 trait 的能力：
 
-- 插件实例身份
-- Bot / platform 身份
-- adapter 提供的能力
-- outbound sender
+- 具体持久化后端
+- Scheduler / Cron
+- MetricsSink / tracing exporter
+- 跨进程分布式锁
 
-等插件互调模型明确后，再把存储、会话、Cron 和观测性作为可组合服务接回来。
+这些能力继续通过 `RuntimeService` 组合。
 
-## 4. 配置系统升级为运行时生命周期
+## 4. 配置系统升级为结构化运行时生命周期
 
-当前保留 `desired/applied version` 语义，同时补充配置生命周期：
-
-- `draft`
-- `validated`
-- `applied`
-- `rejected`
+当前保留 `desired/applied version` 语义，并让配置更新携带结构化 JSON：
 
 运行时支持：
 
-- `ConfigUpdate::dry_run(...)`
-- `ConfigUpdate::new(...)`
+- `ConfigUpdate::new(version, serde_json::json!(...))`
+- `ConfigUpdate::dry_run(version, serde_json::json!(...))`
+- 插件从 `update.values` 读取类型化字段
 - apply 成功后标记 applied version
+- dry-run 成功后标记 validated version
 - apply 失败时保留错误上下文
 
 后续可以继续补：
 
-- 类型化配置结构体
 - schema
 - 默认值
 - 配置迁移器

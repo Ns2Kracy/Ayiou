@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use ayiou::Context;
 use ayiou::core::model::{BotId, CommandInvocation, EventEnvelope, PlatformId};
-use ayiou::core::plugin::{HandlerDecl, RuntimePlugin};
+use ayiou::core::plugin::{CommandMeta, HandlerDecl, Permission, RuntimePlugin};
 #[allow(unused_imports)]
 use ayiou::{command, plugin};
 
@@ -20,7 +20,17 @@ struct SimplePlugin;
     register = false
 )]
 impl ToolPlugin {
-    #[command(name = "echo", alias = "say")]
+    #[command(
+        name = "echo",
+        alias = "say",
+        aliases = ["repeat"],
+        summary = "Echo text",
+        usage = "/echo <text>",
+        examples = ["/echo hello", "/say hello"],
+        priority = 10,
+        block = false,
+        permissions = ["chat.echo"]
+    )]
     async fn echo(&self, _ctx: &Context, content: String) -> Result<()> {
         self.seen.lock().unwrap().push(content);
         Ok(())
@@ -55,7 +65,17 @@ async fn plugin_macro_registers_commands_and_dispatches_invocations() {
     );
     assert_eq!(
         RuntimePlugin::declared_handlers(&plugin),
-        vec![HandlerDecl::message_commands(["echo", "say"], ["/"])]
+        vec![
+            HandlerDecl::message_commands(["echo", "say", "repeat"], ["/"])
+                .command_meta([CommandMeta::new("echo")
+                    .aliases(["say", "repeat"])
+                    .summary("Echo text")
+                    .usage("/echo <text>")
+                    .examples(["/echo hello", "/say hello"])])
+                .require_permissions([Permission::custom("chat.echo")])
+                .priority(10)
+                .block(false)
+        ]
     );
 
     let ctx = test_context();
@@ -67,7 +87,7 @@ async fn plugin_macro_registers_commands_and_dispatches_invocations() {
     .await
     .unwrap();
 
-    assert!(outcome.block);
+    assert!(!outcome.block);
     assert_eq!(*seen.lock().unwrap(), vec!["hello world".to_string()]);
 }
 
@@ -78,7 +98,11 @@ async fn plugin_macro_treats_async_methods_as_commands() {
     assert_eq!(RuntimePlugin::kind(&plugin), "simple");
     assert_eq!(
         RuntimePlugin::declared_handlers(&plugin),
-        vec![HandlerDecl::message_commands(["ping"], ["/"])]
+        vec![
+            HandlerDecl::message_commands(["ping"], ["/"])
+                .command_meta([ayiou::core::plugin::CommandMeta::new("ping")])
+                .block(true)
+        ]
     );
 
     let ctx = test_context();

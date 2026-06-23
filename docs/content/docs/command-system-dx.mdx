@@ -56,9 +56,9 @@ async fn main() {
 ## 命令匹配
 
 - `async fn kick(...)` 会注册 `kick`
-- 运行时会依次尝试：
-- 全局前缀：`Bot::command_prefixes(...)`
-- 插件前缀：`#[plugin(prefix = "...")]`
+- 运行时会合并全局前缀 `Bot::command_prefixes(...)` 和插件前缀 `#[plugin(prefix = "...")]`
+- 每条消息只解析一次命令，再通过命令索引查找候选 handler
+- 没有命中命令时，才尝试 wildcard handler；regex handler 使用启动期预编译的表达式
 
 默认推荐把第二个参数写成 `&Context`，这样命令解析、回复和跨平台插件体验最稳定。
 

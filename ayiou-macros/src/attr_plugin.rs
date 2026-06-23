@@ -1,8 +1,8 @@
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{
-    Expr, ExprArray, ExprLit, FnArg, GenericArgument, ImplItem, ItemImpl, Lit, Meta, MetaNameValue,
-    Pat, PatIdent, PathArguments, Result, Type,
+    Expr, ExprArray, ExprLit, ExprUnary, FnArg, GenericArgument, ImplItem, ItemImpl, Lit, Meta,
+    MetaNameValue, Pat, PatIdent, PathArguments, Result, Type, UnOp,
 };
 
 struct PluginAttrs {
@@ -29,13 +29,31 @@ impl Default for PluginAttrs {
 struct CommandAttrs {
     name: Option<String>,
     aliases: Vec<String>,
+    summary: Option<String>,
+    usage: Option<String>,
+    examples: Vec<String>,
+    priority: Option<i32>,
+    block: Option<bool>,
+    permissions: Vec<String>,
 }
 
 struct CommandMethod {
     fn_name: syn::Ident,
     labels: Vec<String>,
+    meta: CommandMetaAttrs,
     parser_stmts: Vec<TokenStream>,
     call_args: Vec<syn::Ident>,
+}
+
+struct CommandMetaAttrs {
+    command: String,
+    aliases: Vec<String>,
+    summary: Option<String>,
+    usage: Option<String>,
+    examples: Vec<String>,
+    priority: Option<i32>,
+    block: bool,
+    permissions: Vec<String>,
 }
 
 struct PluginIdentity {
@@ -126,15 +144,51 @@ fn render_plugin_impl(
     prefixes: &[String],
     methods: &[CommandMethod],
 ) -> TokenStream {
-    let all_commands: Vec<String> = methods
-        .iter()
-        .flat_map(|method| method.labels.iter().cloned())
-        .collect();
+    let handler_decls = methods.iter().map(|method| {
+        let command_values = method
+            .labels
+            .iter()
+            .map(|value| quote! { #value.to_string() });
+        let prefix_values = prefixes.iter().map(|value| quote! { #value.to_string() });
+        let meta = &method.meta;
+        let command = &meta.command;
+        let aliases = meta
+            .aliases
+            .iter()
+            .map(|value| quote! { #value.to_string() });
+        let summary = meta.summary.as_ref().map(|value| {
+            quote! { .summary(#value) }
+        });
+        let usage = meta.usage.as_ref().map(|value| {
+            quote! { .usage(#value) }
+        });
+        let examples = meta
+            .examples
+            .iter()
+            .map(|value| quote! { #value.to_string() });
+        let permissions = meta.permissions.iter().map(|value| {
+            quote! { ayiou::core::plugin::Permission::custom(#value) }
+        });
+        let priority = meta.priority.map(|value| quote! { .priority(#value) });
+        let block = meta.block;
 
-    let command_values = all_commands
-        .iter()
-        .map(|value| quote! { #value.to_string() });
-    let prefix_values = prefixes.iter().map(|value| quote! { #value.to_string() });
+        quote! {
+            ayiou::core::plugin::HandlerDecl::message_commands(
+                vec![#(#command_values),*],
+                Vec::<String>::from([#(#prefix_values),*]),
+            )
+            .command_meta([
+                ayiou::core::plugin::CommandMeta::new(#command)
+                    .aliases(Vec::<String>::from([#(#aliases),*]))
+                    #summary
+                    #usage
+                    .examples(Vec::<String>::from([#(#examples),*]))
+            ])
+            .require_permissions(Vec::<ayiou::core::plugin::Permission>::from([#(#permissions),*]))
+            #priority
+            .block(#block)
+        }
+    });
     let plugin_name = identity.name;
     let plugin_description = identity.description;
     let plugin_version = identity.version;
@@ -158,12 +212,13 @@ fn render_plugin_impl(
         let labels = method.labels.iter();
         let parser_stmts = &method.parser_stmts;
         let call_args = &method.call_args;
+        let block = method.meta.block;
 
         quote! {
             #(#labels)|* => {
                 #(#parser_stmts)*
                 self.#fn_name(ctx, #(#call_args),*).await?;
-                Ok(ayiou::core::plugin::HandleOutcome::block())
+                Ok(ayiou::core::plugin::HandleOutcome::from_block(#block))
             }
         }
     });
@@ -184,10 +239,7 @@ fn render_plugin_impl(
             }
 
             fn declared_handlers(&self) -> Vec<ayiou::core::plugin::HandlerDecl> {
-                vec![ayiou::core::plugin::HandlerDecl::message_commands(
-                    vec![#(#command_values),*],
-                    Vec::<String>::from([#(#prefix_values),*]),
-                )]
+                vec![#(#handler_decls),*]
             }
 
             async fn handle_with_invocation(
@@ -288,6 +340,30 @@ fn parse_command_attr(attr: &syn::Attribute) -> Result<CommandAttrs> {
                 let value: Expr = meta.value()?.parse()?;
                 out.aliases.extend(expect_string_array_expr(value)?);
             }
+            "summary" => {
+                let value: Expr = meta.value()?.parse()?;
+                out.summary = Some(expect_string_expr(value)?);
+            }
+            "usage" => {
+                let value: Expr = meta.value()?.parse()?;
+                out.usage = Some(expect_string_expr(value)?);
+            }
+            "examples" => {
+                let value: Expr = meta.value()?.parse()?;
+                out.examples.extend(expect_string_array_expr(value)?);
+            }
+            "priority" => {
+                let value: Expr = meta.value()?.parse()?;
+                out.priority = Some(expect_i32_expr(value)?);
+            }
+            "block" => {
+                let value: Expr = meta.value()?.parse()?;
+                out.block = Some(expect_bool_expr(value)?);
+            }
+            "permissions" => {
+                let value: Expr = meta.value()?.parse()?;
+                out.permissions.extend(expect_string_array_expr(value)?);
+            }
             _ => {
                 return Err(syn::Error::new(
                     Span::call_site(),
@@ -304,8 +380,20 @@ fn parse_command_attr(attr: &syn::Attribute) -> Result<CommandAttrs> {
 
 fn parse_command_method(method: &syn::ImplItemFn, attrs: CommandAttrs) -> Result<CommandMethod> {
     let fn_name = method.sig.ident.clone();
-    let mut labels = vec![attrs.name.unwrap_or_else(|| fn_name.to_string())];
-    labels.extend(attrs.aliases);
+    let command = attrs.name.unwrap_or_else(|| fn_name.to_string());
+    let labels = std::iter::once(command.clone())
+        .chain(attrs.aliases.iter().cloned())
+        .collect();
+    let meta = CommandMetaAttrs {
+        command,
+        aliases: attrs.aliases,
+        summary: attrs.summary,
+        usage: attrs.usage,
+        examples: attrs.examples,
+        priority: attrs.priority,
+        block: attrs.block.unwrap_or(true),
+        permissions: attrs.permissions,
+    };
 
     let mut inputs = method.sig.inputs.iter();
 
@@ -404,6 +492,7 @@ fn parse_command_method(method: &syn::ImplItemFn, attrs: CommandAttrs) -> Result
     Ok(CommandMethod {
         fn_name,
         labels,
+        meta,
         parser_stmts,
         call_args,
     })
@@ -430,6 +519,31 @@ fn expect_bool_expr(value: Expr) -> Result<bool> {
         Ok(value.value)
     } else {
         Err(syn::Error::new_spanned(value, "Expected bool literal"))
+    }
+}
+
+fn expect_i32_expr(value: Expr) -> Result<i32> {
+    match &value {
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(value),
+            ..
+        }) => value.base10_parse(),
+        Expr::Unary(ExprUnary {
+            op: UnOp::Neg(_),
+            expr,
+            ..
+        }) => {
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Int(value),
+                ..
+            }) = expr.as_ref()
+            {
+                value.base10_parse::<i32>().map(|value| -value)
+            } else {
+                Err(syn::Error::new_spanned(value, "Expected integer literal"))
+            }
+        }
+        _ => Err(syn::Error::new_spanned(value, "Expected integer literal")),
     }
 }
 

@@ -42,18 +42,57 @@ impl HelperPlugin {
 
 ## 可用属性
 
+插件级属性：
+
 | 属性 | 说明 |
 |---|---|
 | `name` | 插件名，默认是结构体名的小写 |
-| `description` | 插件描述 |
+| `description` | 插件描述，会进入 `RuntimePluginManifest` |
 | `version` | 插件版本，默认 `0.1.0` |
 | `prefix` | 插件级命令前缀，可重复声明 |
-| `context` | 显式指定上下文类型，默认 `Context` |
 | `register` | 是否自动注册，默认 `true`；关闭时写 `register = false` |
+
+命令级属性写在 async 方法上：
+
+```rust
+use ayiou::{command, plugin, Context};
+
+#[derive(Default)]
+struct Weather;
+
+#[plugin(name = "weather", description = "Weather commands", prefix = "/")]
+impl Weather {
+    #[command(
+        name = "weather",
+        alias = "forecast",
+        aliases = ["wx"],
+        summary = "Show a location forecast",
+        usage = "/weather <city>",
+        examples = ["/weather Taipei", "/forecast Tokyo"],
+        priority = 10,
+        block = false,
+        permissions = ["weather.read"]
+    )]
+    async fn weather(&self, ctx: &Context, city: String) -> anyhow::Result<()> {
+        ctx.reply_text(format!("forecast for {city}")).await
+    }
+}
+```
+
+| 属性 | 说明 |
+|---|---|
+| `name` | 命令名，默认是方法名 |
+| `alias` / `aliases` | 命令别名；`alias` 可重复写单个，`aliases` 接收字符串数组 |
+| `summary` | help/菜单展示用短说明 |
+| `usage` | help 展示用调用格式 |
+| `examples` | help 展示用示例数组 |
+| `priority` | 路由优先级，数值越小越先处理 |
+| `block` | 命令处理后是否阻断后续插件，默认 `true` |
+| `permissions` | 动态权限名数组，会转成 `Permission::custom(...)` 并交给运行时权限服务判断 |
 
 默认自动注册要求插件类型实现 `Default`，因为运行时会通过无参构造创建插件实例。
 
-每个 async 方法默认注册为同名命令。例如 `async fn hello(...)` 会匹配 `/hello`。
+每个 async 方法默认注册为同名命令。例如 `async fn hello(...)` 会匹配 `/hello`。宏会把命令名、别名、summary、usage、examples、权限、优先级和阻断策略写入 `HandlerDecl`，help 插件或控制面可以直接读取 `declared_handlers()` 生成命令说明。运行时会把这些声明编进路由表：命令走命令索引，正则在启动/路由重建时预编译，非法正则会让插件初始化失败。
 
 ## 参数解析
 
@@ -113,6 +152,63 @@ impl OneBotOnlyPlugin {
         tracing::debug!(user_id = onebot.user_id(), "onebot ping");
         ctx.reply_text("pong").await
     }
+}
+```
+
+## 运行时服务、权限、会话和配置
+
+宏适合普通命令；需要插件生命周期、配置热更新、权限服务或会话状态时，手写 `RuntimePlugin`，并通过 `RuntimePluginServices` 取运行时服务。
+
+### 权限服务
+
+命令宏的 `permissions = ["chat.send"]` 会生成 `Permission::custom("chat.send")` 并写入 handler 声明。需要外部 ACL、角色表或租户策略时，把实现了 `PermissionService` 的服务注册进运行时；插件可以在 `init` 或命令处理时取得同一个服务并判断当前 `Context`：
+
+```rust
+use ayiou::core::plugin::{Permission, PermissionService, RuntimePluginServices};
+use ayiou::Context;
+
+async fn check_chat_send(services: RuntimePluginServices, ctx: &Context) -> anyhow::Result<()> {
+    let acl = services.require_permission_service::<MyPermissionService>()?;
+    let decision = acl.check(ctx, &Permission::custom("chat.send")).await?;
+    if !decision.allowed() {
+        return Ok(());
+    }
+    Ok(())
+}
+```
+
+权限名建议使用稳定的点分命名，例如 `chat.send`、`admin.ban`、`weather.read`。平台、本群、本用户这类静态检查可以用 `Permission::user(...)`、`Permission::group(...)`、`Permission::role(...)`；跨系统 ACL 则用 `Permission::custom(...)` 交给服务实现。
+
+### 会话状态
+
+多轮对话不要把状态塞进全局变量。把 `ConversationStore` 注册为运行时服务，在插件 `init` 中获取，然后用 `ConversationKey::from_context(instance_id, ctx)` 读写当前插件、用户、群维度的状态：
+
+```rust
+use ayiou::core::plugin::{ConversationKey, ConversationStore, MemoryConversationStore};
+
+let store = services.require_conversation_store::<MemoryConversationStore>()?;
+let key = ConversationKey::from_context("weather", ctx);
+store
+    .put(key.clone(), serde_json::json!({ "step": "ask-city" }), None)
+    .await?;
+let state = store.get(&key).await?;
+```
+
+`MemoryConversationStore` 适合单进程或测试；生产环境可以实现 `ConversationStore` 接 Redis、数据库或平台原生会话存储。
+
+### 配置生命周期
+
+配置热更新走 `RuntimePlugin::apply_config(ConfigUpdate)`。`ConfigUpdate::new(version, serde_json::json!(...))` 保留结构化 `values`；干运行使用 `ConfigUpdate::dry_run(...)`，运行时只验证并推进配置生命周期，不调用真实应用逻辑。
+
+```rust
+use ayiou::core::plugin::{ApplyConfigOutcome, ConfigUpdate, RuntimePlugin};
+
+async fn apply_config(&mut self, update: ConfigUpdate) -> anyhow::Result<ApplyConfigOutcome> {
+    let Some(city) = update.values.get("default_city").and_then(|value| value.as_str()) else {
+        anyhow::bail!("default_city is required");
+    };
+    self.default_city = city.to_string();
+    Ok(ApplyConfigOutcome::applied(update.version))
 }
 ```
 
