@@ -269,6 +269,17 @@ use wasmtime::{component::Component, Config, Engine};
 pub struct WasmPluginSource {
     pub instance_id: String,
     pub artifact_path: PathBuf,
+    pub package_path: Option<PathBuf>,
+}
+
+impl WasmPluginSource {
+    pub fn new(instance_id: impl Into<String>, artifact_path: impl Into<PathBuf>) -> Self {
+        Self {
+            instance_id: instance_id.into(),
+            artifact_path: artifact_path.into(),
+            package_path: None,
+        }
+    }
 }
 
 #[derive(Clone)]

@@ -32,42 +32,63 @@ WASM plugin
 
 两者最终都适配成同一套 `RuntimePlugin` 模型。运行时调度、权限、配置、会话和控制面不分叉。
 
-## Artifact 与 sidecar
+## 插件作者契约
 
-第一版 WASM backend 加载 WASM component artifact，并读取同目录的 sidecar JSON：
+插件作者只关心两件事：
+
+1. 编译出 WASM component artifact；
+2. 声明插件意图：身份、命令、regex/wildcard handler、是否 block。
+
+Ayiou 负责其余运行时工作：加载 artifact、编译 component、注册 `RuntimePlugin`、建立路由、注入 host imports、检查权限、管理会话、接入控制面 reload。
+
+推荐的 package 文件是单个 `ayiou-plugin.json`：
 
 ```text
 plugin.wasm
-manifest.json
-handlers.json
-handle-outcome.json
+ayiou-plugin.json
 ```
 
-`manifest.json` 描述插件身份：
+等价的 Rust builder：
+
+```rust
+use ayiou_wasm::{WasmHandlerDto, WasmPluginPackageDto};
+
+let package = WasmPluginPackageDto::new("weather-wasm")
+    .version("0.1.0")
+    .description("Weather plugin compiled to WASM")
+    .handler(WasmHandlerDto::command("weather").block(true))
+    .block(true);
+```
+
+对应 JSON：
 
 ```json
 {
-  "kind": "weather-wasm",
-  "version": "0.1.0",
-  "description": "Weather plugin compiled to WASM"
+  "manifest": {
+    "kind": "weather-wasm",
+    "version": "0.1.0",
+    "description": "Weather plugin compiled to WASM"
+  },
+  "handlers": [
+    {
+      "commands": ["weather"],
+      "regex_patterns": [],
+      "wildcard": false,
+      "priority": 0,
+      "block": true
+    }
+  ],
+  "handle_outcome": {
+    "block": true
+  },
+  "health": {
+    "healthy": true,
+    "detail": null
+  }
 }
 ```
 
-`handlers.json` 描述 handler 声明：
-
-```json
-[
-  {
-    "commands": ["weather"],
-    "regex_patterns": [],
-    "wildcard": false,
-    "priority": 0,
-    "block": true
-  }
-]
-```
-
-后续可以把这些 metadata 移入 component exports；sidecar 的价值是先稳定 runtime/backend 边界，避免 guest ABI 过早膨胀。
+`ayiou-plugin.json` 是作者契约。`RuntimePlugin`、`HandlerDecl`、service registry 和 reload descriptor 都由 Ayiou backend 管理，插件作者不需要手写这些运行时对象。
 
 ## Host imports
 

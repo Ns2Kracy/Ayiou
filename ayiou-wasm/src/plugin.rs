@@ -10,7 +10,9 @@ use ayiou::core::{
 };
 use tokio::sync::Mutex;
 
-use crate::types::{WasmHandleOutcomeDto, WasmHandlerDto, WasmHealthDto, WasmManifestDto};
+use crate::types::{
+    WasmHandleOutcomeDto, WasmHandlerDto, WasmHealthDto, WasmManifestDto, WasmPluginPackageDto,
+};
 
 #[derive(Debug, Clone)]
 pub enum WasmGuestCall {
@@ -38,11 +40,8 @@ impl WasmRuntimePlugin {
             manifest,
             handlers,
             WasmGuestCall::Static {
-                handle_outcome: WasmHandleOutcomeDto { block: false },
-                health: WasmHealthDto {
-                    healthy: true,
-                    detail: None,
-                },
+                handle_outcome: WasmHandleOutcomeDto::default(),
+                health: WasmHealthDto::default(),
             },
         )
     }
@@ -61,11 +60,40 @@ impl WasmRuntimePlugin {
         }
     }
 
+    pub fn from_package(
+        instance_id: impl Into<String>,
+        package: WasmPluginPackageDto,
+    ) -> Result<Self> {
+        Self::from_parts(
+            instance_id,
+            package.manifest,
+            package.handlers,
+            package.handle_outcome,
+            package.health,
+        )
+    }
+
     pub fn from_dtos(
         instance_id: impl Into<String>,
         manifest: WasmManifestDto,
         handlers: Vec<WasmHandlerDto>,
         handle_outcome: WasmHandleOutcomeDto,
+    ) -> Result<Self> {
+        Self::from_parts(
+            instance_id,
+            manifest,
+            handlers,
+            handle_outcome,
+            WasmHealthDto::default(),
+        )
+    }
+
+    pub fn from_parts(
+        instance_id: impl Into<String>,
+        manifest: WasmManifestDto,
+        handlers: Vec<WasmHandlerDto>,
+        handle_outcome: WasmHandleOutcomeDto,
+        health: WasmHealthDto,
     ) -> Result<Self> {
         let mut runtime_manifest = RuntimePluginManifest::new(manifest.kind);
         if let Some(version) = manifest.version {
@@ -84,10 +112,7 @@ impl WasmRuntimePlugin {
             handlers,
             WasmGuestCall::Static {
                 handle_outcome,
-                health: WasmHealthDto {
-                    healthy: true,
-                    detail: None,
-                },
+                health,
             },
         ))
     }

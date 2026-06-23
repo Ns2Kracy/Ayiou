@@ -14,7 +14,7 @@ use ayiou::core::{
 use ayiou_wasm::{
     WasmPluginBackend, WasmPluginSource, WasmRuntimePlugin,
     host::WasmHostState,
-    types::{WasmHandleOutcomeDto, WasmHandlerDto, WasmManifestDto},
+    types::{WasmHandleOutcomeDto, WasmHandlerDto, WasmManifestDto, WasmPluginPackageDto},
 };
 
 fn test_ctx(text: &str) -> Context {
@@ -66,39 +66,23 @@ async fn wasm_runtime_plugin_dispatches_declared_command() -> Result<()> {
 }
 
 #[tokio::test]
-async fn wasm_backend_loads_manifest_handlers_and_dispatches_from_sidecars() -> Result<()> {
+async fn wasm_backend_loads_package_and_dispatches() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let artifact_path = dir.path().join("fixture.wasm");
     fs::write(&artifact_path, wat::parse_str("(component)")?)?;
     fs::write(
-        dir.path().join("manifest.json"),
-        serde_json::to_vec(&WasmManifestDto {
-            kind: "fixture-wasm".to_string(),
-            version: Some("0.1.0".to_string()),
-            description: None,
-        })?,
-    )?;
-    fs::write(
-        dir.path().join("handlers.json"),
-        serde_json::to_vec(&vec![WasmHandlerDto {
-            commands: vec!["ping".to_string()],
-            regex_patterns: Vec::new(),
-            wildcard: false,
-            priority: 0,
-            block: true,
-        }])?,
-    )?;
-    fs::write(
-        dir.path().join("handle-outcome.json"),
-        serde_json::to_vec(&WasmHandleOutcomeDto { block: true })?,
+        dir.path().join("ayiou-plugin.json"),
+        serde_json::to_vec(
+            &WasmPluginPackageDto::new("fixture-wasm")
+                .version("0.1.0")
+                .handler(WasmHandlerDto::command("ping").block(true))
+                .block(true),
+        )?,
     )?;
 
     let backend = WasmPluginBackend::new()?;
     let plugin = backend
-        .load_plugin(WasmPluginSource {
-            instance_id: "fixture.instance".to_string(),
-            artifact_path,
-        })
+        .load_plugin(WasmPluginSource::new("fixture.instance", artifact_path))
         .await?;
     let mut engine =
         RuntimePluginEngine::new(RuntimePluginServices::new(), PluginRuntimeState::default());
@@ -111,6 +95,30 @@ async fn wasm_backend_loads_manifest_handlers_and_dispatches_from_sidecars() -> 
 }
 
 struct AllowAdmin;
+
+#[tokio::test]
+async fn wasm_backend_loads_registered_plugin_from_managed_package() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let artifact_path = dir.path().join("fixture.wasm");
+    fs::write(&artifact_path, wat::parse_str("(component)")?)?;
+    fs::write(
+        dir.path().join("ayiou-plugin.json"),
+        serde_json::to_vec(
+            &WasmPluginPackageDto::new("managed-wasm")
+                .version("0.1.0")
+                .description("managed by ayiou")
+                .handler(WasmHandlerDto::command("managed").block(true))
+                .block(true),
+        )?,
+    )?;
+
+    let backend = WasmPluginBackend::new()?;
+    let registered = backend
+        .load_registered(WasmPluginSource::new("managed.instance", artifact_path))
+        .await?;
+    assert!(registered.reload_descriptor().is_reloadable());
+    Ok(())
+}
 
 impl RuntimeService for AllowAdmin {
     fn name(&self) -> &'static str {

@@ -1,9 +1,6 @@
 use std::{path::PathBuf, sync::Arc};
 
-use crate::{
-    plugin::WasmRuntimePlugin,
-    types::{WasmHandleOutcomeDto, WasmHandlerDto, WasmManifestDto},
-};
+use crate::{plugin::WasmRuntimePlugin, types::WasmPluginPackageDto};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use ayiou::core::plugin::{PluginReloader, RegisteredPlugin};
@@ -13,6 +10,24 @@ use wasmtime::{Config, Engine, component::Component};
 pub struct WasmPluginSource {
     pub instance_id: String,
     pub artifact_path: PathBuf,
+    pub package_path: Option<PathBuf>,
+}
+
+impl WasmPluginSource {
+    #[must_use]
+    pub fn new(instance_id: impl Into<String>, artifact_path: impl Into<PathBuf>) -> Self {
+        Self {
+            instance_id: instance_id.into(),
+            artifact_path: artifact_path.into(),
+            package_path: None,
+        }
+    }
+
+    #[must_use]
+    pub fn package_path(mut self, package_path: impl Into<PathBuf>) -> Self {
+        self.package_path = Some(package_path.into());
+        self
+    }
 }
 
 #[derive(Clone)]
@@ -45,11 +60,18 @@ impl WasmPluginBackend {
 
     pub async fn load_plugin(&self, source: WasmPluginSource) -> Result<WasmRuntimePlugin> {
         self.compile_component(&source)?;
-        let manifest: WasmManifestDto = read_json_sidecar(&source, "manifest.json")?;
-        let handlers: Vec<WasmHandlerDto> = read_json_sidecar(&source, "handlers.json")?;
-        let handle_outcome = read_json_sidecar(&source, "handle-outcome.json")
-            .unwrap_or(WasmHandleOutcomeDto { block: false });
-        WasmRuntimePlugin::from_dtos(source.instance_id, manifest, handlers, handle_outcome)
+        let package = read_package(&source)?;
+        WasmRuntimePlugin::from_package(source.instance_id, package)
+    }
+
+    pub async fn load_registered(&self, source: WasmPluginSource) -> Result<RegisteredPlugin> {
+        let instance_id = source.instance_id.clone();
+        let plugin = self.load_plugin(source.clone()).await?;
+        Ok(
+            RegisteredPlugin::new(instance_id, Box::new(plugin)).with_reloader(Arc::new(
+                WasmPluginSourceReloader::new(self.clone(), source),
+            )),
+        )
     }
 
     pub fn engine(&self) -> Arc<Engine> {
@@ -82,21 +104,19 @@ impl WasmPluginSourceReloader {
 #[async_trait]
 impl PluginReloader for WasmPluginSourceReloader {
     async fn reload(&self, instance_id: &str) -> Result<RegisteredPlugin> {
-        let plugin = self.backend.load_plugin(self.source.clone()).await?;
-        Ok(
-            RegisteredPlugin::new(instance_id.to_string(), Box::new(plugin))
-                .with_reloader(Arc::new(self.clone())),
-        )
+        let mut source = self.source.clone();
+        source.instance_id = instance_id.to_string();
+        self.backend.load_registered(source).await
     }
 }
 
-fn read_json_sidecar<T>(source: &WasmPluginSource, name: &str) -> Result<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let path = source.artifact_path.with_file_name(name);
+fn read_package(source: &WasmPluginSource) -> Result<WasmPluginPackageDto> {
+    let path = source
+        .package_path
+        .clone()
+        .unwrap_or_else(|| source.artifact_path.with_file_name("ayiou-plugin.json"));
     let content = std::fs::read_to_string(&path)
-        .with_context(|| format!("failed to read wasm plugin sidecar `{}`", path.display()))?;
+        .with_context(|| format!("failed to read wasm plugin package `{}`", path.display()))?;
     serde_json::from_str(&content)
-        .with_context(|| format!("failed to parse wasm plugin sidecar `{}`", path.display()))
+        .with_context(|| format!("failed to parse wasm plugin package `{}`", path.display()))
 }
