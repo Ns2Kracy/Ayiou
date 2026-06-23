@@ -500,8 +500,10 @@ impl ConversationStore for MemoryConversationStore {
     }
 }
 
+#[derive(Clone)]
 pub struct RuntimePluginServices {
     sender: Option<Arc<dyn OutboundSender>>,
+    permission_service: Option<Arc<dyn PermissionService>>,
     pub instance_id: Option<String>,
     pub bot_id: Option<BotId>,
     pub platform: Option<PlatformId>,
@@ -509,24 +511,12 @@ pub struct RuntimePluginServices {
     pub service_registry: ServiceRegistry,
 }
 
-impl Clone for RuntimePluginServices {
-    fn clone(&self) -> Self {
-        Self {
-            sender: self.sender.clone(),
-            instance_id: self.instance_id.clone(),
-            bot_id: self.bot_id.clone(),
-            platform: self.platform.clone(),
-            capabilities: self.capabilities.clone(),
-            service_registry: self.service_registry.clone(),
-        }
-    }
-}
-
 impl RuntimePluginServices {
     #[must_use]
     pub fn new() -> Self {
         Self {
             sender: None,
+            permission_service: None,
             instance_id: None,
             bot_id: None,
             platform: None,
@@ -539,6 +529,17 @@ impl RuntimePluginServices {
     pub fn with_sender(mut self, sender: Option<Arc<dyn OutboundSender>>) -> Self {
         self.sender = sender;
         self
+    }
+
+    #[must_use]
+    pub fn with_permission_service(mut self, service: Option<Arc<dyn PermissionService>>) -> Self {
+        self.permission_service = service;
+        self
+    }
+
+    #[must_use]
+    pub fn permission_checker(&self) -> Option<Arc<dyn PermissionService>> {
+        self.permission_service.clone()
     }
 
     #[must_use]
@@ -1011,9 +1012,11 @@ struct RoutingTable {
 #[derive(Clone)]
 struct Route {
     plugin_index: usize,
+    handler_index: usize,
     priority: i32,
     block: bool,
     concurrency: ConcurrencyPolicy,
+    permissions: Arc<[Permission]>,
 }
 
 struct RegexRoute {
@@ -1036,6 +1039,7 @@ fn compare_routes(left: &Route, right: &Route) -> std::cmp::Ordering {
     left.priority
         .cmp(&right.priority)
         .then(left.plugin_index.cmp(&right.plugin_index))
+        .then(left.handler_index.cmp(&right.handler_index))
 }
 
 fn sort_routes(routes: &mut [Route]) {
@@ -1104,12 +1108,14 @@ impl RuntimePluginEngine {
         let mut table = RoutingTable::default();
         for plugin_index in self.enabled_order.iter().copied() {
             let registered = &self.plugins[plugin_index];
-            for handler in registered.handlers() {
+            for (handler_index, handler) in registered.handlers().iter().enumerate() {
                 let route = Route {
                     plugin_index,
+                    handler_index,
                     priority: handler.priority,
                     block: handler.block,
                     concurrency: handler.concurrency,
+                    permissions: handler.permissions.clone().into(),
                 };
                 for command in &handler.commands {
                     table
@@ -1571,15 +1577,13 @@ impl RuntimePluginEngine {
                 .cmp(&right.route.priority)
                 .then(left.match_rank.cmp(&right.match_rank))
                 .then(left.route.plugin_index.cmp(&right.route.plugin_index))
+                .then(left.route.handler_index.cmp(&right.route.handler_index))
         });
 
         for candidate in matched {
             let plugin_index = candidate.route.plugin_index;
             let registered = &self.plugins[plugin_index];
-            if !self
-                .permissions_match(ctx, registered.handlers(), &candidate)
-                .await?
-            {
+            if !self.permissions_match(ctx, &candidate.route).await? {
                 continue;
             }
 
@@ -1636,32 +1640,8 @@ impl RuntimePluginEngine {
         Ok(Some(semaphore.acquire_owned().await?))
     }
 
-    async fn permissions_match(
-        &self,
-        ctx: &Context,
-        handlers: &[HandlerDecl],
-        candidate: &MatchedHandler,
-    ) -> Result<bool> {
-        let Some(handler) = handlers.iter().find(|handler| {
-            handler.priority == candidate.route.priority
-                && handler.block == candidate.route.block
-                && handler.concurrency == candidate.route.concurrency
-                && match candidate.match_rank {
-                    0 => candidate.invocation.as_ref().is_some_and(|invocation| {
-                        handler
-                            .commands
-                            .iter()
-                            .any(|command| command == invocation.command())
-                    }),
-                    1 => handler.wildcard,
-                    2 => !handler.regex_patterns.is_empty(),
-                    _ => false,
-                }
-        }) else {
-            return Ok(true);
-        };
-
-        for permission in &handler.permissions {
+    async fn permissions_match(&self, ctx: &Context, route: &Route) -> Result<bool> {
+        for permission in route.permissions.iter() {
             if !self.permission_matches(ctx, permission).await? {
                 return Ok(false);
             }
@@ -1672,21 +1652,28 @@ impl RuntimePluginEngine {
     async fn permission_matches(&self, ctx: &Context, permission: &Permission) -> Result<bool> {
         let user_id = ctx.user_id();
         let group_id = ctx.group_id();
-        Ok(match permission {
-            Permission::Any => true,
-            Permission::User(allowed_user) => user_id == *allowed_user,
-            Permission::Group(allowed_group) => group_id.as_deref() == Some(allowed_group.as_str()),
-            Permission::Bot(bot_id) => self
+        match permission {
+            Permission::Any => Ok(true),
+            Permission::User(allowed_user) => Ok(user_id == *allowed_user),
+            Permission::Group(allowed_group) => {
+                Ok(group_id.as_deref() == Some(allowed_group.as_str()))
+            }
+            Permission::Bot(bot_id) => Ok(self
                 .services
                 .bot_id
                 .as_ref()
-                .is_some_and(|current| current.as_str() == bot_id),
+                .is_some_and(|current| current.as_str() == bot_id)),
             Permission::PlatformCapability(capability) => {
-                self.services.capabilities.contains(capability)
-                    || (*capability == Capability::ProactiveSend && self.services.sender.is_some())
+                Ok(self.services.capabilities.contains(capability)
+                    || (*capability == Capability::ProactiveSend && self.services.sender.is_some()))
             }
-            Permission::Role(_) | Permission::Custom(_) => false,
-        })
+            Permission::Role(_) | Permission::Custom(_) => {
+                let Some(service) = self.services.permission_checker() else {
+                    return Ok(false);
+                };
+                Ok(service.check(ctx, permission).await?.allowed())
+            }
+        }
     }
 }
 
@@ -1749,6 +1736,29 @@ mod tests {
     impl RuntimeService for TestCounterService {
         fn name(&self) -> &'static str {
             "test-counter"
+        }
+    }
+
+    struct AllowNamedPermission(&'static str);
+
+    impl RuntimeService for AllowNamedPermission {
+        fn name(&self) -> &'static str {
+            "allow-named-permission"
+        }
+    }
+
+    #[async_trait]
+    impl PermissionService for AllowNamedPermission {
+        async fn check(
+            &self,
+            _ctx: &Context,
+            permission: &Permission,
+        ) -> Result<PermissionDecision> {
+            Ok(match permission {
+                Permission::Custom(name) if name == self.0 => PermissionDecision::Allow,
+                Permission::Role(name) if name == self.0 => PermissionDecision::Allow,
+                _ => PermissionDecision::Deny("permission denied".to_string()),
+            })
         }
     }
 
@@ -2811,6 +2821,45 @@ mod tests {
             .unwrap();
 
         assert_eq!(*hits.lock().unwrap(), vec!["user-guard"]);
+    }
+
+    #[tokio::test]
+    async fn runtime_plugin_engine_checks_dynamic_permissions_during_dispatch() {
+        let permission_service: Arc<dyn PermissionService> =
+            Arc::new(AllowNamedPermission("allowed"));
+        let services =
+            RuntimePluginServices::new().with_permission_service(Some(permission_service));
+        let state = PluginRuntimeState::default();
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let mut engine = RuntimePluginEngine::new(services, state);
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "allowed-custom",
+            priority: 0,
+            block_decl: false,
+            handler: HandlerDecl::wildcard_message()
+                .require_permission(Permission::custom("allowed")),
+            manifest: RuntimePluginManifest::new("allowed-custom"),
+            hits: hits.clone(),
+        }));
+        engine.push(Box::new(PriorityPlugin {
+            instance_id: "denied-custom",
+            priority: 0,
+            block_decl: false,
+            handler: HandlerDecl::wildcard_message()
+                .require_permission(Permission::custom("denied")),
+            manifest: RuntimePluginManifest::new("denied-custom"),
+            hits: hits.clone(),
+        }));
+        engine.init_all().await.unwrap();
+        engine.start_all().await.unwrap();
+
+        engine
+            .handle_all(&test_ctx("plain text", "guest", None))
+            .await
+            .unwrap();
+
+        assert_eq!(*hits.lock().unwrap(), vec!["allowed-custom"]);
     }
 
     #[tokio::test]

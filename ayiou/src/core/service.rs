@@ -109,7 +109,13 @@ impl ServiceRegistry {
     where
         S: RuntimeService,
     {
-        let service = Arc::new(service);
+        self.insert_arc(Arc::new(service));
+    }
+
+    pub fn insert_arc<S>(&mut self, service: Arc<S>)
+    where
+        S: RuntimeService,
+    {
         let health_service = service.clone();
         Arc::make_mut(&mut self.services).insert(
             TypeId::of::<S>(),

@@ -11,8 +11,8 @@ use crate::core::{
     adapter::{Adapter, AdapterRuntime},
     context::Context,
     plugin::{
-        PluginRuntimeState, RegisteredPlugin, RuntimePlugin, RuntimePluginEngine,
-        RuntimePluginServices, discovered_plugins, normalize_command_prefixes,
+        PermissionService, PluginRuntimeState, RegisteredPlugin, RuntimePlugin,
+        RuntimePluginEngine, RuntimePluginServices, discovered_plugins, normalize_command_prefixes,
     },
     service::{RuntimeService, ServiceRegistry},
 };
@@ -45,6 +45,7 @@ pub struct Bot<A: Adapter> {
     adapter: A,
     plugins: Vec<RegisteredPlugin>,
     service_registry: ServiceRegistry,
+    permission_service: Option<Arc<dyn PermissionService>>,
     command_prefixes: Arc<[String]>,
     runtime_options: BotRuntimeOptions,
     #[cfg(feature = "control-plane")]
@@ -149,6 +150,7 @@ impl<A: Adapter> Bot<A> {
             adapter,
             plugins: Vec::new(),
             service_registry: ServiceRegistry::default(),
+            permission_service: None,
             command_prefixes: Arc::from([]),
             runtime_options: BotRuntimeOptions::default(),
             #[cfg(feature = "control-plane")]
@@ -199,6 +201,17 @@ impl<A: Adapter> Bot<A> {
     }
 
     #[must_use]
+    pub fn with_permission_service<S>(mut self, service: S) -> Self
+    where
+        S: PermissionService,
+    {
+        let service = Arc::new(service);
+        self.permission_service = Some(service.clone());
+        self.service_registry.insert_arc(service);
+        self
+    }
+
+    #[must_use]
     pub fn with_plugin<P: RuntimePlugin>(mut self, plugin: P) -> Self {
         self.plugins
             .push(RegisteredPlugin::from_plugin(Box::new(plugin)));
@@ -239,6 +252,7 @@ impl<A: Adapter> Bot<A> {
         let mut engine = RuntimePluginEngine::with_options(
             RuntimePluginServices::new()
                 .with_sender(sender)
+                .with_permission_service(self.permission_service)
                 .with_capabilities(capabilities)
                 .with_service_registry(self.service_registry),
             runtime_state.clone(),

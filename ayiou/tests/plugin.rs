@@ -164,7 +164,7 @@ impl RuntimePlugin for ChatbotServicePlugin {
     }
 
     fn declared_handlers(&self) -> Vec<HandlerDecl> {
-        vec![HandlerDecl::wildcard_message()]
+        vec![HandlerDecl::wildcard_message().require_permission(Permission::custom("admin"))]
     }
 
     async fn handle(&self, ctx: &Context) -> Result<HandleOutcome> {
@@ -448,7 +448,7 @@ async fn bot_plugin_provided_services_are_available_during_plugin_init() {
 async fn bot_exposes_permission_and_conversation_services_to_runtime_plugins() {
     let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
     let bot = Bot::new(OneEventAdapter)
-        .with_service(AllowAdminService)
+        .with_permission_service(AllowAdminService)
         .with_service(MemoryConversationStore::default())
         .with_plugin(ChatbotServicePlugin::new(observed.clone()));
 
