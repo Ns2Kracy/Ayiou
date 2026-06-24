@@ -17,7 +17,7 @@ use serde_json::json;
 use tokio::task::JoinHandle;
 
 #[cfg(feature = "embedded-webui")]
-static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../webui/dist");
+static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui-dist");
 
 use crate::core::{
     control::RuntimeControlHandle,

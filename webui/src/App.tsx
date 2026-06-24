@@ -7,7 +7,7 @@ import {
   ShieldCheck,
   WarningCircle,
 } from '@phosphor-icons/react'
-import type { ReactNode } from 'react'
+import type { FormEvent, ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { listPlugins, pluginAction, type PluginAction, type PluginSnapshot } from './api'
 
@@ -90,6 +90,9 @@ function pluginSubtitle(plugin: PluginSnapshot): string {
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem(tokenStorageKey) ?? '')
+  const [authenticated, setAuthenticated] = useState(() =>
+    Boolean(localStorage.getItem(tokenStorageKey)),
+  )
   const [plugins, setPlugins] = useState<PluginSnapshot[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -105,34 +108,61 @@ function App() {
   const healthyCount = plugins.filter((plugin) => plugin.health.healthy).length
   const disabledCount = plugins.filter((plugin) => !plugin.lifecycle.enabled).length
 
-  const refresh = useCallback(async () => {
-    if (!token.trim()) {
-      setError('Token is required')
-      setResult('Authentication missing')
-      return
-    }
+  const refresh = useCallback(
+    async (nextToken = token) => {
+      if (!nextToken.trim()) {
+        setError('请输入访问 token')
+        setResult('Authentication missing')
+        setAuthenticated(false)
+        return false
+      }
 
-    setLoading(true)
-    setError(null)
-    try {
-      localStorage.setItem(tokenStorageKey, token)
-      const nextPlugins = await listPlugins(token)
-      setPlugins(nextPlugins)
-      setSelectedId((current) => current ?? nextPlugins[0]?.instance_id ?? null)
-      setResult(`Loaded ${nextPlugins.length} plugins`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setResult('Refresh failed')
-    } finally {
-      setLoading(false)
-    }
-  }, [token])
+      setLoading(true)
+      setError(null)
+      try {
+        const nextPlugins = await listPlugins(nextToken)
+        localStorage.setItem(tokenStorageKey, nextToken)
+        setAuthenticated(true)
+        setToken(nextToken)
+        setPlugins(nextPlugins)
+        setSelectedId((current) => current ?? nextPlugins[0]?.instance_id ?? null)
+        setResult(`已加载 ${nextPlugins.length} 个插件`)
+        return true
+      } catch (err) {
+        localStorage.removeItem(tokenStorageKey)
+        setAuthenticated(false)
+        setPlugins([])
+        setSelectedId(null)
+        setError(err instanceof Error ? err.message : String(err))
+        setResult('认证失败')
+        return false
+      } finally {
+        setLoading(false)
+      }
+    },
+    [token],
+  )
 
   useEffect(() => {
-    if (token) {
-      void refresh()
+    if (authenticated && token) {
+      void refresh(token)
     }
-  }, [refresh, token])
+  }, [authenticated, refresh, token])
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    await refresh(token)
+  }
+
+  function handleLogout() {
+    localStorage.removeItem(tokenStorageKey)
+    setAuthenticated(false)
+    setToken('')
+    setPlugins([])
+    setSelectedId(null)
+    setError(null)
+    setResult('Ready')
+  }
 
   async function runAction(plugin: PluginSnapshot, action: UserPluginAction) {
     setLoading(true)
@@ -149,91 +179,159 @@ function App() {
     }
   }
 
+  if (!authenticated) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-zinc-950 px-4 text-zinc-100">
+        <Card className="w-full max-w-md border border-zinc-800 bg-zinc-900 shadow-2xl shadow-black/30">
+          <Card.Content className="p-8">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-300">
+              <ShieldCheck className="h-6 w-6" />
+            </div>
+            <h1 className="mt-6 text-2xl font-semibold text-white">Ayiou Console</h1>
+            <p className="mt-2 text-sm leading-6 text-zinc-400">
+              输入访问 token 进入插件管理。登录成功后，Console 会保存 token 供下次访问使用。
+            </p>
+
+            <form className="mt-6 space-y-4" onSubmit={handleLogin}>
+              <Input
+                aria-label="访问 token"
+                className="border-zinc-700 bg-zinc-950 text-zinc-100"
+                type="password"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                placeholder="访问 token"
+              />
+              {error ? <p className="text-sm text-red-300">{error}</p> : null}
+              <Button
+                className="h-11 w-full bg-emerald-400 font-semibold text-zinc-950"
+                type="submit"
+                isDisabled={loading}
+              >
+                {loading ? '验证中...' : '登录'}
+              </Button>
+            </form>
+          </Card.Content>
+        </Card>
+      </main>
+    )
+  }
+
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-4 sm:px-6 lg:px-8">
-        <header className="flex flex-col gap-4 border-b border-zinc-800 pb-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-medium text-emerald-300">
-              <ShieldCheck className="h-4 w-4" />
-              Ayiou Console
+      <div className="mx-auto flex min-h-screen w-full max-w-[1440px] flex-col lg:flex-row">
+        <aside className="border-b border-zinc-800 bg-zinc-950/95 px-4 py-4 lg:w-72 lg:border-b-0 lg:border-r lg:px-6 lg:py-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-400/30 bg-emerald-400/10 text-emerald-300">
+              <ShieldCheck className="h-5 w-5" />
             </div>
-            <h1 className="mt-2 text-2xl font-semibold tracking-normal text-white sm:text-3xl">
-              插件管理
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm text-zinc-400">
-              查看插件运行状态，启用或停用插件，并在插件支持时执行热重载。
-            </p>
+            <div>
+              <div className="text-sm font-semibold text-white">Ayiou Console</div>
+              <div className="text-xs text-zinc-500">插件管理</div>
+            </div>
           </div>
 
-          <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
-            <Input
-              aria-label="Bearer token"
-              className="border-zinc-700 bg-zinc-900 text-zinc-100 sm:w-80"
-              type="password"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-              placeholder="Bearer token"
-            />
-            <Button
-              className="h-10 bg-emerald-400 px-4 font-semibold text-zinc-950"
+          <nav className="mt-6 flex gap-2 lg:flex-col" aria-label="Console navigation">
+            <button
+              className="flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-sm font-medium text-emerald-100"
               type="button"
-              onClick={() => void refresh()}
-              isDisabled={loading}
+              aria-current="page"
             >
-              <ArrowClockwise className="h-4 w-4" />
-              Refresh
-            </Button>
+              <PuzzlePiece className="h-4 w-4" />
+              插件管理
+            </button>
+          </nav>
+
+          <div className="mt-6 hidden space-y-3 lg:block">
+            <Metric label="插件" value={plugins.length} detail="已加载实例" />
+            <Metric label="运行中" value={runningCount} detail="正在处理事件" />
+            <Metric label="健康" value={healthyCount} detail="状态正常" />
+            <Metric label="未启用" value={disabledCount} detail="不会处理消息" />
           </div>
-        </header>
+        </aside>
 
-        <section className="grid gap-3 py-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Metric label="插件" value={plugins.length} detail="已加载实例" />
-          <Metric label="运行中" value={runningCount} detail="正在处理事件" />
-          <Metric label="健康" value={healthyCount} detail="状态正常" />
-          <Metric label="未启用" value={disabledCount} detail="不会处理消息" />
-        </section>
-
-        <section className="mb-4 min-h-11 rounded-md border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-            <span className="text-zinc-300">{result}</span>
-            {loading ? <span className="text-emerald-300">Working...</span> : null}
-          </div>
-          {error ? <div className="mt-2 text-red-300">{error}</div> : null}
-        </section>
-
-        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]">
-          <section className="min-h-0 overflow-hidden rounded-md border border-zinc-800 bg-zinc-900">
-            <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">插件</h2>
-              <span className="text-xs text-zinc-500">{plugins.length} 个实例</span>
+        <section className="flex min-w-0 flex-1 flex-col px-4 py-4 sm:px-6 lg:px-8">
+          <header className="flex flex-col gap-4 border-b border-zinc-800 pb-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-normal text-white sm:text-3xl">
+                插件管理
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm text-zinc-400">
+                查看插件运行状态，启用或停用插件，并在插件支持时执行热重载。
+              </p>
             </div>
-            {plugins.length > 0 ? (
-              <div className="max-h-full space-y-2 overflow-auto p-3">
-                {plugins.map((plugin) => (
-                  <PluginListItem
-                    key={plugin.instance_id}
-                    plugin={plugin}
-                    selected={plugin.instance_id === selected?.instance_id}
-                    onSelect={() => setSelectedId(plugin.instance_id)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="flex min-h-80 flex-col items-center justify-center px-6 text-center">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950 text-zinc-500">
-                  <PuzzlePiece className="h-6 w-6" />
-                </div>
-                <p className="mt-4 text-sm font-medium text-zinc-300">还没有加载插件</p>
-                <p className="mt-2 max-w-xs text-sm text-zinc-500">
-                  输入 token 后刷新，Console 会显示当前运行时的插件。
-                </p>
-              </div>
-            )}
+
+            <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
+              <Button
+                className="h-10 bg-emerald-400 px-4 font-semibold text-zinc-950"
+                type="button"
+                onClick={() => void refresh()}
+                isDisabled={loading}
+              >
+                <ArrowClockwise className="h-4 w-4" />
+                刷新
+              </Button>
+              <Button
+                className="h-10 border-zinc-700 bg-zinc-900 px-4 text-zinc-100"
+                type="button"
+                variant="outline"
+                onClick={handleLogout}
+                isDisabled={loading}
+              >
+                退出登录
+              </Button>
+            </div>
+          </header>
+
+          <section className="grid gap-3 py-4 sm:grid-cols-2 lg:hidden">
+            <Metric label="插件" value={plugins.length} detail="已加载实例" />
+            <Metric label="运行中" value={runningCount} detail="正在处理事件" />
+            <Metric label="健康" value={healthyCount} detail="状态正常" />
+            <Metric label="未启用" value={disabledCount} detail="不会处理消息" />
           </section>
 
-          <PluginDetails plugin={selected} busy={loading} onAction={runAction} />
-        </div>
+          <section className="my-4 min-h-11 rounded-md border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm lg:mt-4">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-zinc-300">{result}</span>
+              {loading ? <span className="text-emerald-300">Working...</span> : null}
+            </div>
+            {error ? <div className="mt-2 text-red-300">{error}</div> : null}
+          </section>
+
+          <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]">
+            <section className="min-h-0 overflow-hidden rounded-md border border-zinc-800 bg-zinc-900">
+              <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
+                  插件
+                </h2>
+                <span className="text-xs text-zinc-500">{plugins.length} 个实例</span>
+              </div>
+              {plugins.length > 0 ? (
+                <div className="max-h-full space-y-2 overflow-auto p-3">
+                  {plugins.map((plugin) => (
+                    <PluginListItem
+                      key={plugin.instance_id}
+                      plugin={plugin}
+                      selected={plugin.instance_id === selected?.instance_id}
+                      onSelect={() => setSelectedId(plugin.instance_id)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex min-h-80 flex-col items-center justify-center px-6 text-center">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950 text-zinc-500">
+                    <PuzzlePiece className="h-6 w-6" />
+                  </div>
+                  <p className="mt-4 text-sm font-medium text-zinc-300">还没有加载插件</p>
+                  <p className="mt-2 max-w-xs text-sm text-zinc-500">
+                    登录后刷新，Console 会显示当前运行时的插件。
+                  </p>
+                </div>
+              )}
+            </section>
+
+            <PluginDetails plugin={selected} busy={loading} onAction={runAction} />
+          </div>
+        </section>
       </div>
     </main>
   )
