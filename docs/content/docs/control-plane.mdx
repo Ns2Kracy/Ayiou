@@ -1,11 +1,11 @@
 ---
-title: 控制面与热加载
-description: 使用内嵌管理 UI 查看插件状态、控制生命周期，并为 WASM 热加载预留统一入口
+title: Ayiou Console 与插件管理
+description: 使用内嵌 Console 查看插件状态、启用或停用插件，并通过统一入口热重载支持的插件
 ---
 
-控制面是可选 feature。它提供 token 保护的 HTTP API 和内嵌管理 UI，用来查看插件 snapshot、开关插件、执行 start/stop/reload 操作。
+Ayiou Console 是可选的内嵌用户界面，用来查看插件状态、启用或停用插件、检查健康状态与最近错误，并对支持热重载的插件执行 reload。
 
-当前 Rust/inventory 插件支持生命周期控制，但不支持代码热替换，因为它们已经编译进进程。后续 WASM 插件会接入同一套 `reload` 入口。
+Console 背后仍然是 token 保护的 runtime control API。当前 Rust/inventory 插件支持启用和停用，但不支持代码热替换，因为它们已经编译进进程；后续 WASM/Rhai 插件会接入同一套 `reload` 入口。
 
 ## 启用 feature
 
@@ -19,7 +19,7 @@ ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["adapter-co
 ayiou = { git = "https://github.com/Ns2Kracy/Ayiou.git", features = ["control-plane"] }
 ```
 
-## 启动控制面
+## 启动 Console
 
 `token` 必填。`bind` 可选，默认是 `127.0.0.1:32187`。
 
@@ -43,9 +43,9 @@ ControlPlaneOptions::new()
     .token("change-me")
 ```
 
-如果没有设置 token，控制面不会启动，Bot 会记录明确的配置错误并停止启动。
+如果没有设置 token，Console 与 runtime control API 不会启动，Bot 会记录明确的配置错误并停止启动。
 
-## 访问 UI
+## 访问 Console
 
 启用 `embedded-webui` 后打开：
 
@@ -55,14 +55,13 @@ http://127.0.0.1:32187/
 
 页面会要求输入 token。token 存在浏览器 local storage 中，方便本地开发调试。
 
-UI 支持：
+Console 支持：
 
-- 查看插件 instance id、kind、version、enabled、lifecycle、health
-- 查看 manifest 的 required/optional capabilities 和 services
-- enable / disable
-- start / stop
-- reload
-- 查看 last error
+- 查看插件名称、说明、版本、用户状态
+- 查看健康状态、最近错误、配置状态
+- 启用、停用插件
+- 对支持热重载的插件执行 reload
+- 查看 advanced capabilities、services、raw runtime state
 
 ## HTTP API
 
@@ -85,14 +84,24 @@ POST /api/plugins/:id/stop
 POST /api/plugins/:id/reload
 ```
 
-成功响应：
+Console 的主路径只调用 enable、disable 和 reload。`start` / `stop` 是高级 runtime-control 端点，面向调试或内部编排，不是正常用户概念。
+
+成功响应使用 `ok` / `data` envelope；`data` 的结构按 endpoint 变化。动作接口（enable / disable / start / stop / reload）返回被操作的插件实例：
 
 ```json
 {
   "ok": true,
-  "data": {}
+  "data": {
+    "instance_id": "echo"
+  }
 }
 ```
+
+其他读取接口的 `data` 结构：
+
+- `GET /api/runtime`：runtime 摘要，目前包含 `plugin_count`。
+- `GET /api/plugins`：插件列表数组，每项是插件 snapshot。
+- `GET /api/plugins/:id`：单个插件 snapshot，包含 `instance_id`、`kind`、`manifest`、`lifecycle`、`health`、`reloadable`。
 
 错误响应：
 
@@ -106,7 +115,9 @@ POST /api/plugins/:id/reload
 }
 ```
 
-## 生命周期语义
+## 用户操作与高级运行时语义
+
+普通用户在 Console 中使用的是启用、停用和 reload；下面的 `start` / `stop` 说明仅用于理解高级 runtime-control API。
 
 - `disable`：设置 `enabled = false`，如果插件正在运行则调用 `stop()`，之后不参与调度。
 - `enable`：设置 `enabled = true`，必要时调用 `init()` 和 `start()`。
@@ -119,4 +130,4 @@ POST /api/plugins/:id/reload
 - 默认只监听 loopback。
 - token 必需。
 - 状态修改只走 POST。
-- 控制面只通过 runtime control handle 操作插件，不直接暴露插件实例或 service registry。
+- runtime control API 只通过 runtime control handle 操作插件，不直接暴露插件实例或 service registry。

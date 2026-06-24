@@ -1,22 +1,92 @@
 import { Button, Card, Chip, Input } from '@heroui/react'
 import {
   ArrowClockwise,
-  ArrowsClockwise,
   CheckCircle,
   Pause,
-  Play,
-  Power,
-  Prohibit,
-  Pulse,
+  PuzzlePiece,
   ShieldCheck,
-  Stop,
-  XCircle,
+  WarningCircle,
 } from '@phosphor-icons/react'
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { listPlugins, pluginAction, type PluginAction, type PluginSnapshot } from './api'
 
 const tokenStorageKey = 'ayiou.control.token'
+
+type UserPluginStatusKind = 'running' | 'disabled' | 'failed' | 'starting' | 'stopped' | 'pending'
+
+type UserPluginStatus = {
+  kind: UserPluginStatusKind
+  label: string
+  detail: string
+  tone: string
+}
+
+type UserPluginAction = Extract<PluginAction, 'enable' | 'disable' | 'reload'>
+
+function getPluginStatus(plugin: PluginSnapshot): UserPluginStatus {
+  if (plugin.lifecycle.lifecycle_state === 'Failed' || !plugin.health.healthy) {
+    return {
+      kind: 'failed',
+      label: '异常',
+      detail: plugin.lifecycle.last_error ?? plugin.health.detail ?? '插件报告异常状态',
+      tone: 'border-red-400/40 bg-red-400/10 text-red-200',
+    }
+  }
+
+  if (!plugin.lifecycle.enabled) {
+    return {
+      kind: 'disabled',
+      label: '未启用',
+      detail: '插件已安装，但不会处理消息。',
+      tone: 'border-zinc-700 bg-zinc-900 text-zinc-400',
+    }
+  }
+
+  if (plugin.lifecycle.lifecycle_state === 'Running') {
+    return {
+      kind: 'running',
+      label: '运行中',
+      detail: '插件正在处理匹配的消息和事件。',
+      tone: 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200',
+    }
+  }
+
+  if (
+    plugin.lifecycle.lifecycle_state === 'Starting' ||
+    plugin.lifecycle.lifecycle_state === 'Initializing'
+  ) {
+    return {
+      kind: 'starting',
+      label: '启动中',
+      detail: '插件正在初始化，请稍后刷新状态。',
+      tone: 'border-amber-400/40 bg-amber-400/10 text-amber-200',
+    }
+  }
+
+  if (
+    plugin.lifecycle.lifecycle_state === 'Stopping' ||
+    plugin.lifecycle.lifecycle_state === 'Stopped'
+  ) {
+    return {
+      kind: 'stopped',
+      label: '已停止',
+      detail: '插件当前没有运行。',
+      tone: 'border-zinc-700 bg-zinc-900 text-zinc-300',
+    }
+  }
+
+  return {
+    kind: 'pending',
+    label: '待处理',
+    detail: '插件已注册，等待运行时更新状态。',
+    tone: 'border-sky-400/40 bg-sky-400/10 text-sky-200',
+  }
+}
+
+function pluginSubtitle(plugin: PluginSnapshot): string {
+  return plugin.manifest.description || plugin.kind
+}
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem(tokenStorageKey) ?? '')
@@ -31,9 +101,7 @@ function App() {
     [plugins, selectedId],
   )
 
-  const runningCount = plugins.filter(
-    (plugin) => plugin.lifecycle.lifecycle_state === 'Running',
-  ).length
+  const runningCount = plugins.filter((plugin) => getPluginStatus(plugin).kind === 'running').length
   const healthyCount = plugins.filter((plugin) => plugin.health.healthy).length
   const disabledCount = plugins.filter((plugin) => !plugin.lifecycle.enabled).length
 
@@ -66,7 +134,7 @@ function App() {
     }
   }, [refresh, token])
 
-  async function runAction(plugin: PluginSnapshot, action: PluginAction) {
+  async function runAction(plugin: PluginSnapshot, action: UserPluginAction) {
     setLoading(true)
     setError(null)
     try {
@@ -88,11 +156,14 @@ function App() {
           <div>
             <div className="flex items-center gap-2 text-sm font-medium text-emerald-300">
               <ShieldCheck className="h-4 w-4" />
-              Ayiou Control Plane
+              Ayiou Console
             </div>
             <h1 className="mt-2 text-2xl font-semibold tracking-normal text-white sm:text-3xl">
-              Plugin runtime management
+              插件管理
             </h1>
+            <p className="mt-2 max-w-2xl text-sm text-zinc-400">
+              查看插件运行状态，启用或停用插件，并在插件支持时执行热重载。
+            </p>
           </div>
 
           <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
@@ -117,10 +188,10 @@ function App() {
         </header>
 
         <section className="grid gap-3 py-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Metric label="Plugins" value={plugins.length} detail="registered instances" />
-          <Metric label="Running" value={runningCount} detail="active lifecycle" />
-          <Metric label="Healthy" value={healthyCount} detail="reported healthy" />
-          <Metric label="Disabled" value={disabledCount} detail="not dispatching" />
+          <Metric label="插件" value={plugins.length} detail="已加载实例" />
+          <Metric label="运行中" value={runningCount} detail="正在处理事件" />
+          <Metric label="健康" value={healthyCount} detail="状态正常" />
+          <Metric label="未启用" value={disabledCount} detail="不会处理消息" />
         </section>
 
         <section className="mb-4 min-h-11 rounded-md border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm">
@@ -131,48 +202,37 @@ function App() {
           {error ? <div className="mt-2 text-red-300">{error}</div> : null}
         </section>
 
-        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+        <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)]">
           <section className="min-h-0 overflow-hidden rounded-md border border-zinc-800 bg-zinc-900">
             <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">
-                Plugins
-              </h2>
-              <span className="text-xs text-zinc-500">{plugins.length} total</span>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">插件</h2>
+              <span className="text-xs text-zinc-500">{plugins.length} 个实例</span>
             </div>
-            <div className="overflow-auto">
-              <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-                <thead className="bg-zinc-950/70 text-xs uppercase tracking-wide text-zinc-500">
-                  <tr>
-                    <th className="px-4 py-3 font-medium">Instance</th>
-                    <th className="px-4 py-3 font-medium">Lifecycle</th>
-                    <th className="px-4 py-3 font-medium">Enabled</th>
-                    <th className="px-4 py-3 font-medium">Health</th>
-                    <th className="px-4 py-3 font-medium">Version</th>
-                    <th className="px-4 py-3 font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {plugins.map((plugin) => (
-                    <PluginRow
-                      key={plugin.instance_id}
-                      plugin={plugin}
-                      selected={plugin.instance_id === selected?.instance_id}
-                      busy={loading}
-                      onSelect={() => setSelectedId(plugin.instance_id)}
-                      onAction={runAction}
-                    />
-                  ))}
-                </tbody>
-              </table>
-              {plugins.length === 0 ? (
-                <div className="flex min-h-64 items-center justify-center text-sm text-zinc-500">
-                  No plugin snapshots loaded.
+            {plugins.length > 0 ? (
+              <div className="max-h-full space-y-2 overflow-auto p-3">
+                {plugins.map((plugin) => (
+                  <PluginListItem
+                    key={plugin.instance_id}
+                    plugin={plugin}
+                    selected={plugin.instance_id === selected?.instance_id}
+                    onSelect={() => setSelectedId(plugin.instance_id)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex min-h-80 flex-col items-center justify-center px-6 text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-zinc-800 bg-zinc-950 text-zinc-500">
+                  <PuzzlePiece className="h-6 w-6" />
                 </div>
-              ) : null}
-            </div>
+                <p className="mt-4 text-sm font-medium text-zinc-300">还没有加载插件</p>
+                <p className="mt-2 max-w-xs text-sm text-zinc-500">
+                  输入 token 后刷新，Console 会显示当前运行时的插件。
+                </p>
+              </div>
+            )}
           </section>
 
-          <PluginDetails plugin={selected} />
+          <PluginDetails plugin={selected} busy={loading} onAction={runAction} />
         </div>
       </div>
     </main>
@@ -191,209 +251,169 @@ function Metric({ label, value, detail }: { label: string; value: number; detail
   )
 }
 
-function PluginRow({
+function PluginListItem({
   plugin,
   selected,
-  busy,
   onSelect,
-  onAction,
 }: {
   plugin: PluginSnapshot
   selected: boolean
-  busy: boolean
   onSelect: () => void
-  onAction: (plugin: PluginSnapshot, action: PluginAction) => Promise<void>
 }) {
-  return (
-    <tr className={selected ? 'bg-emerald-400/10' : 'border-t border-zinc-800'}>
-      <td className="px-4 py-3 align-top">
-        <button
-          aria-label={`Select ${plugin.instance_id}`}
-          className="text-left"
-          type="button"
-          onClick={onSelect}
-        >
-          <div className="font-medium text-zinc-100">{plugin.instance_id}</div>
-          <div className="mt-1 text-xs text-zinc-500">{plugin.kind}</div>
-        </button>
-      </td>
-      <td className="px-4 py-3 align-top">
-        <StatusPill value={plugin.lifecycle.lifecycle_state} />
-      </td>
-      <td className="px-4 py-3 align-top">
-        {plugin.lifecycle.enabled ? (
-          <Chip
-            className="border border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-            size="sm"
-            variant="soft"
-          >
-            <CheckCircle className="h-4 w-4" /> enabled
-          </Chip>
-        ) : (
-          <Chip
-            className="border border-zinc-700 bg-zinc-950 text-zinc-500"
-            size="sm"
-            variant="soft"
-          >
-            <Prohibit className="h-4 w-4" /> disabled
-          </Chip>
-        )}
-      </td>
-      <td className="px-4 py-3 align-top">
-        {plugin.health.healthy ? (
-          <Chip
-            className="border border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-            size="sm"
-            variant="soft"
-          >
-            <Pulse className="h-4 w-4" /> healthy
-          </Chip>
-        ) : (
-          <Chip
-            className="border border-red-400/30 bg-red-400/10 text-red-300"
-            size="sm"
-            variant="soft"
-          >
-            <XCircle className="h-4 w-4" /> unhealthy
-          </Chip>
-        )}
-      </td>
-      <td className="px-4 py-3 align-top text-zinc-300">{plugin.manifest.version}</td>
-      <td className="px-4 py-3 align-top">
-        <div className="flex flex-wrap gap-1.5">
-          <IconButton
-            aria-label={plugin.lifecycle.enabled ? 'Disable' : 'Enable'}
-            disabled={busy}
-            onClick={() => void onAction(plugin, plugin.lifecycle.enabled ? 'disable' : 'enable')}
-          >
-            <Power className="h-4 w-4" />
-          </IconButton>
-          <IconButton
-            aria-label="Start"
-            disabled={busy}
-            onClick={() => void onAction(plugin, 'start')}
-          >
-            <Play className="h-4 w-4" />
-          </IconButton>
-          <IconButton
-            aria-label="Stop"
-            disabled={busy}
-            onClick={() => void onAction(plugin, 'stop')}
-          >
-            <Stop className="h-4 w-4" />
-          </IconButton>
-          <IconButton
-            aria-label="Reload"
-            disabled={busy || !plugin.reloadable}
-            onClick={() => void onAction(plugin, 'reload')}
-          >
-            <ArrowsClockwise className="h-4 w-4" />
-          </IconButton>
-        </div>
-      </td>
-    </tr>
-  )
-}
+  const status = getPluginStatus(plugin)
 
-function IconButton({
-  'aria-label': ariaLabel,
-  disabled,
-  onClick,
-  children,
-}: {
-  'aria-label': string
-  disabled?: boolean
-  onClick: () => void
-  children: ReactNode
-}) {
   return (
     <button
-      aria-label={ariaLabel}
-      className="inline-flex h-8 w-8 min-w-8 items-center justify-center rounded-md border border-zinc-700 bg-zinc-950 text-zinc-300 transition-colors hover:border-emerald-400 hover:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
-      disabled={disabled}
+      aria-current={selected ? 'true' : undefined}
+      className={`flex w-full items-start justify-between gap-3 rounded-xl border p-4 text-left transition-colors ${
+        selected
+          ? 'border-emerald-400/50 bg-emerald-400/10 text-emerald-50 shadow-[0_0_0_1px_rgba(52,211,153,0.12)]'
+          : 'border-zinc-800 bg-zinc-950/40 text-zinc-100 hover:border-zinc-700 hover:bg-zinc-900/70'
+      }`}
       type="button"
-      onClick={onClick}
+      onClick={onSelect}
     >
-      {children}
+      <span className="min-w-0">
+        <span className="block truncate font-medium">{plugin.instance_id}</span>
+        <span className="mt-1 block line-clamp-2 text-xs text-zinc-500">
+          {pluginSubtitle(plugin)}
+        </span>
+      </span>
+      <StatusPill status={status} />
     </button>
   )
 }
-
-function StatusPill({ value }: { value: string }) {
-  const tone =
-    value === 'Running'
-      ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
-      : value === 'Failed'
-        ? 'border-red-400/40 bg-red-400/10 text-red-300'
-        : 'border-zinc-700 bg-zinc-950 text-zinc-300'
-
+function StatusPill({ status }: { status: UserPluginStatus }) {
   return (
-    <Chip className={tone} size="sm" variant="soft">
-      {value}
+    <Chip className={`shrink-0 border ${status.tone}`} size="sm" variant="soft">
+      {status.label}
     </Chip>
   )
 }
 
-function PluginDetails({ plugin }: { plugin?: PluginSnapshot }) {
+function PluginDetails({
+  plugin,
+  busy,
+  onAction,
+}: {
+  plugin?: PluginSnapshot
+  busy: boolean
+  onAction: (plugin: PluginSnapshot, action: UserPluginAction) => Promise<void>
+}) {
   if (!plugin) {
     return (
-      <aside className="rounded-md border border-zinc-800 bg-zinc-900 p-4 text-sm text-zinc-500">
-        Select a plugin to inspect runtime details.
+      <aside className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6 text-sm">
+        <h2 className="text-lg font-semibold text-white">选择一个插件</h2>
+        <p className="mt-2 max-w-md text-zinc-500">
+          从左侧列表选择插件，查看运行状态、健康信息，并按需启用或停用插件。
+        </p>
       </aside>
     )
   }
 
+  const status = getPluginStatus(plugin)
+  const primaryAction: UserPluginAction = plugin.lifecycle.enabled ? 'disable' : 'enable'
+  const primaryLabel = plugin.lifecycle.enabled
+    ? '停用插件'
+    : status.kind === 'failed'
+      ? '重新启用'
+      : '启用插件'
+  const isUnhealthy = !plugin.health.healthy
+  const errorDetail =
+    plugin.lifecycle.last_error ?? (isUnhealthy ? plugin.health.detail : undefined)
+
   return (
     <aside className="min-h-0 overflow-auto rounded-md border border-zinc-800 bg-zinc-900">
-      <div className="border-b border-zinc-800 px-4 py-3">
-        <h2 className="text-lg font-semibold text-white">{plugin.instance_id}</h2>
-        <p className="mt-1 text-sm text-zinc-500">
-          {plugin.manifest.description || 'No description'}
-        </p>
-      </div>
-      <div className="space-y-4 p-4">
-        <DetailGrid
-          items={[
-            ['Kind', plugin.kind],
-            ['Version', plugin.manifest.version],
-            ['Config', plugin.lifecycle.config_lifecycle_state],
-            ['Desired config', String(plugin.lifecycle.desired_config_version)],
-            ['Applied config', String(plugin.lifecycle.applied_config_version)],
-            ['Reloadable', plugin.reloadable ? 'yes' : 'no'],
-          ]}
-        />
-
-        <Section title="Capabilities">
-          <TagGroup label="Required" values={plugin.manifest.required_capabilities} />
-          <TagGroup label="Optional" values={plugin.manifest.optional_capabilities} />
-        </Section>
-
-        <Section title="Services">
-          <TagGroup label="Required" values={plugin.manifest.required_services} />
-          <TagGroup label="Optional" values={plugin.manifest.optional_services} />
-        </Section>
-
-        <Section title="Health">
-          <div className="flex items-center gap-2 text-sm text-zinc-300">
-            {plugin.health.healthy ? (
-              <CheckCircle className="h-4 w-4 text-emerald-300" />
-            ) : (
-              <Pause className="h-4 w-4 text-red-300" />
-            )}
-            {plugin.health.healthy ? 'healthy' : 'unhealthy'}
+      <div className="border-b border-zinc-800 px-4 py-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="break-words text-lg font-semibold text-white">{plugin.instance_id}</h2>
+              <StatusPill status={status} />
+            </div>
+            <p className="mt-2 text-sm text-zinc-500">
+              {plugin.manifest.description || '这个插件没有提供说明。'}
+            </p>
           </div>
-          {plugin.health.detail ? (
-            <p className="mt-2 text-sm text-zinc-500">{plugin.health.detail}</p>
-          ) : null}
+          <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+            <Button
+              className="bg-emerald-400 font-semibold text-zinc-950"
+              type="button"
+              onClick={() => void onAction(plugin, primaryAction)}
+              isDisabled={busy}
+            >
+              {primaryLabel}
+            </Button>
+            {plugin.reloadable ? (
+              <Button
+                className="border-zinc-700 bg-zinc-950 text-zinc-100"
+                type="button"
+                variant="outline"
+                onClick={() => void onAction(plugin, 'reload')}
+                isDisabled={busy}
+              >
+                热重载
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-5 p-4">
+        <Section title="运行状态">
+          <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-zinc-200">
+              {status.kind === 'failed' ? (
+                <WarningCircle className="h-4 w-4 text-red-300" />
+              ) : plugin.health.healthy ? (
+                <CheckCircle className="h-4 w-4 text-emerald-300" />
+              ) : (
+                <Pause className="h-4 w-4 text-amber-300" />
+              )}
+              {status.label}
+            </div>
+            <p className="mt-2 text-sm text-zinc-500">{status.detail}</p>
+            <p className="mt-3 text-sm text-zinc-400">
+              健康检查：{plugin.health.healthy ? '状态正常' : '需要处理'}
+            </p>
+            {plugin.health.detail ? (
+              <p className="mt-1 text-sm text-zinc-500">{plugin.health.detail}</p>
+            ) : null}
+          </div>
         </Section>
 
-        {plugin.lifecycle.last_error ? (
-          <Section title="Last error">
-            <pre className="overflow-auto rounded-md border border-red-400/30 bg-red-950/30 p-3 text-xs text-red-200">
-              {plugin.lifecycle.last_error}
+        {errorDetail ? (
+          <Section title="最近错误">
+            <pre className="overflow-auto rounded-md border border-red-400/30 bg-red-950/30 p-3 text-xs leading-5 text-red-200">
+              {errorDetail}
             </pre>
           </Section>
         ) : null}
+
+        <Section title="插件信息">
+          <DetailGrid
+            items={[
+              ['版本', plugin.manifest.version],
+              ['类型', plugin.kind],
+              ['热重载', plugin.reloadable ? '支持' : '不支持'],
+              ['配置状态', plugin.lifecycle.config_lifecycle_state],
+            ]}
+          />
+        </Section>
+
+        <Section title="高级信息">
+          <DetailGrid
+            items={[
+              ['Runtime state', plugin.lifecycle.lifecycle_state],
+              ['Desired config', String(plugin.lifecycle.desired_config_version)],
+              ['Applied config', String(plugin.lifecycle.applied_config_version)],
+            ]}
+          />
+          <TagGroup label="Required capabilities" values={plugin.manifest.required_capabilities} />
+          <TagGroup label="Optional capabilities" values={plugin.manifest.optional_capabilities} />
+          <TagGroup label="Required services" values={plugin.manifest.required_services} />
+          <TagGroup label="Optional services" values={plugin.manifest.optional_services} />
+        </Section>
       </div>
     </aside>
   )
