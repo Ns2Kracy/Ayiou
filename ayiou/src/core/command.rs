@@ -62,17 +62,17 @@ pub(crate) fn parse_command_line_with_prefixes<'a>(
     let token = &trimmed[..token_end];
     let args = trimmed[token_end..].trim_start();
 
-    let mut command = token;
     let mut matched_prefix = None;
-    for prefix in prefixes {
-        if let Some(stripped) = token.strip_prefix(prefix)
-            && !stripped.is_empty()
-        {
-            command = stripped;
-            matched_prefix = Some(prefix.to_string());
-            break;
-        }
-    }
+    let command = prefixes
+        .into_iter()
+        .find_map(|prefix| {
+            let stripped = token.strip_prefix(prefix)?;
+            (!stripped.is_empty()).then(|| {
+                matched_prefix = Some(prefix);
+                stripped
+            })
+        })
+        .unwrap_or(token);
 
     Some(CommandInvocation::new(command, args, matched_prefix))
 }

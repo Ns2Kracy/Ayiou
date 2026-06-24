@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use tokio::sync::RwLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -35,43 +34,34 @@ impl RuntimeController {
         }
     }
 
-    pub async fn start(&self) -> Result<()> {
-        {
-            let mut status = self.status.write().await;
-            status.state = RuntimeState::Running;
-            status.last_error = None;
-        }
-        Ok(())
+    pub async fn start(&self) {
+        self.transition(RuntimeState::Running, true).await;
     }
 
-    pub async fn mark_starting(&self) -> Result<()> {
-        {
-            let mut status = self.status.write().await;
-            status.state = RuntimeState::Starting;
-        }
-        Ok(())
+    pub async fn mark_starting(&self) {
+        self.transition(RuntimeState::Starting, false).await;
     }
 
-    pub async fn mark_stopping(&self) -> Result<()> {
-        {
-            let mut status = self.status.write().await;
-            status.state = RuntimeState::Stopping;
-        }
-        Ok(())
+    pub async fn mark_stopping(&self) {
+        self.transition(RuntimeState::Stopping, false).await;
     }
 
-    pub async fn stop(&self) -> Result<()> {
-        {
-            let mut status = self.status.write().await;
-            status.state = RuntimeState::Stopped;
-        }
-        Ok(())
+    pub async fn stop(&self) {
+        self.transition(RuntimeState::Stopped, false).await;
     }
 
     pub async fn fail(&self, error: impl Into<String>) {
         let mut status = self.status.write().await;
         status.state = RuntimeState::Failed;
         status.last_error = Some(error.into());
+    }
+
+    async fn transition(&self, state: RuntimeState, clear_error: bool) {
+        let mut status = self.status.write().await;
+        status.state = state;
+        if clear_error {
+            status.last_error = None;
+        }
     }
 
     pub async fn state(&self) -> RuntimeState {
@@ -90,10 +80,10 @@ mod tests {
     #[tokio::test]
     async fn runtime_state_transitions_are_idempotent() {
         let rt = RuntimeController::default();
-        assert!(rt.start().await.is_ok());
-        assert!(rt.start().await.is_ok());
-        assert!(rt.stop().await.is_ok());
-        assert!(rt.stop().await.is_ok());
+        rt.start().await;
+        rt.start().await;
+        rt.stop().await;
+        rt.stop().await;
         assert_eq!(rt.state().await, RuntimeState::Stopped);
     }
 
