@@ -1,6 +1,8 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::{Result, anyhow};
+#[cfg(feature = "embedded-webui")]
+use axum::http::Uri;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -9,15 +11,15 @@ use axum::{
     routing::{get, post},
 };
 #[cfg(feature = "embedded-webui")]
-use axum::{body::Body, http::Uri};
-#[cfg(feature = "embedded-webui")]
-use include_dir::{Dir, include_dir};
+use rust_embed::RustEmbed;
 use serde::Serialize;
 use serde_json::json;
 use tokio::task::JoinHandle;
 
 #[cfg(feature = "embedded-webui")]
-static WEBUI_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/webui-dist");
+#[derive(RustEmbed)]
+#[folder = "webui-dist/"]
+struct WebUiAssets;
 
 use crate::core::{
     control::RuntimeControlHandle,
@@ -425,10 +427,10 @@ fn service_key_name(key: &ServiceKey) -> String {
 
 #[cfg(feature = "embedded-webui")]
 async fn index_asset() -> Response {
-    match WEBUI_DIST.get_file("index.html") {
+    match WebUiAssets::get("index.html") {
         Some(file) => (
             [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-            String::from_utf8_lossy(file.contents()).into_owned(),
+            file.data,
         )
             .into_response(),
         None => api_error(
@@ -442,20 +444,16 @@ async fn index_asset() -> Response {
 #[cfg(feature = "embedded-webui")]
 async fn static_asset(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
-    if path.is_empty() {
+    if path.is_empty() || path == "index.html" {
         return index_asset().await;
     }
 
-    match WEBUI_DIST.get_file(path) {
+    match WebUiAssets::get(path) {
         Some(file) => {
             let content_type = mime_guess::from_path(path)
                 .first_or_octet_stream()
                 .to_string();
-            (
-                [(header::CONTENT_TYPE, content_type)],
-                Body::from(file.contents().to_vec()),
-            )
-                .into_response()
+            ([(header::CONTENT_TYPE, content_type)], file.data).into_response()
         }
         None => index_asset().await,
     }
